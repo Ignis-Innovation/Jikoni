@@ -1,0 +1,270 @@
+"use client";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { Button, Input, Label, Select, Textarea, Badge } from "@/components/ui/primitives";
+import { SlideOver } from "@/components/data/SlideOver";
+import { Pencil, Trash2, Plus, Search } from "lucide-react";
+import { formatDate, formatMoney } from "@/lib/utils";
+import type { Resource, Field, Column } from "@/lib/spine/resources";
+
+type Caps = { create: boolean; edit: boolean; del: boolean };
+type Row = Record<string, unknown>;
+
+export function ResourceView({ resource, caps }: { resource: Resource; caps: Caps }) {
+  const supabase = useMemo(() => createClient(), []);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const searchCol = resource.columns[0]?.key ?? "id";
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    let q = supabase.from(resource.table).select(resource.select).is("deleted_at", null);
+    if (resource.partyType) q = q.eq("type", resource.partyType);
+    if (search) q = q.ilike(searchCol, `%${search}%`);
+    const { data } = await q.order(resource.orderBy ?? "created_at", { ascending: false }).limit(200);
+    setRows((data as unknown as Row[]) ?? []);
+    setLoading(false);
+  }, [supabase, resource, search, searchCol]);
+
+  useEffect(() => {
+    const t = setTimeout(load, search ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [load, search]);
+
+  function flash(m: string) {
+    setToast(m);
+    setTimeout(() => setToast(null), 2500);
+  }
+
+  async function onDelete(row: Row) {
+    const label = String(row[searchCol] ?? row.code ?? "this record");
+    if (!confirm(`Delete "${label}"? This soft-deletes the record.`)) return;
+    const { error } = await supabase.from(resource.table).update({ deleted_at: new Date().toISOString() }).eq("id", row.id as string);
+    if (error) return flash(`Error: ${error.message}`);
+    setRows((r) => r.filter((x) => x.id !== row.id));
+    flash("Deleted.");
+  }
+
+  function renderCell(col: Column, row: Row) {
+    const v = row[col.key];
+    if (v == null || v === "") return <span className="text-zinc-300">—</span>;
+    if (col.kind === "money") return formatMoney(Number(v), (row.currency_code as string) ?? "KES");
+    if (col.kind === "date") return formatDate(v as string);
+    if (col.kind === "badge") return <Badge tone="blue">{String(v)}</Badge>;
+    return String(v);
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl">
+      <div className="mb-5 flex items-center justify-between">
+        <div>
+          <p className="text-xs text-zinc-400">{resource.group}</p>
+          <h1 className="text-xl font-semibold tracking-tight text-zinc-900">{resource.title}</h1>
+          <p className="text-sm text-zinc-500">{resource.subtitle}</p>
+        </div>
+        {caps.create && (
+          <Button onClick={() => { setEditing(null); setPanelOpen(true); }}>
+            <Plus className="h-4 w-4" /> Add
+          </Button>
+        )}
+      </div>
+
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative w-72">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <Input placeholder={`Search ${resource.title.toLowerCase()}…`} value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-xs uppercase tracking-wider text-zinc-500">
+              {resource.columns.map((c) => <th key={c.key} className="px-4 py-2.5 font-medium">{c.label}</th>)}
+              <th className="px-4 py-2.5" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {loading ? (
+              [...Array(4)].map((_, i) => (
+                <tr key={i}><td colSpan={resource.columns.length + 1} className="px-4 py-3"><div className="h-4 w-full animate-pulse rounded bg-zinc-100" /></td></tr>
+              ))
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={resource.columns.length + 1} className="px-4 py-12 text-center">
+                  <p className="text-sm text-zinc-500">No {resource.title.toLowerCase()} yet.</p>
+                  {caps.create && (
+                    <Button className="mt-3" onClick={() => { setEditing(null); setPanelOpen(true); }}>
+                      <Plus className="h-4 w-4" /> Add the first
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <tr key={String(row.id)} className="hover:bg-zinc-50">
+                  {resource.columns.map((c, i) => (
+                    <td key={c.key} className={i === 0 ? "px-4 py-2.5 font-medium text-zinc-900" : "px-4 py-2.5 text-zinc-600"}>
+                      {renderCell(c, row)}
+                    </td>
+                  ))}
+                  <td className="px-4 py-2.5 text-right">
+                    <div className="flex justify-end gap-1">
+                      {caps.edit && (
+                        <button onClick={() => { setEditing(row); setPanelOpen(true); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" aria-label="Edit">
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      )}
+                      {caps.del && (
+                        <button onClick={() => onDelete(row)} className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600" aria-label="Delete">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <ResourceForm
+        resource={resource}
+        open={panelOpen}
+        editing={editing}
+        onClose={() => setPanelOpen(false)}
+        onSaved={(m) => { setPanelOpen(false); flash(m); load(); }}
+      />
+
+      {toast && <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg">{toast}</div>}
+    </div>
+  );
+}
+
+function ResourceForm({
+  resource, open, editing, onClose, onSaved,
+}: {
+  resource: Resource;
+  open: boolean;
+  editing: Row | null;
+  onClose: () => void;
+  onSaved: (m: string) => void;
+}) {
+  const supabase = useMemo(() => createClient(), []);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [refOptions, setRefOptions] = useState<Record<string, { id: string; label: string }[]>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load ref-field dropdown options once when the panel opens.
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    const init: Record<string, string> = {};
+    for (const f of resource.fields) {
+      const cur = editing?.[f.key];
+      init[f.key] = cur == null ? "" : f.type === "money" ? String(Number(cur) / 100) : String(cur);
+    }
+    setForm(init);
+
+    (async () => {
+      const out: Record<string, { id: string; label: string }[]> = {};
+      for (const f of resource.fields) {
+        if (f.type === "ref" && f.ref) {
+          let q = supabase.from(f.ref.table).select(`id, ${f.ref.labelKey}`).is("deleted_at", null).limit(500);
+          if (f.ref.typeFilter) q = q.eq("type", f.ref.typeFilter);
+          const { data } = await q;
+          out[f.key] = ((data as unknown as Row[]) ?? []).map((r) => ({ id: String(r.id), label: String(r[f.ref!.labelKey] ?? r.id) }));
+        }
+      }
+      setRefOptions(out);
+    })();
+  }, [open, editing, resource, supabase]);
+
+  const valid = resource.fields.every((f) => !f.required || (form[f.key] && form[f.key].trim() !== ""));
+
+  async function save(addAnother: boolean) {
+    setSaving(true);
+    setError(null);
+    const payload: Record<string, unknown> = {};
+    for (const f of resource.fields) {
+      const raw = form[f.key];
+      if (raw == null || raw === "") { payload[f.key] = null; continue; }
+      if (f.type === "money") payload[f.key] = Math.round(parseFloat(raw) * 100);
+      else if (f.type === "number") payload[f.key] = Number(raw);
+      else payload[f.key] = raw;
+    }
+    if (resource.partyType && !editing) payload.type = resource.partyType;
+
+    const res = editing
+      ? await supabase.from(resource.table).update(payload).eq("id", editing.id as string)
+      : await supabase.from(resource.table).insert(payload);
+    setSaving(false);
+    if (res.error) return setError(res.error.message);
+
+    if (addAnother) {
+      const cleared: Record<string, string> = {};
+      for (const f of resource.fields) cleared[f.key] = "";
+      setForm(cleared);
+    } else {
+      onSaved(editing ? "Updated." : "Created.");
+    }
+  }
+
+  function renderField(f: Field) {
+    const val = form[f.key] ?? "";
+    const set = (v: string) => setForm((s) => ({ ...s, [f.key]: v }));
+    if (f.type === "textarea") return <Textarea rows={3} value={val} onChange={(e) => set(e.target.value)} />;
+    if (f.type === "select")
+      return (
+        <Select value={val} onChange={(e) => set(e.target.value)}>
+          <option value="">—</option>
+          {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </Select>
+      );
+    if (f.type === "ref")
+      return (
+        <Select value={val} onChange={(e) => set(e.target.value)}>
+          <option value="">—</option>
+          {(refOptions[f.key] ?? []).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+        </Select>
+      );
+    return (
+      <Input
+        type={f.type === "date" ? "date" : f.type === "number" || f.type === "money" ? "number" : "text"}
+        step={f.type === "money" ? "0.01" : undefined}
+        value={val}
+        onChange={(e) => set(e.target.value)}
+      />
+    );
+  }
+
+  return (
+    <SlideOver open={open} title={`${editing ? "Edit" : "Add"} — ${resource.title}`} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); save(false); }} className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          {resource.fields.map((f) => (
+            <div key={f.key} className={f.half ? "" : "col-span-2"}>
+              <Label required={f.required}>{f.label}</Label>
+              {renderField(f)}
+            </div>
+          ))}
+        </div>
+        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+        <div className="flex items-center gap-2 pt-2">
+          <Button type="submit" disabled={!valid || saving}>{saving ? "Saving…" : "Save"}</Button>
+          {!editing && (
+            <Button type="button" variant="outline" disabled={!valid || saving} onClick={() => save(true)}>Save &amp; add another</Button>
+          )}
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+        </div>
+      </form>
+    </SlideOver>
+  );
+}

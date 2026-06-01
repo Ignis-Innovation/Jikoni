@@ -23,7 +23,7 @@ export function Sidebar({ groups }: { groups: NavGroup[] }) {
                 if (!item.enabled) {
                   return (
                     <li key={item.href}>
-                      <span className="flex cursor-not-allowed items-center justify-between rounded-md px-2 py-1.5 text-sm text-zinc-300" title={`Phase ${item.phase} — not yet built`}>
+                      <span className="flex cursor-not-allowed items-center justify-between rounded-md px-2 py-1.5 text-sm text-zinc-300" title="Not yet built">
                         {item.label}
                         <Lock className="h-3 w-3" />
                       </span>

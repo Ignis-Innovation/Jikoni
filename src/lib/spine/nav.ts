@@ -1,11 +1,12 @@
 // Navigation model. Each item declares the module-permission prefix that gates
-// its visibility (PRD §1.7: nav is permission-filtered). Phase 1 items are live;
-// later-phase groups are listed but disabled until their modules are built.
+// its visibility (PRD §1.7: nav is permission-filtered). Resource-backed items
+// are generated from the registry so adding a resource adds its nav entry.
+import { RESOURCES } from "@/lib/spine/resources";
+
 export type NavItem = {
   label: string;
   href: string;
   module: string; // permission prefix, e.g. "parties"
-  phase: number;
   enabled: boolean;
 };
 
@@ -14,41 +15,54 @@ export type NavGroup = {
   items: NavItem[];
 };
 
+// Fixed spine + settings items.
+const SPINE: NavGroup = {
+  label: "Spine",
+  items: [
+    { label: "Parties", href: "/parties", module: "parties", enabled: true },
+    { label: "Organisation", href: "/org", module: "org", enabled: true },
+    { label: "Chart of Accounts", href: "/coa", module: "coa", enabled: true },
+    { label: "Approvals", href: "/approvals", module: "approvals", enabled: true },
+    { label: "Audit Log", href: "/audit", module: "audit", enabled: true },
+  ],
+};
+
+const SETTINGS: NavGroup = {
+  label: "Settings",
+  items: [
+    { label: "Users", href: "/settings/users", module: "identity", enabled: true },
+    { label: "Roles", href: "/settings/roles", module: "identity", enabled: true },
+    { label: "Reference Data", href: "/settings/reference", module: "refdata", enabled: true },
+  ],
+};
+
+// Build resource-backed groups in a stable, phase-ordered sequence.
+const GROUP_ORDER = [
+  "Procure-to-Pay",
+  "Revenue",
+  "People",
+  "Assets",
+  "Projects",
+  "CRM",
+  "Intelligence",
+  "Governance",
+  "Field & Portals",
+  "Business Development",
+];
+
+const resourceGroups: NavGroup[] = GROUP_ORDER.map((g) => ({
+  label: g,
+  items: RESOURCES.filter((r) => r.group === g).map((r) => ({
+    label: r.title,
+    href: `/r/${r.slug}`,
+    module: r.module,
+    enabled: true,
+  })),
+})).filter((g) => g.items.length > 0);
+
 export const NAV: NavGroup[] = [
-  {
-    label: "Overview",
-    items: [{ label: "Home", href: "/", module: "*", phase: 8, enabled: true }],
-  },
-  {
-    label: "Spine",
-    items: [
-      { label: "Parties", href: "/parties", module: "parties", phase: 1, enabled: true },
-      { label: "Organisation", href: "/org", module: "org", phase: 1, enabled: true },
-      { label: "Chart of Accounts", href: "/coa", module: "coa", phase: 1, enabled: true },
-      { label: "Approvals", href: "/approvals", module: "approvals", phase: 1, enabled: true },
-      { label: "Audit Log", href: "/audit", module: "audit", phase: 1, enabled: true },
-    ],
-  },
-  {
-    label: "Procure-to-Pay",
-    items: [
-      { label: "Vendors", href: "/procurement/vendors", module: "procurement", phase: 2, enabled: false },
-      { label: "Requisitions", href: "/procurement/requisitions", module: "procurement", phase: 2, enabled: false },
-      { label: "Purchase Orders", href: "/procurement/pos", module: "procurement", phase: 2, enabled: false },
-    ],
-  },
-  {
-    label: "CRM",
-    items: [
-      { label: "Engagements", href: "/crm/engagements", module: "crm", phase: 7, enabled: false },
-    ],
-  },
-  {
-    label: "Settings",
-    items: [
-      { label: "Users", href: "/settings/users", module: "identity", phase: 1, enabled: true },
-      { label: "Roles", href: "/settings/roles", module: "identity", phase: 1, enabled: true },
-      { label: "Reference Data", href: "/settings/reference", module: "refdata", phase: 1, enabled: true },
-    ],
-  },
+  { label: "Overview", items: [{ label: "Home", href: "/", module: "*", enabled: true }] },
+  SPINE,
+  ...resourceGroups,
+  SETTINGS,
 ];

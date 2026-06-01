@@ -958,3 +958,1047 @@ on conflict do nothing;
 insert into storage.buckets (id, name, public)
 values ('documents','documents', false)
 on conflict (id) do nothing;
+-- ============================================================================
+-- 0014_module_helpers.sql — reusable installers so every Phase 2-11 table gets
+-- the same spine guarantees (triggers, RLS, human codes) with one call each.
+-- ============================================================================
+
+-- Attach the 4 standard triggers to a table (skips ones whose columns are absent).
+create or replace function public.apply_standard_triggers(p_table text)
+returns void language plpgsql as $$
+declare has_updated boolean; has_audit boolean;
+begin
+  select exists(select 1 from information_schema.columns
+    where table_schema='public' and table_name=p_table and column_name='updated_at') into has_updated;
+  select exists(select 1 from information_schema.columns
+    where table_schema='public' and table_name=p_table and column_name='created_by') into has_audit;
+
+  if has_updated then
+    execute format('drop trigger if exists trg_set_updated_at on public.%I;
+      create trigger trg_set_updated_at before update on public.%I
+      for each row execute function public.set_updated_at();', p_table, p_table);
+  end if;
+  if has_audit then
+    execute format('drop trigger if exists trg_set_audit_fields on public.%I;
+      create trigger trg_set_audit_fields before insert or update on public.%I
+      for each row execute function public.set_audit_fields();', p_table, p_table);
+  end if;
+  execute format('drop trigger if exists trg_audit on public.%I;
+    create trigger trg_audit after insert or update or delete on public.%I
+    for each row execute function public.audit_trigger();', p_table, p_table);
+  execute format('drop trigger if exists trg_emit_event on public.%I;
+    create trigger trg_emit_event after insert or update or delete on public.%I
+    for each row execute function public.emit_event();', p_table, p_table);
+end;
+$$;
+
+-- Enable RLS + create the 4 module-permission policies (<module>.view/create/edit/delete).
+create or replace function public.apply_module_rls(p_table text, p_module text)
+returns void language plpgsql as $$
+begin
+  execute format('alter table public.%I enable row level security;', p_table);
+  execute format('drop policy if exists %I on public.%I;', p_table||'_sel', p_table);
+  execute format('drop policy if exists %I on public.%I;', p_table||'_ins', p_table);
+  execute format('drop policy if exists %I on public.%I;', p_table||'_upd', p_table);
+  execute format('drop policy if exists %I on public.%I;', p_table||'_del', p_table);
+  execute format($f$create policy %I on public.%I for select to authenticated using (public.has_permission('%s.view'));$f$,
+    p_table||'_sel', p_table, p_module);
+  execute format($f$create policy %I on public.%I for insert to authenticated with check (public.has_permission('%s.create'));$f$,
+    p_table||'_ins', p_table, p_module);
+  execute format($f$create policy %I on public.%I for update to authenticated using (public.has_permission('%s.edit')) with check (public.has_permission('%s.edit'));$f$,
+    p_table||'_upd', p_table, p_module, p_module);
+  execute format($f$create policy %I on public.%I for delete to authenticated using (public.has_permission('%s.delete'));$f$,
+    p_table||'_del', p_table, p_module);
+end;
+$$;
+
+-- Install a BEFORE INSERT trigger that fills a human-readable code (e.g. PO-00001).
+create or replace function public.apply_code_default(p_table text, p_prefix text)
+returns void language plpgsql as $$
+begin
+  -- one generated fn + trigger per (table) using the prefix baked in
+  execute format($f$
+    create or replace function public.%I() returns trigger language plpgsql as $body$
+    begin
+      if new.code is null or new.code = '' then
+        new.code := public.next_human_id(%L);
+      end if;
+      return new;
+    end; $body$;
+  $f$, 'set_code_'||p_table, p_prefix);
+  execute format('drop trigger if exists trg_set_code on public.%I;
+    create trigger trg_set_code before insert on public.%I
+    for each row execute function public.%I();', p_table, p_table, 'set_code_'||p_table);
+end;
+$$;
+
+-- Seed a module's standard CRUD permissions and grant them to super_admin + admin.
+create or replace function public.seed_module_permissions(p_module text, p_label text)
+returns void language plpgsql as $$
+declare act text; perm_id uuid;
+begin
+  foreach act in array array['view','create','edit','delete'] loop
+    insert into public.permissions(key, module, action, description)
+    values (p_module||'.'||act, p_module, act, p_label||' — '||act)
+    on conflict (key) do nothing;
+  end loop;
+  -- super_admin already holds everything via is_super_admin(); grant admin too.
+  insert into public.role_permissions(role_id, permission_id)
+  select r.id, p.id from public.roles r join public.permissions p on p.module = p_module
+  where r.key in ('super_admin','admin')
+  on conflict do nothing;
+  -- viewer gets read.
+  insert into public.role_permissions(role_id, permission_id)
+  select r.id, p.id from public.roles r join public.permissions p on p.module = p_module and p.action='view'
+  where r.key = 'viewer'
+  on conflict do nothing;
+end;
+$$;
+-- ============================================================================
+-- 0015_phase2_procure_to_pay.sql — PHASE 2 (PRD §2A-2H)
+-- Closed loop: Vendor -> Requisition -> PO -> GRN -> Invoice -> Payment.
+-- All reference spine entities (parties, accounts, cost centers) by ID.
+-- ============================================================================
+
+-- 2A Vendor Registry (extends spine parties type=vendor)
+create table public.vendor_profiles (
+  party_id              uuid primary key references public.parties(id) on delete cascade,
+  kra_pin               text,
+  tax_compliance_status text default 'unknown',
+  tax_cert_expiry       date,
+  category_id           uuid references public.categories(id),
+  rating_avg            numeric(3,2) default 0,
+  onboarding_status     text not null default 'draft',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.vendor_ratings (
+  id uuid primary key default gen_random_uuid(),
+  party_id uuid not null references public.parties(id) on delete cascade,
+  po_id    uuid,
+  score    int not null check (score between 1 and 5),
+  comment  text,
+  rated_by uuid references public.users(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+-- 2B Petty Cash
+create table public.petty_cash_floats (
+  id uuid primary key default gen_random_uuid(),
+  custodian_user_id uuid references public.users(id),
+  location_id uuid references public.locations(id),
+  opening_amount_minor bigint not null default 0,
+  balance_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  status text not null default 'active',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.petty_cash_vouchers (
+  id uuid primary key default gen_random_uuid(),
+  float_id uuid not null references public.petty_cash_floats(id),
+  payee_party_id uuid references public.parties(id),
+  amount_minor bigint not null,
+  account_id uuid references public.accounts(id),
+  category_id uuid references public.categories(id),
+  receipt_document_id uuid references public.documents(id),
+  description text,
+  status text not null default 'posted',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.petty_cash_replenishments (
+  id uuid primary key default gen_random_uuid(),
+  float_id uuid not null references public.petty_cash_floats(id),
+  amount_minor bigint not null,
+  approval_request_id uuid references public.approval_requests(id),
+  status text not null default 'pending',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+-- 2C Receipts & Expense Capture (OCR via Claude API at the app layer)
+create table public.expense_receipts (
+  id uuid primary key default gen_random_uuid(),
+  document_id uuid references public.documents(id),
+  vendor_party_id uuid references public.parties(id),
+  receipt_date date,
+  amount_minor bigint,
+  tax_minor bigint default 0,
+  currency_code text not null default 'KES',
+  category_id uuid references public.categories(id),
+  account_id uuid references public.accounts(id),
+  ocr_confidence numeric(4,3),
+  status text not null default 'draft',
+  linked_voucher_id uuid references public.petty_cash_vouchers(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+-- 2D Purchase Requisitions
+create table public.requisitions (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  requested_by uuid references public.users(id),
+  department_id uuid references public.departments(id),
+  project_id uuid references public.projects(id),
+  cost_center_id uuid references public.cost_centers(id),
+  need_by_date date,
+  status text not null default 'draft',  -- draft|pending_approval|approved|rejected|converted
+  approval_request_id uuid references public.approval_requests(id),
+  total_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.requisition_lines (
+  id uuid primary key default gen_random_uuid(),
+  req_id uuid not null references public.requisitions(id) on delete cascade,
+  item_desc text not null,
+  qty numeric(14,3) not null default 1,
+  uom_code text references public.units_of_measure(code),
+  est_unit_price_minor bigint not null default 0,
+  account_id uuid references public.accounts(id),
+  category_id uuid references public.categories(id)
+);
+
+-- 2E Purchase Orders
+create table public.purchase_orders (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  vendor_party_id uuid references public.parties(id),
+  requisition_id uuid references public.requisitions(id),
+  status text not null default 'draft',  -- draft|issued|partially_received|received|closed
+  total_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  expected_date date,
+  project_id uuid references public.projects(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.po_lines (
+  id uuid primary key default gen_random_uuid(),
+  po_id uuid not null references public.purchase_orders(id) on delete cascade,
+  item_desc text not null,
+  qty_ordered numeric(14,3) not null default 1,
+  qty_received numeric(14,3) not null default 0,
+  unit_price_minor bigint not null default 0,
+  account_id uuid references public.accounts(id),
+  tax_code text references public.tax_codes(code)
+);
+
+-- 2F Goods Received Notes
+create table public.grns (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  po_id uuid not null references public.purchase_orders(id),
+  received_by uuid references public.users(id),
+  received_date date default now(),
+  status text not null default 'received',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.grn_lines (
+  id uuid primary key default gen_random_uuid(),
+  grn_id uuid not null references public.grns(id) on delete cascade,
+  po_line_id uuid references public.po_lines(id),
+  qty_received numeric(14,3) not null default 0,
+  condition text,
+  photo_document_id uuid references public.documents(id)
+);
+
+-- 2G Payables (vendor invoices, three-way match)
+create table public.payable_invoices (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  vendor_party_id uuid references public.parties(id),
+  po_id uuid references public.purchase_orders(id),
+  invoice_no text,
+  invoice_date date,
+  due_date date,
+  amount_minor bigint not null default 0,
+  tax_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  status text not null default 'draft',       -- draft|matched|approved|scheduled|paid
+  match_status text not null default 'unmatched',
+  approval_request_id uuid references public.approval_requests(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.payable_invoice_lines (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid not null references public.payable_invoices(id) on delete cascade,
+  description text,
+  qty numeric(14,3) default 1,
+  unit_price_minor bigint default 0,
+  account_id uuid references public.accounts(id),
+  tax_code text references public.tax_codes(code)
+);
+
+-- 2H Payments
+create table public.payment_runs (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  run_date date default now(),
+  status text not null default 'draft',
+  total_minor bigint not null default 0,
+  approval_request_id uuid references public.approval_requests(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.payments (
+  id uuid primary key default gen_random_uuid(),
+  run_id uuid references public.payment_runs(id),
+  payable_invoice_id uuid references public.payable_invoices(id),
+  vendor_party_id uuid references public.parties(id),
+  method text check (method in ('mpesa','bank')),
+  amount_minor bigint not null default 0,
+  status text not null default 'pending',
+  external_ref text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+-- ---- Wire spine guarantees ----
+do $$
+declare
+  procurement_tbls text[] := array['vendor_profiles','vendor_ratings','requisitions','requisition_lines','purchase_orders','po_lines','grns','grn_lines'];
+  finance_tbls text[] := array['petty_cash_floats','petty_cash_vouchers','petty_cash_replenishments','expense_receipts','payable_invoices','payable_invoice_lines','payment_runs','payments'];
+  t text;
+begin
+  perform public.seed_module_permissions('procurement','Procurement');
+  perform public.seed_module_permissions('finance','Finance');
+  foreach t in array procurement_tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'procurement');
+  end loop;
+  foreach t in array finance_tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'finance');
+  end loop;
+  perform public.apply_code_default('requisitions','PR');
+  perform public.apply_code_default('purchase_orders','PO');
+  perform public.apply_code_default('grns','GRN');
+  perform public.apply_code_default('payable_invoices','AP');
+  perform public.apply_code_default('payment_runs','PAY');
+end $$;
+-- ============================================================================
+-- 0016_phase3_revenue.sql — PHASE 3 (PRD §3A-3F) — money coming in.
+-- ============================================================================
+
+create table public.customer_profiles (
+  party_id uuid primary key references public.parties(id) on delete cascade,
+  billing_terms text,
+  credit_limit_minor bigint default 0,
+  kra_pin text,
+  tier text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.quotations (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  customer_party_id uuid references public.parties(id),
+  version int not null default 1,
+  valid_until date,
+  status text not null default 'draft',
+  total_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.quotation_lines (
+  id uuid primary key default gen_random_uuid(),
+  quotation_id uuid not null references public.quotations(id) on delete cascade,
+  description text, qty numeric(14,3) default 1, unit_price_minor bigint default 0,
+  tax_code text references public.tax_codes(code)
+);
+
+create table public.sales_orders (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  customer_party_id uuid references public.parties(id),
+  quotation_id uuid references public.quotations(id),
+  project_id uuid references public.projects(id),
+  status text not null default 'draft',
+  total_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.so_milestones (
+  id uuid primary key default gen_random_uuid(),
+  so_id uuid not null references public.sales_orders(id) on delete cascade,
+  name text not null, due_date date, amount_minor bigint default 0,
+  billing_status text not null default 'pending'
+);
+
+create table public.receivable_invoices (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  customer_party_id uuid references public.parties(id),
+  so_id uuid references public.sales_orders(id),
+  invoice_date date, due_date date,
+  amount_minor bigint not null default 0, tax_minor bigint not null default 0,
+  currency_code text not null default 'KES',
+  etims_status text not null default 'pending', etims_ref text,
+  status text not null default 'draft',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.receivable_invoice_lines (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid not null references public.receivable_invoices(id) on delete cascade,
+  description text, qty numeric(14,3) default 1, unit_price_minor bigint default 0,
+  tax_code text references public.tax_codes(code)
+);
+
+create table public.customer_receipts (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  customer_party_id uuid references public.parties(id),
+  invoice_id uuid references public.receivable_invoices(id),
+  amount_minor bigint not null default 0,
+  method text, external_ref text, received_date date default now(),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.dunning_log (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid references public.receivable_invoices(id),
+  channel text, sent_at timestamptz default now(), note text
+);
+
+create table public.credit_notes (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  customer_party_id uuid references public.parties(id),
+  invoice_id uuid references public.receivable_invoices(id),
+  reason text, amount_minor bigint not null default 0,
+  status text not null default 'draft',
+  approval_request_id uuid references public.approval_requests(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['customer_profiles','quotations','quotation_lines','sales_orders','so_milestones','receivable_invoices','receivable_invoice_lines','customer_receipts','dunning_log','credit_notes'];
+begin
+  perform public.seed_module_permissions('revenue','Revenue');
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'revenue');
+  end loop;
+  perform public.apply_code_default('quotations','QT');
+  perform public.apply_code_default('sales_orders','SO');
+  perform public.apply_code_default('receivable_invoices','AR');
+  perform public.apply_code_default('customer_receipts','RCT');
+  perform public.apply_code_default('credit_notes','CN');
+end $$;
+-- ============================================================================
+-- 0017_phase4_people.sql — PHASE 4 People Operations (PRD §4A-4F)
+-- ============================================================================
+
+create table public.employee_profiles (
+  party_id uuid primary key references public.parties(id) on delete cascade,
+  staff_no text unique,
+  department_id uuid references public.departments(id),
+  job_title text, contract_type text, start_date date,
+  nssf_no text, shif_no text, kra_pin text,
+  bank_details_id uuid references public.party_bank_details(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.next_of_kin (
+  id uuid primary key default gen_random_uuid(),
+  party_id uuid not null references public.parties(id) on delete cascade,
+  name text, relationship text, phone text
+);
+
+create table public.leave_types (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, annual_days int default 0, accrual text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.leave_balances (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  type_id uuid references public.leave_types(id),
+  entitled numeric(6,2) default 0, taken numeric(6,2) default 0, remaining numeric(6,2) default 0
+);
+create table public.leave_applications (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  type_id uuid references public.leave_types(id),
+  start_date date, end_date date, days numeric(6,2),
+  status text not null default 'pending',
+  approval_request_id uuid references public.approval_requests(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.attendance (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  date date, clock_in timestamptz, clock_out timestamptz, hours numeric(6,2),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.timesheet_entries (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  date date, project_id uuid references public.projects(id), hours numeric(6,2), notes text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.salary_structures (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  basic_minor bigint default 0, effective_date date,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.pay_components (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  kind text check (kind in ('allowance','deduction')),
+  type text, amount_minor bigint default 0, recurring boolean default true,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.hr_payroll_runs (
+  id uuid primary key default gen_random_uuid(),
+  period text, status text not null default 'draft',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.objectives (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  cycle text, description text, weight numeric(5,2), status text default 'open', score numeric(5,2),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.performance_reviews (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  cycle text, reviewer_user_id uuid references public.users(id), rating numeric(5,2), comments text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.one_on_ones (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  manager_user_id uuid references public.users(id), date date, notes text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.hr_checklists (
+  id uuid primary key default gen_random_uuid(),
+  type text check (type in ('onboarding','offboarding')), template jsonb default '[]'::jsonb, name text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.hr_checklist_runs (
+  id uuid primary key default gen_random_uuid(),
+  employee_party_id uuid references public.parties(id),
+  template_id uuid references public.hr_checklists(id),
+  items jsonb default '[]'::jsonb, status text not null default 'in_progress',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['employee_profiles','next_of_kin','leave_types','leave_balances','leave_applications','attendance','timesheet_entries','salary_structures','pay_components','hr_payroll_runs','objectives','performance_reviews','one_on_ones','hr_checklists','hr_checklist_runs'];
+begin
+  perform public.seed_module_permissions('people','People Ops');
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'people');
+  end loop;
+end $$;
+-- ============================================================================
+-- 0018_phase5_assets.sql — PHASE 5 Asset & Inventory (PRD §5A-5E)
+-- ============================================================================
+
+create table public.assets (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  name text not null,
+  category_id uuid references public.categories(id),
+  serial_no text,
+  location_id uuid references public.locations(id),
+  custodian_user_id uuid references public.users(id),
+  purchase_po_id uuid references public.purchase_orders(id),
+  cost_minor bigint default 0,
+  depreciation_method text default 'straight_line',
+  useful_life_months int,
+  nbv_minor bigint default 0,
+  qr_code text,
+  status text not null default 'in_store',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.asset_events (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid not null references public.assets(id) on delete cascade,
+  type text check (type in ('acquired','deployed','maintained','transferred','disposed')),
+  event_date date default now(),
+  from_location_id uuid references public.locations(id),
+  to_location_id uuid references public.locations(id),
+  notes text,
+  approval_request_id uuid references public.approval_requests(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.stock_items (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, uom_code text references public.units_of_measure(code),
+  reorder_point numeric(14,3) default 0, category_id uuid references public.categories(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.stock_levels (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid references public.stock_items(id), location_id uuid references public.locations(id),
+  qty numeric(14,3) default 0, unique(item_id, location_id)
+);
+create table public.stock_movements (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid references public.stock_items(id),
+  from_location_id uuid references public.locations(id),
+  to_location_id uuid references public.locations(id),
+  qty numeric(14,3), type text, ref text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.maintenance_schedules (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid references public.assets(id), frequency text, next_due date,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.work_orders (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  asset_id uuid references public.assets(id), type text, status text not null default 'open',
+  assignee_user_id uuid references public.users(id), parts jsonb default '[]'::jsonb,
+  approval_request_id uuid references public.approval_requests(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.deployments (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid references public.assets(id),
+  institution_id uuid references public.institutions(id),
+  deployed_date date default now(), condition text, status text not null default 'active',
+  field_officer_id uuid references public.users(id), photo_document_id uuid references public.documents(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['assets','asset_events','stock_items','stock_levels','stock_movements','maintenance_schedules','work_orders','deployments'];
+begin
+  perform public.seed_module_permissions('assets','Assets & Inventory');
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'assets');
+  end loop;
+  perform public.apply_code_default('assets','AST');
+  perform public.apply_code_default('work_orders','WO');
+end $$;
+-- ============================================================================
+-- 0019_phase6_projects.sql — PHASE 6 Project & Programme Management (PRD §6A-6F)
+-- Extends spine projects; project procurement reuses Phase 2 (filtered by project_id).
+-- ============================================================================
+
+create table public.project_details (
+  project_id uuid primary key references public.projects(id) on delete cascade,
+  funder_party_id uuid references public.parties(id),
+  total_budget_minor bigint default 0, currency_code text not null default 'KES',
+  manager_user_id uuid references public.users(id), status text not null default 'active',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.project_team (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade,
+  user_id uuid references public.users(id), role text, unique(project_id, user_id)
+);
+create table public.project_budgets (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade,
+  cost_center_id uuid references public.cost_centers(id),
+  line text, budget_minor bigint default 0,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.milestones (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade,
+  name text not null, due_date date, status text not null default 'pending',
+  deliverable_document_id uuid references public.documents(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.funder_reports (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id) on delete cascade,
+  period text, status text not null default 'pending', submitted_date date,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.grants (
+  id uuid primary key default gen_random_uuid(),
+  funder_party_id uuid references public.parties(id),
+  project_id uuid references public.projects(id),
+  agreement_document_id uuid references public.documents(id),
+  total_minor bigint default 0, currency_code text not null default 'KES',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.drawdowns (
+  id uuid primary key default gen_random_uuid(),
+  grant_id uuid references public.grants(id) on delete cascade,
+  tranche text, amount_minor bigint default 0, due_date date, status text not null default 'scheduled'
+);
+create table public.field_activities (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references public.projects(id),
+  institution_id uuid references public.institutions(id),
+  type text, activity_date date default now(), officer_user_id uuid references public.users(id),
+  notes text, geo_lat double precision, geo_lng double precision, photos jsonb default '[]'::jsonb,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['project_details','project_team','project_budgets','milestones','funder_reports','grants','drawdowns','field_activities'];
+begin
+  perform public.seed_module_permissions('projects','Projects');
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'projects');
+  end loop;
+end $$;
+-- ============================================================================
+-- 0020_phase7_crm.sql — PHASE 7 Partnerships, Pipeline & CRM (PRD §7A-7J)
+-- ONE CRM module, two views (upstream/downstream). Built on spine parties.
+-- ============================================================================
+
+create table public.partner_profiles (
+  party_id uuid primary key references public.parties(id) on delete cascade,
+  relationship_types text[] default '{}',  -- funder|investor|ta|government|convener|institution|distributor|epc|manufacturer
+  tier text, owner_user_id uuid references public.users(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.engagements (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  partner_party_id uuid references public.parties(id),
+  stage text, priority text, owner_user_id uuid references public.users(id),
+  status text not null default 'active', next_action text, due_by date,
+  view text not null default 'upstream' check (view in ('upstream','downstream')),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create index on public.engagements(view);
+create index on public.engagements(owner_user_id);
+
+create table public.engagement_updates (
+  id uuid primary key default gen_random_uuid(),
+  engagement_id uuid not null references public.engagements(id) on delete cascade,
+  update_date date default now(), channel text, summary text, logged_by uuid references public.users(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.action_items (
+  id uuid primary key default gen_random_uuid(),
+  engagement_id uuid references public.engagements(id) on delete cascade,
+  description text not null, owner_user_id uuid references public.users(id),
+  due_date date, status text not null default 'open',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+create table public.institution_pipeline (
+  id uuid primary key default gen_random_uuid(),
+  institution_id uuid references public.institutions(id),
+  tier text, status text, eoi_stage text, owner_user_id uuid references public.users(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.eois (
+  id uuid primary key default gen_random_uuid(),
+  institution_id uuid references public.institutions(id),
+  submitted_date date, status text not null default 'received',
+  converted_to_so_id uuid references public.sales_orders(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.opportunities (
+  id uuid primary key default gen_random_uuid(),
+  title text not null, funder_party_id uuid references public.parties(id),
+  type text, deadline date, status text not null default 'open', source_url text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['partner_profiles','engagements','engagement_updates','action_items','institution_pipeline','eois','opportunities'];
+begin
+  perform public.seed_module_permissions('crm','CRM');
+  -- BD role gets CRM access too.
+  insert into public.role_permissions(role_id, permission_id)
+  select r.id, p.id from public.roles r join public.permissions p on p.module='crm'
+  where r.key='bd' on conflict do nothing;
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'crm');
+  end loop;
+  perform public.apply_code_default('engagements','ENG');
+end $$;
+-- ============================================================================
+-- 0021_phase8_intelligence.sql — PHASE 8 Intelligence & Reporting (PRD §8B-8H)
+-- Home Dashboard (8A) is already live and stores nothing of its own.
+-- ============================================================================
+
+create table public.kpis (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, formula text, target numeric, module_source text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.kpi_values (
+  id uuid primary key default gen_random_uuid(),
+  kpi_id uuid references public.kpis(id) on delete cascade,
+  period text, value numeric
+);
+create table public.impact_metrics (
+  id uuid primary key default gen_random_uuid(),
+  type text not null, value numeric, period text,
+  project_id uuid references public.projects(id), public_visible boolean not null default false,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.alert_rules (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, condition jsonb default '{}'::jsonb, channel text default 'in_app',
+  recipients jsonb default '[]'::jsonb, active boolean not null default true,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['kpis','kpi_values','impact_metrics','alert_rules'];
+begin
+  perform public.seed_module_permissions('intelligence','Intelligence');
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'intelligence');
+  end loop;
+end $$;
+-- ============================================================================
+-- 0022_phase9_governance.sql — PHASE 9 Governance, Compliance & Diligence (§9A-9F)
+-- ============================================================================
+
+create table public.contracts (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  type text, counterparty_party_id uuid references public.parties(id),
+  start_date date, end_date date, value_minor bigint default 0,
+  document_id uuid references public.documents(id), status text not null default 'active',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.compliance_obligations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, authority text, frequency text, next_due date,
+  owner_user_id uuid references public.users(id), status text not null default 'pending',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.policies (
+  id uuid primary key default gen_random_uuid(),
+  title text not null, category text, current_version int default 1,
+  document_id uuid references public.documents(id), status text not null default 'active',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.policy_versions (
+  id uuid primary key default gen_random_uuid(),
+  policy_id uuid references public.policies(id) on delete cascade,
+  version int, document_id uuid references public.documents(id), created_at timestamptz not null default now()
+);
+create table public.risks (
+  id uuid primary key default gen_random_uuid(),
+  description text not null, likelihood int check (likelihood between 1 and 5),
+  impact int check (impact between 1 and 5),
+  score int generated always as (likelihood * impact) stored,
+  owner_user_id uuid references public.users(id), mitigation text, status text not null default 'open',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.board_members (
+  id uuid primary key default gen_random_uuid(),
+  party_id uuid references public.parties(id), role text, appointed_date date,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.board_meetings (
+  id uuid primary key default gen_random_uuid(),
+  meeting_date date, minutes_document_id uuid references public.documents(id), notes text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.resolutions (
+  id uuid primary key default gen_random_uuid(),
+  meeting_id uuid references public.board_meetings(id), title text, outcome text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.shareholding (
+  id uuid primary key default gen_random_uuid(),
+  party_id uuid references public.parties(id), shares bigint, pct numeric(6,3),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.dataroom_shares (
+  id uuid primary key default gen_random_uuid(),
+  name text, document_ids jsonb default '[]'::jsonb,
+  shared_with_party_id uuid references public.parties(id),
+  expires_at timestamptz, created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['contracts','compliance_obligations','policies','policy_versions','risks','board_members','board_meetings','resolutions','shareholding','dataroom_shares'];
+begin
+  perform public.seed_module_permissions('governance','Governance');
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'governance');
+  end loop;
+  perform public.apply_code_default('contracts','CTR');
+end $$;
+-- ============================================================================
+-- 0023_phase10_field.sql — PHASE 10 Field & Mobile (PRD §10A-10D)
+-- Mobile (PWA) reuses GRN/deployment/field-activity tables. New: portals + tickets.
+-- ============================================================================
+
+create table public.support_tickets (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  institution_id uuid references public.institutions(id),
+  subject text not null, body text, status text not null default 'open',
+  priority text not null default 'normal', raised_by uuid references public.users(id),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.ticket_comments (
+  id uuid primary key default gen_random_uuid(),
+  ticket_id uuid references public.support_tickets(id) on delete cascade,
+  author_user_id uuid references public.users(id), body text, created_at timestamptz not null default now()
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['support_tickets','ticket_comments'];
+begin
+  perform public.seed_module_permissions('field','Field & Portals');
+  -- field_officer role gets field + assets access.
+  insert into public.role_permissions(role_id, permission_id)
+  select r.id, p.id from public.roles r join public.permissions p on p.module in ('field','assets')
+  where r.key='field_officer' on conflict do nothing;
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'field');
+  end loop;
+  perform public.apply_code_default('support_tickets','TKT');
+end $$;
+
+-- Public impact view (PRD §10D) — whitelisted metrics only, readable without auth.
+create or replace view public.public_impact_metrics as
+  select type, value, period from public.impact_metrics
+  where public_visible = true and deleted_at is null;
+-- ============================================================================
+-- 0024_phase11_bd.sql — PHASE 11 Business Development Intelligence (§11A-11F)
+-- Scans the whole spine (single-query, enabled by one-CRM design) to draft concepts.
+-- ============================================================================
+
+create table public.concepts (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  opportunity_id uuid references public.opportunities(id),
+  title text, status text not null default 'draft',  -- draft|review|submitted|won|lost
+  assigned_to uuid references public.users(id),
+  document_id uuid references public.documents(id),
+  checklist jsonb default '[]'::jsonb,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id), updated_by uuid references public.users(id), deleted_at timestamptz
+);
+create table public.capability_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  opportunity_id uuid references public.opportunities(id),
+  concept_id uuid references public.concepts(id),
+  snapshot jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+do $$
+declare t text;
+declare tbls text[] := array['concepts','capability_snapshots'];
+begin
+  perform public.seed_module_permissions('bd','Business Development');
+  insert into public.role_permissions(role_id, permission_id)
+  select r.id, p.id from public.roles r join public.permissions p on p.module='bd'
+  where r.key='bd' on conflict do nothing;
+  foreach t in array tbls loop
+    perform public.apply_standard_triggers(t);
+    perform public.apply_module_rls(t,'bd');
+  end loop;
+  perform public.apply_code_default('concepts','CPT');
+end $$;
+-- ============================================================================
+-- 0025_fix_sequence_security.sql
+-- next_human_id() writes to id_sequences (RLS-protected). It must run as
+-- SECURITY DEFINER so human-code generation works under a normal user session.
+-- ============================================================================
+
+create or replace function public.next_human_id(p_prefix text)
+returns text language plpgsql security definer set search_path = public as $$
+declare
+  v_val bigint;
+  v_pad int;
+begin
+  insert into public.id_sequences(prefix) values (p_prefix)
+    on conflict (prefix) do nothing;
+
+  update public.id_sequences
+     set next_val = next_val + 1
+   where prefix = p_prefix
+  returning next_val - 1, pad into v_val, v_pad;
+
+  return p_prefix || '-' || lpad(v_val::text, v_pad, '0');
+end;
+$$;

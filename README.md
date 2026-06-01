@@ -40,9 +40,31 @@ row + event, soft-delete everywhere (`deleted_at`).
 - **Users**: list + invite (role assignment via permission-checked server action).
 - **Roles**, **Reference Data**, **Audit Log** viewers. Org / CoA / Approvals scaffolds.
 
-### ⏳ Not yet built
-Phases 2–11 (Procure-to-Pay, Revenue, People, Assets, Projects, CRM, Intelligence,
-Governance, Field/Mobile, BD). Nav shows them locked until their phase lands.
+### ✅ Phases 2–11 — backbone built & live
+The complete database for all 11 phases is applied and verified: **114 tables,
+RLS on all 114, 19 permission modules, 69 permissions, ~315 event triggers.**
+Every Phase 2–11 table gets the same spine guarantees (audit, events, timestamps,
+RLS, auto human-codes) via the installer functions in `0014_module_helpers.sql`.
+
+| Phase | Tables (examples) |
+|---|---|
+| **2 Procure-to-Pay** | vendor_profiles, requisitions, purchase_orders, grns, payable_invoices, payment_runs, petty_cash_*, expense_receipts |
+| **3 Revenue** | customer_profiles, quotations, sales_orders, receivable_invoices (eTIMS), customer_receipts, credit_notes |
+| **4 People** | employee_profiles, leave_*, attendance, timesheets, salary_structures, objectives, hr_checklists |
+| **5 Assets** | assets (QR), asset_events, stock_*, work_orders, deployments |
+| **6 Projects** | project_details, project_budgets, milestones, grants, drawdowns, field_activities |
+| **7 CRM** | partner_profiles, engagements (upstream/downstream), engagement_updates, action_items, opportunities, eois |
+| **8 Intelligence** | kpis, kpi_values, impact_metrics, alert_rules (Home Dashboard already live) |
+| **9 Governance** | contracts, compliance_obligations, policies, risks, board_*, shareholding, dataroom_shares |
+| **10 Field** | support_tickets, ticket_comments, public_impact_metrics view |
+| **11 BD** | concepts, capability_snapshots |
+
+**App:** a config-driven resource framework (`src/lib/spine/resources.ts` +
+`ResourceView`) renders ~22 flagship modules across every phase with the full
+Add-button contract (list, search, ref dropdowns, money handling, soft-delete) at
+`/r/<slug>`. The nav is unlocked and permission-filtered. Remaining per-module
+bespoke UX (PDFs, OCR, three-way match, eTIMS/M-Pesa/Daraja calls, Gantt/calendar
+widgets, portals) layers onto this backbone.
 
 ---
 
@@ -54,7 +76,7 @@ cp .env.example .env.local   # fill in Supabase URL + keys (already done locally
 npm run dev                  # http://localhost:3000
 ```
 
-**First login (seeded super_admin):** `sureantony@gmail.com` / `Draggonne..1`
+**First login (seeded super_admin):** `brian55mwangi@gmail.com` / `Draggonne..1`
 → change this password immediately.
 
 ### Applying database migrations
