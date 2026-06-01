@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
 export type CurrentUser = {
   id: string;
@@ -11,25 +12,23 @@ export type CurrentUser = {
   isSuperAdmin: boolean;
 };
 
-/** Loads the signed-in user with their roles + flattened permission keys. */
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+/**
+ * Loads the signed-in user with their roles + flattened permission keys.
+ * Wrapped in React cache() so the layout and the page share one result per
+ * request instead of each hitting Supabase again.
+ */
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: profile } = await supabase
-    .from("users")
-    .select("id, email, full_name, avatar_url")
-    .eq("id", user.id)
-    .single();
-
-  // Roles + permissions for this user.
-  const { data: roleRows } = await supabase
-    .from("user_roles")
-    .select("roles(key, role_permissions(permissions(key)))")
-    .eq("user_id", user.id);
+  // Profile + roles fetched in parallel (independent queries).
+  const [{ data: profile }, { data: roleRows }] = await Promise.all([
+    supabase.from("users").select("id, email, full_name, avatar_url").eq("id", user.id).single(),
+    supabase.from("user_roles").select("roles(key, role_permissions(permissions(key)))").eq("user_id", user.id),
+  ]);
 
   const roles = new Set<string>();
   const permissions = new Set<string>();
@@ -53,7 +52,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     permissions,
     isSuperAdmin,
   };
-}
+});
 
 /** Throws (redirect to /login) if not signed in; returns the user otherwise. */
 export async function requireUser(): Promise<CurrentUser> {

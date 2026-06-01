@@ -36,9 +36,21 @@ const SETTINGS: NavGroup = {
   ],
 };
 
-// Build resource-backed groups in a stable, phase-ordered sequence.
+// Procure-to-Pay has dedicated workflow pages (lines, approvals, GRN, match),
+// so it's a hand-built group rather than generic resource lists.
+const PROCUREMENT: NavGroup = {
+  label: "Procure-to-Pay",
+  items: [
+    { label: "Overview", href: "/procurement", module: "procurement", enabled: true },
+    { label: "Vendors", href: "/r/vendors", module: "procurement", enabled: true },
+    { label: "Requisitions", href: "/procurement/requisitions", module: "procurement", enabled: true },
+    { label: "Purchase Orders", href: "/procurement/pos", module: "procurement", enabled: true },
+    { label: "Payables", href: "/procurement/invoices", module: "finance", enabled: true },
+  ],
+};
+
+// Build remaining resource-backed groups in a stable, phase-ordered sequence.
 const GROUP_ORDER = [
-  "Procure-to-Pay",
   "Revenue",
   "People",
   "Assets",
@@ -63,6 +75,7 @@ const resourceGroups: NavGroup[] = GROUP_ORDER.map((g) => ({
 export const NAV: NavGroup[] = [
   { label: "Overview", items: [{ label: "Home", href: "/", module: "*", enabled: true }] },
   SPINE,
+  PROCUREMENT,
   ...resourceGroups,
   SETTINGS,
 ];

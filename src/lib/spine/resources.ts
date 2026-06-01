@@ -61,44 +61,8 @@ export const RESOURCES: Resource[] = [
       { key: "email", label: "Email", type: "text" },
     ],
   },
-  {
-    slug: "requisitions", table: "requisitions", module: "procurement",
-    group: "Procure-to-Pay", title: "Requisitions", subtitle: "Purchase requests → budget check → approval routing.",
-    select: "id,code,need_by_date,status,total_minor,currency_code,created_at",
-    columns: [
-      { key: "code", label: "Code" },
-      { key: "need_by_date", label: "Need by", kind: "date" },
-      { key: "total_minor", label: "Total", kind: "money" },
-      STATUS,
-      { key: "created_at", label: "Created", kind: "date" },
-    ],
-    fields: [
-      { key: "need_by_date", label: "Need-by date", type: "date", half: true },
-      { key: "total_minor", label: "Estimated total", type: "money", half: true },
-      { key: "department_id", label: "Department", type: "ref", ref: { table: "departments", labelKey: "name" }, half: true },
-      { key: "project_id", label: "Project", type: "ref", ref: { table: "projects", labelKey: "name" }, half: true },
-      { key: "cost_center_id", label: "Cost center", type: "ref", ref: { table: "cost_centers", labelKey: "name" } },
-      { key: "status", label: "Status", type: "select", options: ["draft", "pending_approval", "approved", "rejected", "converted"] },
-    ],
-  },
-  {
-    slug: "purchase-orders", table: "purchase_orders", module: "procurement",
-    group: "Procure-to-Pay", title: "Purchase Orders", subtitle: "Approved requisitions converted to orders on a vendor.",
-    select: "id,code,status,total_minor,currency_code,expected_date,created_at",
-    columns: [
-      { key: "code", label: "Code" },
-      { key: "total_minor", label: "Total", kind: "money" },
-      { key: "expected_date", label: "Expected", kind: "date" },
-      STATUS,
-      { key: "created_at", label: "Created", kind: "date" },
-    ],
-    fields: [
-      { key: "vendor_party_id", label: "Vendor", type: "ref", ref: { table: "parties", labelKey: "display_name", typeFilter: "vendor" }, required: true },
-      { key: "total_minor", label: "Total", type: "money", half: true },
-      { key: "expected_date", label: "Expected date", type: "date", half: true },
-      { key: "status", label: "Status", type: "select", options: ["draft", "issued", "partially_received", "received", "closed"] },
-    ],
-  },
+  // Requisitions & Purchase Orders have dedicated workflow pages under
+  // /procurement (lines, approvals, GRN, three-way match) — see lib/spine/nav.ts.
 
   // ---------------- Phase 3 — Revenue ----------------
   {

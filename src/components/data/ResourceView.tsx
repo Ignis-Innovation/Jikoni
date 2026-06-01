@@ -174,16 +174,18 @@ function ResourceForm({
     setForm(init);
 
     (async () => {
-      const out: Record<string, { id: string; label: string }[]> = {};
-      for (const f of resource.fields) {
-        if (f.type === "ref" && f.ref) {
-          let q = supabase.from(f.ref.table).select(`id, ${f.ref.labelKey}`).is("deleted_at", null).limit(500);
-          if (f.ref.typeFilter) q = q.eq("type", f.ref.typeFilter);
+      const refFields = resource.fields.filter((f) => f.type === "ref" && f.ref);
+      // Fetch every dropdown's options in parallel instead of one after another.
+      const results = await Promise.all(
+        refFields.map(async (f) => {
+          let q = supabase.from(f.ref!.table).select(`id, ${f.ref!.labelKey}`).is("deleted_at", null).limit(500);
+          if (f.ref!.typeFilter) q = q.eq("type", f.ref!.typeFilter);
           const { data } = await q;
-          out[f.key] = ((data as unknown as Row[]) ?? []).map((r) => ({ id: String(r.id), label: String(r[f.ref!.labelKey] ?? r.id) }));
-        }
-      }
-      setRefOptions(out);
+          const opts = ((data as unknown as Row[]) ?? []).map((r) => ({ id: String(r.id), label: String(r[f.ref!.labelKey] ?? r.id) }));
+          return [f.key, opts] as const;
+        })
+      );
+      setRefOptions(Object.fromEntries(results));
     })();
   }, [open, editing, resource, supabase]);
 
