@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Button, Input, Label, Select, Badge } from "@/components/ui/primitives";
+import { Button, Input, Label, Select, Badge, PageHeader, Table, THead, TH, TBody, TR, TD } from "@/components/ui/primitives";
 import { SlideOver } from "@/components/data/SlideOver";
 import { Pencil, Trash2, Plus, Search } from "lucide-react";
 import { formatDate } from "@/lib/utils";
@@ -71,24 +71,20 @@ export function PartiesView({ caps }: { caps: Caps }) {
 
   return (
     <div className="mx-auto max-w-6xl">
-      {/* Header */}
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <p className="text-xs text-zinc-400">Spine</p>
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Parties</h1>
-          <p className="text-sm text-zinc-500">Single source of truth for everyone Ignis deals with.</p>
-        </div>
-        {caps.create && (
+      <PageHeader
+        eyebrow="Spine"
+        title="Parties"
+        subtitle="Single source of truth for everyone Ignis deals with."
+        actions={caps.create ? (
           <Button onClick={() => { setEditing(null); setPanelOpen(true); }}>
             <Plus className="h-4 w-4" /> Add party
           </Button>
-        )}
-      </div>
+        ) : null}
+      />
 
-      {/* Filters */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative w-64">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder="Search parties…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
@@ -97,63 +93,53 @@ export function PartiesView({ caps }: { caps: Caps }) {
         </Select>
       </div>
 
-      {/* Table */}
-      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-xs uppercase tracking-wider text-zinc-500">
-              <th className="px-4 py-2.5 font-medium">Name</th>
-              <th className="px-4 py-2.5 font-medium">Type</th>
-              <th className="px-4 py-2.5 font-medium">KRA PIN</th>
-              <th className="px-4 py-2.5 font-medium">Email</th>
-              <th className="px-4 py-2.5 font-medium">Added</th>
-              <th className="px-4 py-2.5" />
+      <Table>
+        <THead>
+          <TH>Name</TH><TH>Type</TH><TH>KRA PIN</TH><TH>Email</TH><TH>Added</TH><TH />
+        </THead>
+        <TBody>
+          {loading ? (
+            [...Array(5)].map((_, i) => (
+              <tr key={i}><td colSpan={6} className="px-4 py-3"><div className="h-4 w-full animate-pulse rounded bg-muted" /></td></tr>
+            ))
+          ) : rows.length === 0 ? (
+            <tr>
+              <td colSpan={6} className="px-4 py-14 text-center">
+                <p className="text-sm text-muted-foreground">No parties yet.</p>
+                {caps.create && (
+                  <Button className="mt-3" onClick={() => { setEditing(null); setPanelOpen(true); }}>
+                    <Plus className="h-4 w-4" /> Add the first party
+                  </Button>
+                )}
+              </td>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100">
-            {loading ? (
-              [...Array(4)].map((_, i) => (
-                <tr key={i}><td colSpan={6} className="px-4 py-3"><div className="h-4 w-full animate-pulse rounded bg-zinc-100" /></td></tr>
-              ))
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-12 text-center">
-                  <p className="text-sm text-zinc-500">No parties yet.</p>
-                  {caps.create && (
-                    <Button className="mt-3" onClick={() => { setEditing(null); setPanelOpen(true); }}>
-                      <Plus className="h-4 w-4" /> Add the first party
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ) : (
-              rows.map((p) => (
-                <tr key={p.id} className="hover:bg-zinc-50">
-                  <td className="px-4 py-2.5 font-medium text-zinc-900">{p.display_name}</td>
-                  <td className="px-4 py-2.5"><Badge tone={TYPE_TONE[p.type] ?? "zinc"}>{p.type}</Badge></td>
-                  <td className="px-4 py-2.5 text-zinc-600">{p.kra_pin ?? "—"}</td>
-                  <td className="px-4 py-2.5 text-zinc-600">{p.email ?? "—"}</td>
-                  <td className="px-4 py-2.5 text-zinc-500">{formatDate(p.created_at)}</td>
-                  <td className="px-4 py-2.5 text-right">
-                    <div className="flex justify-end gap-1">
-                      {caps.edit && (
-                        <button onClick={() => { setEditing(p); setPanelOpen(true); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" aria-label="Edit">
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                      {caps.del && (
-                        <button onClick={() => onDelete(p)} className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600" aria-label="Delete">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+          ) : (
+            rows.map((p) => (
+              <TR key={p.id}>
+                <TD className="font-medium text-foreground">{p.display_name}</TD>
+                <TD><Badge tone={TYPE_TONE[p.type] ?? "zinc"}>{p.type}</Badge></TD>
+                <TD>{p.kra_pin ?? "—"}</TD>
+                <TD>{p.email ?? "—"}</TD>
+                <TD>{formatDate(p.created_at)}</TD>
+                <TD className="text-right">
+                  <div className="flex justify-end gap-1">
+                    {caps.edit && (
+                      <button onClick={() => { setEditing(p); setPanelOpen(true); }} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" aria-label="Edit">
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    )}
+                    {caps.del && (
+                      <button onClick={() => onDelete(p)} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-50 hover:text-destructive" aria-label="Delete">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </TD>
+              </TR>
+            ))
+          )}
+        </TBody>
+      </Table>
 
       <PartyForm
         open={panelOpen}

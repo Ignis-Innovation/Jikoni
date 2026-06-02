@@ -1,5 +1,43 @@
 @import "tailwindcss";
 
+/* shadcn/ui-style design tokens (light "zinc" neutrals + emerald brand primary).
+   Exposed to Tailwind v4 as semantic color utilities: bg-background, text-muted-
+   foreground, border-border, bg-primary, ring-ring, etc. */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #18181b;
+
+  --color-card: #ffffff;
+  --color-card-foreground: #18181b;
+
+  --color-popover: #ffffff;
+  --color-popover-foreground: #18181b;
+
+  --color-muted: #f4f4f5;
+  --color-muted-foreground: #71717a;
+
+  --color-accent: #f4f4f5;
+  --color-accent-foreground: #18181b;
+
+  --color-border: #e4e4e7;
+  --color-input: #e4e4e7;
+  --color-ring: #10b981;
+
+  --color-primary: #059669;
+  --color-primary-foreground: #ffffff;
+
+  --color-secondary: #f4f4f5;
+  --color-secondary-foreground: #18181b;
+
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+
+  --color-sidebar: #fafafa;
+  --color-sidebar-border: #ececee;
+
+  --radius: 0.6rem;
+}
+
 html,
 body,
 #root {
@@ -7,7 +45,26 @@ body,
 }
 
 body {
-  background: #fafafa;
-  color: #18181b;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Refined, subtle scrollbars to match the admin aesthetic. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d8 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
 }

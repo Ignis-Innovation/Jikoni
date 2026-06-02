@@ -33,16 +33,20 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4">
       <div className="w-full max-w-sm">
-        <div className="mb-8 flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-lg font-bold text-white">J</div>
+        <div className="mb-8 flex items-center gap-2.5">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground shadow-sm">J</div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight text-zinc-900">Jikoni</h1>
-            <p className="text-xs text-zinc-500">Ignis Innovation OS</p>
+            <h1 className="text-lg font-semibold tracking-tight text-foreground">Jikoni</h1>
+            <p className="text-xs text-muted-foreground">Ignis Innovation OS</p>
           </div>
         </div>
-        <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-border bg-card p-7 shadow-sm">
+          <div className="mb-1">
+            <h2 className="text-base font-semibold text-foreground">Sign in</h2>
+            <p className="text-xs text-muted-foreground">Welcome back — enter your credentials.</p>
+          </div>
           <div>
             <Label htmlFor="email" required>Email</Label>
             <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
@@ -59,7 +63,7 @@ export default function Login() {
             <Link to="/forgot-password" className="text-xs text-emerald-700 hover:underline">Forgot password?</Link>
           </div>
         </form>
-        <p className="mt-4 text-center text-[11px] text-zinc-400">Jikoni — one shared spine, modules by reference.</p>
+        <p className="mt-4 text-center text-[11px] text-muted-foreground">Jikoni — one shared spine, modules by reference.</p>
       </div>
     </div>
   );

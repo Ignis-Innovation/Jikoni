@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Button, Input, Label, Select, Textarea, Badge } from "@/components/ui/primitives";
+import { Button, Input, Label, Select, Textarea, Badge, PageHeader, Table, THead, TH, TBody, TR, TD } from "@/components/ui/primitives";
 import { SlideOver } from "@/components/data/SlideOver";
 import { Pencil, Trash2, Plus, Search } from "lucide-react";
 import { formatDate, formatMoney } from "@/lib/utils";
@@ -59,78 +59,72 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
 
   return (
     <div className="mx-auto max-w-6xl">
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <p className="text-xs text-zinc-400">{resource.group}</p>
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900">{resource.title}</h1>
-          <p className="text-sm text-zinc-500">{resource.subtitle}</p>
-        </div>
-        {caps.create && (
+      <PageHeader
+        eyebrow={resource.group}
+        title={resource.title}
+        subtitle={resource.subtitle}
+        actions={caps.create ? (
           <Button onClick={() => { setEditing(null); setPanelOpen(true); }}>
             <Plus className="h-4 w-4" /> Add
           </Button>
-        )}
-      </div>
+        ) : null}
+      />
 
       <div className="mb-3 flex items-center gap-2">
         <div className="relative w-72">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder={`Search ${resource.title.toLowerCase()}…`} value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-xs uppercase tracking-wider text-zinc-500">
-              {resource.columns.map((c) => <th key={c.key} className="px-4 py-2.5 font-medium">{c.label}</th>)}
-              <th className="px-4 py-2.5" />
+      <Table>
+        <THead>
+          {resource.columns.map((c) => <TH key={c.key}>{c.label}</TH>)}
+          <TH />
+        </THead>
+        <TBody>
+          {loading ? (
+            [...Array(5)].map((_, i) => (
+              <tr key={i}><td colSpan={resource.columns.length + 1} className="px-4 py-3"><div className="h-4 w-full animate-pulse rounded bg-muted" /></td></tr>
+            ))
+          ) : rows.length === 0 ? (
+            <tr>
+              <td colSpan={resource.columns.length + 1} className="px-4 py-14 text-center">
+                <p className="text-sm text-muted-foreground">No {resource.title.toLowerCase()} yet.</p>
+                {caps.create && (
+                  <Button className="mt-3" onClick={() => { setEditing(null); setPanelOpen(true); }}>
+                    <Plus className="h-4 w-4" /> Add the first
+                  </Button>
+                )}
+              </td>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100">
-            {loading ? (
-              [...Array(4)].map((_, i) => (
-                <tr key={i}><td colSpan={resource.columns.length + 1} className="px-4 py-3"><div className="h-4 w-full animate-pulse rounded bg-zinc-100" /></td></tr>
-              ))
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={resource.columns.length + 1} className="px-4 py-12 text-center">
-                  <p className="text-sm text-zinc-500">No {resource.title.toLowerCase()} yet.</p>
-                  {caps.create && (
-                    <Button className="mt-3" onClick={() => { setEditing(null); setPanelOpen(true); }}>
-                      <Plus className="h-4 w-4" /> Add the first
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => (
-                <tr key={String(row.id)} className="hover:bg-zinc-50">
-                  {resource.columns.map((c, i) => (
-                    <td key={c.key} className={i === 0 ? "px-4 py-2.5 font-medium text-zinc-900" : "px-4 py-2.5 text-zinc-600"}>
-                      {renderCell(c, row)}
-                    </td>
-                  ))}
-                  <td className="px-4 py-2.5 text-right">
-                    <div className="flex justify-end gap-1">
-                      {caps.edit && (
-                        <button onClick={() => { setEditing(row); setPanelOpen(true); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" aria-label="Edit">
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                      {caps.del && (
-                        <button onClick={() => onDelete(row)} className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600" aria-label="Delete">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+          ) : (
+            rows.map((row) => (
+              <TR key={String(row.id)}>
+                {resource.columns.map((c, i) => (
+                  <TD key={c.key} className={i === 0 ? "font-medium text-foreground" : undefined}>
+                    {renderCell(c, row)}
+                  </TD>
+                ))}
+                <TD className="text-right">
+                  <div className="flex justify-end gap-1">
+                    {caps.edit && (
+                      <button onClick={() => { setEditing(row); setPanelOpen(true); }} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" aria-label="Edit">
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    )}
+                    {caps.del && (
+                      <button onClick={() => onDelete(row)} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-50 hover:text-destructive" aria-label="Delete">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </TD>
+              </TR>
+            ))
+          )}
+        </TBody>
+      </Table>
 
       <ResourceForm
         resource={resource}

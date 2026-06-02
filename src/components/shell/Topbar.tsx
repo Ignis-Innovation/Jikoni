@@ -1,12 +1,21 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Bell, LogOut, Search } from "lucide-react";
+import { Bell, LogOut, Search, User } from "lucide-react";
 
 export function Topbar({ user }: { user: { full_name: string | null; email: string } }) {
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
 
   async function handleSignOut() {
     await signOut();
@@ -21,37 +30,57 @@ export function Topbar({ user }: { user: { full_name: string | null; email: stri
     .toUpperCase();
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-5">
-      <div className="relative w-80 max-w-full">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-background/80 px-5 backdrop-blur">
+      <div className="relative w-96 max-w-full">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
           placeholder="Search…"
-          className="h-9 w-full rounded-md border border-zinc-200 bg-zinc-50 pl-9 pr-3 text-sm outline-none focus:border-emerald-500 focus:bg-white"
+          className="h-9 w-full rounded-lg border border-input bg-muted/40 pl-9 pr-16 text-sm outline-none transition-colors focus:border-ring focus:bg-background focus:ring-2 focus:ring-ring"
         />
+        <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+          ⌘K
+        </kbd>
       </div>
-      <div className="flex items-center gap-3">
-        <button className="relative text-zinc-500 hover:text-zinc-800" aria-label="Notifications">
-          <Bell className="h-5 w-5" />
+
+      <div className="flex items-center gap-2">
+        <button
+          className="relative flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          aria-label="Notifications"
+        >
+          <Bell className="h-[18px] w-[18px]" />
+          <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-primary" />
         </button>
-        <div className="relative">
+
+        <div className="relative" ref={ref}>
           <button
             onClick={() => setMenuOpen((v) => !v)}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-xs font-semibold text-white"
+            className="flex items-center gap-2 rounded-lg p-1 pr-2 transition-colors hover:bg-accent"
           >
-            {initials}
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+              {initials}
+            </span>
+            <span className="hidden text-sm font-medium text-foreground sm:block">{user.full_name ?? user.email}</span>
           </button>
           {menuOpen && (
-            <div className="absolute right-0 top-10 z-20 w-56 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg">
-              <div className="px-2 py-2">
-                <p className="text-sm font-medium text-zinc-900">{user.full_name ?? "—"}</p>
-                <p className="truncate text-xs text-zinc-500">{user.email}</p>
+            <div className="absolute right-0 top-11 z-30 w-60 rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+              <div className="flex items-center gap-2.5 px-2 py-2">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+                  {initials}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{user.full_name ?? "—"}</p>
+                  <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                </div>
               </div>
-              <hr className="my-1 border-zinc-100" />
+              <hr className="my-1 border-border" />
+              <button className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent">
+                <User className="h-4 w-4 text-muted-foreground" /> Profile
+              </button>
               <button
                 onClick={handleSignOut}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
               >
-                <LogOut className="h-4 w-4" /> Sign out
+                <LogOut className="h-4 w-4 text-muted-foreground" /> Sign out
               </button>
             </div>
           )}
