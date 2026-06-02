@@ -35,19 +35,23 @@ type MeRow = {
 };
 
 async function loadMe(): Promise<CurrentUser | null> {
-  const { data } = await supabase.rpc("me");
-  if (!data) return null;
-  const me = data as MeRow;
-  const roles = me.roles ?? [];
-  return {
-    id: me.id,
-    email: me.email ?? "",
-    full_name: me.full_name,
-    avatar_url: me.avatar_url,
-    roles,
-    permissions: new Set(me.permissions ?? []),
-    isSuperAdmin: roles.includes("super_admin"),
-  };
+  try {
+    const { data, error } = await supabase.rpc("me");
+    if (error || !data) return null;
+    const me = data as MeRow;
+    const roles = me.roles ?? [];
+    return {
+      id: me.id,
+      email: me.email ?? "",
+      full_name: me.full_name,
+      avatar_url: me.avatar_url,
+      roles,
+      permissions: new Set(me.permissions ?? []),
+      isSuperAdmin: roles.includes("super_admin"),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -55,26 +59,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
 
   const refresh = async () => {
-    const me = await loadMe();
-    setUser(me);
+    setUser(await loadMe());
   };
 
   useEffect(() => {
     let active = true;
+
+    // Initial load — always clear `loading`, even if the RPC fails.
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!active) return;
-      if (data.session) await refresh();
-      setLoading(false);
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (active && data.session) setUser(await loadMe());
+      } catch {
+        /* ignore */
+      } finally {
+        if (active) setLoading(false);
+      }
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (event) => {
+    // IMPORTANT: never `await` Supabase calls directly inside this callback —
+    // it can deadlock the auth client. Defer the profile fetch to a microtask.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
       if (event === "SIGNED_OUT") {
         setUser(null);
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
-        await refresh();
+        return;
       }
+      if (session) setTimeout(() => { if (active) loadMe().then((u) => active && setUser(u)); }, 0);
     });
+
     return () => {
       active = false;
       sub.subscription.unsubscribe();

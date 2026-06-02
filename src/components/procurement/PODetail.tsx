@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button, Input, Badge, Card } from "@/components/ui/primitives";
+import { Stepper } from "@/components/ui/Stepper";
 import { formatMoney } from "@/lib/utils";
+import { ArrowLeft } from "lucide-react";
 import { issuePO, receivePO, createPayableFromPO } from "@/lib/spine/procurement";
 
 type PO = { id: string; code: string | null; status: string; total_minor: number; currency_code: string; vendor_name: string | null };
@@ -10,6 +12,8 @@ type Line = { id: string; item_desc: string; qty_ordered: number; qty_received: 
 const TONE: Record<string, "zinc" | "amber" | "green" | "blue"> = {
   draft: "zinc", issued: "blue", partially_received: "amber", received: "green", closed: "zinc",
 };
+const PO_STEPS = ["Draft", "Issued", "Receiving", "Received"];
+const PO_STEP_IDX: Record<string, number> = { draft: 0, issued: 1, partially_received: 2, received: 3, closed: 3 };
 
 export function PODetail({
   po, lines, existingInvoiceId, caps, onChanged,
@@ -41,6 +45,9 @@ export function PODetail({
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
+      <Link to="/procurement/pos" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-3.5 w-3.5" /> Purchase Orders
+      </Link>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">Procure-to-Pay · Purchase Order</p>
@@ -55,6 +62,10 @@ export function PODetail({
           <p className="text-lg font-semibold text-foreground">{formatMoney(po.total_minor, po.currency_code)}</p>
         </div>
       </div>
+
+      <Card className="px-5 py-4">
+        <Stepper steps={PO_STEPS} current={PO_STEP_IDX[po.status] ?? 0} />
+      </Card>
 
       <Card>
         <h2 className="mb-3 text-sm font-semibold text-foreground">Lines</h2>

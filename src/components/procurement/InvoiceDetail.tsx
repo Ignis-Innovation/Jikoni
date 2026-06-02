@@ -1,6 +1,9 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Button, Badge, Card, Select } from "@/components/ui/primitives";
+import { Stepper } from "@/components/ui/Stepper";
 import { formatMoney } from "@/lib/utils";
+import { ArrowLeft } from "lucide-react";
 import { matchInvoice, payInvoice } from "@/lib/spine/procurement";
 
 type Invoice = {
@@ -13,6 +16,8 @@ const TONE: Record<string, "zinc" | "amber" | "green" | "blue"> = {
   draft: "zinc", matched: "blue", approved: "blue", scheduled: "amber", paid: "green",
 };
 const MTONE: Record<string, "zinc" | "green" | "red"> = { unmatched: "zinc", matched: "green", variance: "red" };
+const INV_STEPS = ["Drafted", "Matched", "Paid"];
+const INV_STEP_IDX: Record<string, number> = { draft: 0, matched: 1, approved: 1, scheduled: 1, paid: 2 };
 
 export function InvoiceDetail({
   invoice, poTotal, received, caps, onChanged,
@@ -40,6 +45,9 @@ export function InvoiceDetail({
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
+      <Link to="/procurement/invoices" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-3.5 w-3.5" /> Payables
+      </Link>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">Procure-to-Pay · Payable</p>
@@ -55,6 +63,10 @@ export function InvoiceDetail({
           <p className="text-lg font-semibold text-foreground">{formatMoney(invoice.amount_minor, cur)}</p>
         </div>
       </div>
+
+      <Card className="px-5 py-4">
+        <Stepper steps={INV_STEPS} current={INV_STEP_IDX[invoice.status] ?? 0} />
+      </Card>
 
       {/* Three-way match panel (PRD §2G) */}
       <Card>

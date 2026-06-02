@@ -16,6 +16,7 @@ import { Org, Coa, Approvals } from "@/pages/spine/Scaffold";
 import Users from "@/pages/settings/Users";
 import Roles from "@/pages/settings/Roles";
 import Reference from "@/pages/settings/Reference";
+import CrmPipeline from "@/pages/crm/Pipeline";
 import Hub from "@/pages/procurement/Hub";
 import Requisitions from "@/pages/procurement/Requisitions";
 import RequisitionDetailPage from "@/pages/procurement/RequisitionDetailPage";
@@ -41,6 +42,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/r/:slug" element={<Resource />} />
+            <Route path="/crm/pipeline" element={<CrmPipeline />} />
 
             <Route path="/procurement" element={<Hub />} />
             <Route path="/procurement/requisitions" element={<Requisitions />} />

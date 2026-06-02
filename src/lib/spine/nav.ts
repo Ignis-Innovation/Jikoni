@@ -72,6 +72,12 @@ const resourceGroups: NavGroup[] = GROUP_ORDER.map((g) => ({
   })),
 })).filter((g) => g.items.length > 0);
 
+// Add the dedicated CRM pipeline board at the top of the CRM group.
+const crmGroup = resourceGroups.find((g) => g.label === "CRM");
+if (crmGroup) {
+  crmGroup.items.unshift({ label: "Pipeline", href: "/crm/pipeline", module: "crm", enabled: true });
+}
+
 export const NAV: NavGroup[] = [
   { label: "Overview", items: [{ label: "Home", href: "/", module: "*", enabled: true }] },
   SPINE,

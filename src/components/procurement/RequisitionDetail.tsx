@@ -1,9 +1,13 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button, Input, Badge, Card, Select } from "@/components/ui/primitives";
+import { Stepper } from "@/components/ui/Stepper";
 import { formatMoney } from "@/lib/utils";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, ArrowLeft } from "lucide-react";
 import { saveRequisitionLines, submitRequisition, convertRequisitionToPO, type LineInput } from "@/lib/spine/procurement";
+
+const REQ_STEPS = ["Draft", "Approval", "Approved", "Converted"];
+const REQ_STEP_IDX: Record<string, number> = { draft: 0, pending_approval: 1, approved: 2, converted: 3, rejected: 1 };
 
 type Req = {
   id: string; code: string | null; status: string; total_minor: number;
@@ -48,6 +52,9 @@ export function RequisitionDetail({
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
+      <Link to="/procurement/requisitions" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-3.5 w-3.5" /> Requisitions
+      </Link>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">Procure-to-Pay · Requisition</p>
@@ -61,6 +68,10 @@ export function RequisitionDetail({
           <p className="text-lg font-semibold text-foreground">{formatMoney(total, req.currency_code)}</p>
         </div>
       </div>
+
+      <Card className="px-5 py-4">
+        <Stepper steps={REQ_STEPS} current={REQ_STEP_IDX[req.status] ?? 0} />
+      </Card>
 
       <Card>
         <div className="mb-3 flex items-center justify-between">
