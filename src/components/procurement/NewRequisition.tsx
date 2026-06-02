@@ -1,17 +1,15 @@
-"use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/primitives";
 import { Plus } from "lucide-react";
 
 export function NewRequisition() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 
   async function create() {
     setBusy(true);
-    const supabase = createClient();
     const { data, error } = await supabase
       .from("requisitions")
       .insert({ status: "draft", currency_code: "KES", total_minor: 0 })
@@ -19,7 +17,7 @@ export function NewRequisition() {
       .single();
     setBusy(false);
     if (error) return alert(error.message);
-    router.push(`/procurement/requisitions/${data.id}`);
+    navigate(`/procurement/requisitions/${data.id}`);
   }
 
   return (

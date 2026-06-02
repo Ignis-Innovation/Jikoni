@@ -3,8 +3,13 @@
 One system, one shared database (the **spine**). Every business module references
 spine entities by ID — never duplicates them. Built per the Jikoni PRD.
 
-**Stack:** Supabase (Postgres + Auth + Storage + Realtime) · Next.js 16 (App Router) ·
-React 19 · TypeScript · Tailwind v4 · Vercel-ready.
+**Stack:** Supabase (Postgres + Auth + Storage + Realtime) · **Vite 7 + React 19 SPA** ·
+React Router 7 · TypeScript · Tailwind v4.
+
+> Migrated from Next.js to a Vite + React SPA for faster local dev/navigation.
+> All former server actions are now client functions calling Supabase directly —
+> **RLS enforces every permission server-side**, and the client only ever holds
+> the anon key (the service_role key is never shipped to the browser).
 
 ---
 
@@ -72,8 +77,9 @@ widgets, portals) layers onto this backbone.
 
 ```bash
 npm install
-cp .env.example .env.local   # fill in Supabase URL + keys (already done locally)
-npm run dev                  # http://localhost:3000
+cp .env.example .env         # fill in VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY (done locally)
+npm run dev                  # Vite dev server (http://localhost:3000, or 3001 if busy)
+npm run build && npm run preview   # production build + static preview
 ```
 
 **First login (seeded super_admin):** `brian55mwangi@gmail.com` / `Draggonne..1`

@@ -1,6 +1,4 @@
-"use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Button, Badge } from "@/components/ui/primitives";
 import { actOnApproval } from "@/lib/spine/approvals";
 import { Check, X } from "lucide-react";
@@ -13,8 +11,7 @@ export type PendingItem = {
   created_at: string;
 };
 
-export function ApprovalsInbox({ items }: { items: PendingItem[] }) {
-  const router = useRouter();
+export function ApprovalsInbox({ items, onChanged }: { items: PendingItem[]; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -28,7 +25,7 @@ export function ApprovalsInbox({ items }: { items: PendingItem[] }) {
     const res = await actOnApproval({ requestId: id, action, comment });
     setBusy(null);
     setMsg(res.message);
-    router.refresh();
+    onChanged();
   }
 
   if (items.length === 0) {

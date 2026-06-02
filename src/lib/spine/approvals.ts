@@ -1,14 +1,17 @@
-"use server";
-import { getCurrentUser } from "@/lib/spine/auth";
-import { createClient } from "@/lib/supabase/server";
+import { supabase } from "@/lib/supabase";
 
 export type ActionResult = { ok: boolean; message: string };
+
+async function uid(): Promise<string | null> {
+  const { data } = await supabase.auth.getUser();
+  return data.user?.id ?? null;
+}
 
 /**
  * Submit a record into the spine approvals engine (PRD §1.4).
  * Resolves an active chain for the module/entity (matching amount band when
- * present), creates a pending approval_request, and notifies approvers.
- * Returns the approval_request id so the caller can store it on the entity.
+ * present), creates a pending approval_request, notifies approvers. RLS ensures
+ * only permitted users can write the request.
  */
 export async function submitForApproval(args: {
   entityType: string;
@@ -17,11 +20,9 @@ export async function submitForApproval(args: {
   amountMinor?: number;
   label?: string;
 }): Promise<{ ok: boolean; requestId?: string; message: string }> {
-  const me = await getCurrentUser();
+  const me = await uid();
   if (!me) return { ok: false, message: "Not authenticated." };
-  const supabase = await createClient();
 
-  // Find an active chain whose conditions fit (amount band optional).
   const { data: chains } = await supabase
     .from("approval_chains")
     .select("id, conditions")
@@ -40,13 +41,7 @@ export async function submitForApproval(args: {
 
   const { data: req, error } = await supabase
     .from("approval_requests")
-    .insert({
-      entity_type: args.entityType,
-      entity_id: args.entityId,
-      chain_id: chainId,
-      status: "pending",
-      requested_by: me.id,
-    })
+    .insert({ entity_type: args.entityType, entity_id: args.entityId, chain_id: chainId, status: "pending", requested_by: me })
     .select("id")
     .single();
   if (error) return { ok: false, message: error.message };
@@ -54,28 +49,24 @@ export async function submitForApproval(args: {
   await supabase.rpc("notify_approvers", {
     p_type: "approval.requested",
     p_title: `Approval needed: ${args.label ?? args.entityType}`,
-    p_body: `${me.full_name ?? me.email} submitted a ${args.entityType.replace(/_/g, " ")} for approval.`,
-    p_link: `/procurement`,
+    p_body: `A ${args.entityType.replace(/_/g, " ")} was submitted for approval.`,
+    p_link: "/procurement",
   });
 
   return { ok: true, requestId: req.id, message: "Submitted for approval." };
 }
 
-/** Approve / reject / request-changes on a request, then update its entity. */
+/** Approve / reject / request-changes, then reflect the decision on the entity. */
 export async function actOnApproval(args: {
   requestId: string;
   action: "approve" | "reject" | "request_changes";
   comment?: string;
 }): Promise<ActionResult> {
-  const me = await getCurrentUser();
+  const me = await uid();
   if (!me) return { ok: false, message: "Not authenticated." };
-  if (!me.isSuperAdmin && !me.permissions.has("approvals.act")) {
-    return { ok: false, message: "You can't act on approvals." };
-  }
   if ((args.action === "reject" || args.action === "request_changes") && !args.comment?.trim()) {
     return { ok: false, message: "A reason/comment is required." };
   }
-  const supabase = await createClient();
 
   const { data: req } = await supabase
     .from("approval_requests")
@@ -84,24 +75,23 @@ export async function actOnApproval(args: {
     .single();
   if (!req) return { ok: false, message: "Approval request not found." };
 
-  await supabase.from("approval_actions").insert({
+  const { error: actErr } = await supabase.from("approval_actions").insert({
     request_id: req.id,
     step_no: req.current_step ?? 1,
-    actor_user_id: me.id,
+    actor_user_id: me,
     action: args.action,
     comment: args.comment ?? null,
   });
+  if (actErr) return { ok: false, message: actErr.message };
 
   const newStatus =
     args.action === "approve" ? "approved" : args.action === "reject" ? "rejected" : "changes_requested";
   await supabase.from("approval_requests").update({ status: newStatus }).eq("id", req.id);
 
-  // Reflect the decision on the underlying entity.
   const entityStatus =
     args.action === "approve" ? "approved" : args.action === "reject" ? "rejected" : "draft";
   await supabase.from(req.entity_type).update({ status: entityStatus }).eq("id", req.entity_id);
 
-  // Notify the requester of the outcome.
   if (req.requested_by) {
     await supabase.rpc("notify", {
       p_user_id: req.requested_by,

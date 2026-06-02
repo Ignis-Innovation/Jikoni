@@ -1,12 +1,10 @@
-"use client";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import type { NavGroup } from "@/lib/spine/nav";
 import { Lock } from "lucide-react";
 
 export function Sidebar({ groups }: { groups: NavGroup[] }) {
-  const pathname = usePathname();
+  const { pathname } = useLocation();
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-zinc-200 bg-white">
       <div className="flex h-14 items-center gap-2 border-b border-zinc-200 px-5">
@@ -33,7 +31,7 @@ export function Sidebar({ groups }: { groups: NavGroup[] }) {
                 return (
                   <li key={item.href}>
                     <Link
-                      href={item.href}
+                      to={item.href}
                       className={cn(
                         "flex items-center rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
                         active ? "bg-emerald-50 text-emerald-700" : "text-zinc-600 hover:bg-zinc-100"

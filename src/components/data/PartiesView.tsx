@@ -1,6 +1,5 @@
-"use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import { Button, Input, Label, Select, Badge } from "@/components/ui/primitives";
 import { SlideOver } from "@/components/data/SlideOver";
 import { Pencil, Trash2, Plus, Search } from "lucide-react";
@@ -30,7 +29,6 @@ const TYPE_TONE: Record<string, "green" | "blue" | "amber" | "zinc"> = {
 type Caps = { create: boolean; edit: boolean; del: boolean };
 
 export function PartiesView({ caps }: { caps: Caps }) {
-  const supabase = useMemo(() => createClient(), []);
   const [rows, setRows] = useState<Party[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -182,7 +180,6 @@ function PartyForm({
   onClose: () => void;
   onSaved: (msg: string) => void;
 }) {
-  const supabase = useMemo(() => createClient(), []);
   const [form, setForm] = useState({ type: "vendor", display_name: "", legal_name: "", kra_pin: "", email: "", phone: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

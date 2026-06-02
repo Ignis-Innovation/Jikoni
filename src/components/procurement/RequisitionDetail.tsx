@@ -1,6 +1,5 @@
-"use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { Button, Input, Badge, Card, Select } from "@/components/ui/primitives";
 import { formatMoney } from "@/lib/utils";
 import { Trash2, Plus } from "lucide-react";
@@ -16,14 +15,15 @@ const TONE: Record<string, "zinc" | "amber" | "green" | "red" | "blue"> = {
 };
 
 export function RequisitionDetail({
-  req, initialLines, vendors, caps,
+  req, initialLines, vendors, caps, onChanged,
 }: {
   req: Req;
   initialLines: LineInput[];
   vendors: { id: string; display_name: string }[];
   caps: { edit: boolean; create: boolean };
+  onChanged: () => void;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const [lines, setLines] = useState<LineInput[]>(initialLines.length ? initialLines : []);
   const [vendor, setVendor] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export function RequisitionDetail({
     setBusy(true); setMsg(null);
     const res = await fn();
     setBusy(false); setMsg(res.message);
-    if (res.ok) { after?.(res.id); router.refresh(); }
+    if (res.ok) { after?.(res.id); onChanged(); }
   }
 
   return (
@@ -133,7 +133,7 @@ export function RequisitionDetail({
                 {vendors.map((v) => <option key={v.id} value={v.id}>{v.display_name}</option>)}
               </Select>
               <Button disabled={busy || !vendor}
-                onClick={() => run(() => convertRequisitionToPO(req.id, vendor), (id) => id && router.push(`/procurement/pos/${id}`))}>
+                onClick={() => run(() => convertRequisitionToPO(req.id, vendor), (id) => id && navigate(`/procurement/pos/${id}`))}>
                 Convert to PO
               </Button>
             </div>

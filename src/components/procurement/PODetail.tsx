@@ -1,6 +1,5 @@
-"use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { Button, Input, Badge, Card } from "@/components/ui/primitives";
 import { formatMoney } from "@/lib/utils";
 import { issuePO, receivePO, createPayableFromPO } from "@/lib/spine/procurement";
@@ -13,12 +12,13 @@ const TONE: Record<string, "zinc" | "amber" | "green" | "blue"> = {
 };
 
 export function PODetail({
-  po, lines, existingInvoiceId, caps,
+  po, lines, existingInvoiceId, caps, onChanged,
 }: {
   po: PO; lines: Line[]; existingInvoiceId: string | null;
   caps: { edit: boolean; finance: boolean };
+  onChanged: () => void;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const [receiving, setReceiving] = useState(false);
   const [recv, setRecv] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
@@ -28,7 +28,7 @@ export function PODetail({
     setBusy(true); setMsg(null);
     const res = await fn();
     setBusy(false); setMsg(res.message);
-    if (res.ok) { after?.(res.id); router.refresh(); }
+    if (res.ok) { after?.(res.id); onChanged(); }
   }
 
   function doReceive() {
@@ -112,9 +112,9 @@ export function PODetail({
           )}
           {(po.status === "received" || po.status === "partially_received") && caps.finance && (
             existingInvoiceId ? (
-              <Button variant="outline" onClick={() => router.push(`/procurement/invoices/${existingInvoiceId}`)}>View payable invoice</Button>
+              <Button variant="outline" onClick={() => navigate(`/procurement/invoices/${existingInvoiceId}`)}>View payable invoice</Button>
             ) : (
-              <Button disabled={busy} onClick={() => run(() => createPayableFromPO(po.id), (id) => id && router.push(`/procurement/invoices/${id}`))}>
+              <Button disabled={busy} onClick={() => run(() => createPayableFromPO(po.id), (id) => id && navigate(`/procurement/invoices/${id}`))}>
                 Create payable invoice
               </Button>
             )

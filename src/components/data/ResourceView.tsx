@@ -1,6 +1,5 @@
-"use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import { Button, Input, Label, Select, Textarea, Badge } from "@/components/ui/primitives";
 import { SlideOver } from "@/components/data/SlideOver";
 import { Pencil, Trash2, Plus, Search } from "lucide-react";
@@ -11,7 +10,6 @@ type Caps = { create: boolean; edit: boolean; del: boolean };
 type Row = Record<string, unknown>;
 
 export function ResourceView({ resource, caps }: { resource: Resource; caps: Caps }) {
-  const supabase = useMemo(() => createClient(), []);
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -156,7 +154,6 @@ function ResourceForm({
   onClose: () => void;
   onSaved: (m: string) => void;
 }) {
-  const supabase = useMemo(() => createClient(), []);
   const [form, setForm] = useState<Record<string, string>>({});
   const [refOptions, setRefOptions] = useState<Record<string, { id: string; label: string }[]>>({});
   const [saving, setSaving] = useState(false);

@@ -1,6 +1,4 @@
-"use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Button, Badge, Card, Select } from "@/components/ui/primitives";
 import { formatMoney } from "@/lib/utils";
 import { matchInvoice, payInvoice } from "@/lib/spine/procurement";
@@ -17,11 +15,11 @@ const TONE: Record<string, "zinc" | "amber" | "green" | "blue"> = {
 const MTONE: Record<string, "zinc" | "green" | "red"> = { unmatched: "zinc", matched: "green", variance: "red" };
 
 export function InvoiceDetail({
-  invoice, poTotal, received, caps,
+  invoice, poTotal, received, caps, onChanged,
 }: {
   invoice: Invoice; poTotal: number; received: number; caps: { finance: boolean };
+  onChanged: () => void;
 }) {
-  const router = useRouter();
   const [method, setMethod] = useState<"mpesa" | "bank">("mpesa");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -30,7 +28,7 @@ export function InvoiceDetail({
     setBusy(true); setMsg(null);
     const res = await fn();
     setBusy(false); setMsg(res.message);
-    if (res.ok) router.refresh();
+    if (res.ok) onChanged();
   }
 
   const cur = invoice.currency_code;

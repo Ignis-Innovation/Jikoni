@@ -1,18 +1,16 @@
-"use client";
-import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/lib/auth";
 import { Bell, LogOut, Search } from "lucide-react";
 
 export function Topbar({ user }: { user: { full_name: string | null; email: string } }) {
-  const router = useRouter();
+  const navigate = useNavigate();
+  const { signOut } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  async function signOut() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/login");
-    router.refresh();
+  async function handleSignOut() {
+    await signOut();
+    navigate("/login");
   }
 
   const initials = (user.full_name ?? user.email)
@@ -50,7 +48,7 @@ export function Topbar({ user }: { user: { full_name: string | null; email: stri
               </div>
               <hr className="my-1 border-zinc-100" />
               <button
-                onClick={signOut}
+                onClick={handleSignOut}
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100"
               >
                 <LogOut className="h-4 w-4" /> Sign out
