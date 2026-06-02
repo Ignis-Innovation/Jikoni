@@ -13,14 +13,14 @@ export default function Roles() {
     return data ?? [];
   }, []);
 
-  if (!can(user, "identity.roles.view")) return <p className="text-sm text-zinc-500">You don&apos;t have access to Roles.</p>;
+  if (!can(user, "identity.roles.view")) return <p className="text-sm text-muted-foreground">You don&apos;t have access to Roles.</p>;
 
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-5">
-        <p className="text-xs text-zinc-400">Settings</p>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Roles</h1>
-        <p className="text-sm text-zinc-500">RBAC roles live in the spine. Permissions are module + action pairs.</p>
+        <p className="text-xs text-muted-foreground">Settings</p>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">Roles</h1>
+        <p className="text-sm text-muted-foreground">RBAC roles live in the spine. Permissions are module + action pairs.</p>
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -28,13 +28,13 @@ export default function Roles() {
           <Card key={r.key}>
             <div className="flex items-start justify-between">
               <div>
-                <p className="font-medium text-zinc-900">{r.name}</p>
-                <p className="font-mono text-xs text-zinc-400">{r.key}</p>
+                <p className="font-medium text-foreground">{r.name}</p>
+                <p className="font-mono text-xs text-muted-foreground">{r.key}</p>
               </div>
               {r.is_system && <Badge tone="zinc">system</Badge>}
             </div>
-            <p className="mt-2 text-sm text-zinc-500">{r.description}</p>
-            <p className="mt-3 text-xs text-zinc-400">{(r.role_permissions ?? []).length} permissions</p>
+            <p className="mt-2 text-sm text-muted-foreground">{r.description}</p>
+            <p className="mt-3 text-xs text-muted-foreground">{(r.role_permissions ?? []).length} permissions</p>
           </Card>
         ))}
       </div>

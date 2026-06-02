@@ -50,7 +50,7 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
 
   function renderCell(col: Column, row: Row) {
     const v = row[col.key];
-    if (v == null || v === "") return <span className="text-zinc-300">—</span>;
+    if (v == null || v === "") return <span className="text-muted-foreground">—</span>;
     if (col.kind === "money") return formatMoney(Number(v), (row.currency_code as string) ?? "KES");
     if (col.kind === "date") return formatDate(v as string);
     if (col.kind === "badge") return <Badge tone="blue">{String(v)}</Badge>;
@@ -134,7 +134,7 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
         onSaved={(m) => { setPanelOpen(false); flash(m); load(); }}
       />
 
-      {toast && <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg">{toast}</div>}
+      {toast && <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-foreground px-4 py-2 text-sm text-background shadow-lg">{toast}</div>}
     </div>
   );
 }

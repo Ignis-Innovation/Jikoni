@@ -24,11 +24,11 @@ export function SlideOver({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-40">
-      <div className="absolute inset-0 bg-zinc-900/30" onClick={onClose} />
-      <div className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col bg-white shadow-xl sm:max-w-md">
-        <div className="flex h-14 items-center justify-between border-b border-zinc-200 px-5">
-          <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700" aria-label="Close">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col bg-card shadow-xl sm:max-w-md">
+        <div className="flex h-14 items-center justify-between border-b border-border px-5">
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>

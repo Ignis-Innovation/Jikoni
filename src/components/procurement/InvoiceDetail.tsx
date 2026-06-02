@@ -42,28 +42,28 @@ export function InvoiceDetail({
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs text-zinc-400">Procure-to-Pay · Payable</p>
-          <h1 className="flex items-center gap-3 text-xl font-semibold tracking-tight text-zinc-900">
+          <p className="text-xs text-muted-foreground">Procure-to-Pay · Payable</p>
+          <h1 className="flex items-center gap-3 text-xl font-semibold tracking-tight text-foreground">
             {invoice.code ?? "Invoice"}
             <Badge tone={TONE[invoice.status] ?? "zinc"}>{invoice.status}</Badge>
             <Badge tone={MTONE[invoice.match_status] ?? "zinc"}>{invoice.match_status}</Badge>
           </h1>
-          <p className="text-sm text-zinc-500">Vendor: {invoice.vendor_name ?? "—"}</p>
+          <p className="text-sm text-muted-foreground">Vendor: {invoice.vendor_name ?? "—"}</p>
         </div>
         <div className="text-right">
-          <p className="text-xs text-zinc-400">Amount</p>
-          <p className="text-lg font-semibold text-zinc-900">{formatMoney(invoice.amount_minor, cur)}</p>
+          <p className="text-xs text-muted-foreground">Amount</p>
+          <p className="text-lg font-semibold text-foreground">{formatMoney(invoice.amount_minor, cur)}</p>
         </div>
       </div>
 
       {/* Three-way match panel (PRD §2G) */}
       <Card>
-        <h2 className="mb-3 text-sm font-semibold text-zinc-900">Three-way match</h2>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Three-way match</h2>
         <div className="grid grid-cols-3 gap-3">
           {figures.map((f) => (
-            <div key={f.label} className="rounded-lg border border-zinc-200 p-3">
-              <p className="text-[11px] text-zinc-500">{f.label}</p>
-              <p className="text-base font-semibold text-zinc-900">{formatMoney(f.value, cur)}</p>
+            <div key={f.label} className="rounded-lg border border-border p-3">
+              <p className="text-[11px] text-muted-foreground">{f.label}</p>
+              <p className="text-base font-semibold text-foreground">{formatMoney(f.value, cur)}</p>
             </div>
           ))}
         </div>
@@ -81,9 +81,9 @@ export function InvoiceDetail({
 
       {/* Payment */}
       <Card>
-        <h2 className="mb-3 text-sm font-semibold text-zinc-900">Payment</h2>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Payment</h2>
         {invoice.status === "paid" ? (
-          <p className="text-sm text-emerald-700">Paid. ✓</p>
+          <p className="text-sm text-primary">Paid. ✓</p>
         ) : invoice.match_status === "matched" && caps.finance ? (
           <div className="flex items-center gap-2">
             <Select value={method} onChange={(e) => setMethod(e.target.value as "mpesa" | "bank")} className="w-40">
@@ -93,9 +93,9 @@ export function InvoiceDetail({
             <Button disabled={busy} onClick={() => run(() => payInvoice(invoice.id, method))}>Pay now</Button>
           </div>
         ) : (
-          <p className="text-sm text-zinc-500">Invoice must pass the three-way match before it can be paid.</p>
+          <p className="text-sm text-muted-foreground">Invoice must pass the three-way match before it can be paid.</p>
         )}
-        {msg && <p className="mt-3 text-xs text-zinc-500">{msg}</p>}
+        {msg && <p className="mt-3 text-xs text-muted-foreground">{msg}</p>}
       </Card>
     </div>
   );

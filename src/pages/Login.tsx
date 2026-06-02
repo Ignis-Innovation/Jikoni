@@ -60,7 +60,7 @@ export default function Login() {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
           <div className="text-center">
-            <Link to="/forgot-password" className="text-xs text-emerald-700 hover:underline">Forgot password?</Link>
+            <Link to="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
           </div>
         </form>
         <p className="mt-4 text-center text-[11px] text-muted-foreground">Jikoni — one shared spine, modules by reference.</p>

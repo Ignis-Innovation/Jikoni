@@ -48,7 +48,7 @@ export default function Hub() {
   }, [user?.id]);
 
   if (!can(user, "procurement.view") && !can(user, "finance.view")) {
-    return <p className="text-sm text-zinc-500">You don&apos;t have access to Procurement.</p>;
+    return <p className="text-sm text-muted-foreground">You don&apos;t have access to Procurement.</p>;
   }
 
   const stages = [
@@ -64,19 +64,19 @@ export default function Hub() {
   return (
     <div className="mx-auto max-w-6xl space-y-8">
       <div>
-        <p className="text-xs text-zinc-400">Phase 2</p>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Procure-to-Pay</h1>
-        <p className="text-sm text-zinc-500">Requisition → approval → PO → GRN → invoice match → payment — all on spine services.</p>
+        <p className="text-xs text-muted-foreground">Phase 2</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Procure-to-Pay</h1>
+        <p className="text-sm text-muted-foreground">Requisition → approval → PO → GRN → invoice match → payment — all on spine services.</p>
       </div>
 
       <section>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">Pipeline</h2>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Pipeline</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           {stages.map((s) => (
             <Link key={s.label} to={s.href}>
               <Card className="p-4 transition-colors hover:border-emerald-300">
-                <p className="text-2xl font-semibold text-zinc-900">{s.value}</p>
-                <p className="mt-1 text-[11px] leading-tight text-zinc-500">{s.label}</p>
+                <p className="text-2xl font-semibold text-foreground">{s.value}</p>
+                <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{s.label}</p>
               </Card>
             </Link>
           ))}
@@ -86,19 +86,19 @@ export default function Hub() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Awaiting my approval</h2>
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Awaiting my approval</h2>
             {(data?.pending.length ?? 0) > 0 && <Badge tone="amber">{data?.pending.length}</Badge>}
           </div>
           <Card><ApprovalsInbox items={data?.pending ?? []} onChanged={reload} /></Card>
         </section>
         <section>
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">Quick links</h2>
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Quick links</h2>
           <Card>
             <ul className="space-y-2 text-sm">
-              <li><Link to="/procurement/requisitions" className="text-emerald-700 hover:underline">Requisitions</Link> — raise &amp; submit for approval</li>
-              <li><Link to="/procurement/pos" className="text-emerald-700 hover:underline">Purchase Orders</Link> — issue, receive goods (GRN)</li>
-              <li><Link to="/procurement/invoices" className="text-emerald-700 hover:underline">Payables</Link> — three-way match &amp; pay</li>
-              <li><Link to="/r/vendors" className="text-emerald-700 hover:underline">Vendors</Link> — registry</li>
+              <li><Link to="/procurement/requisitions" className="text-primary hover:underline">Requisitions</Link> — raise &amp; submit for approval</li>
+              <li><Link to="/procurement/pos" className="text-primary hover:underline">Purchase Orders</Link> — issue, receive goods (GRN)</li>
+              <li><Link to="/procurement/invoices" className="text-primary hover:underline">Payables</Link> — three-way match &amp; pay</li>
+              <li><Link to="/r/vendors" className="text-primary hover:underline">Vendors</Link> — registry</li>
             </ul>
           </Card>
         </section>

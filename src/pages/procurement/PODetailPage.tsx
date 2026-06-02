@@ -19,9 +19,9 @@ export default function PODetailPage() {
     return { po, lines: lines ?? [], invoiceId: invoice?.id ?? null };
   }, [id]);
 
-  if (!can(user, "procurement.view")) return <p className="text-sm text-zinc-500">No access.</p>;
-  if (loading) return <p className="text-sm text-zinc-400">Loading…</p>;
-  if (!data?.po) return <p className="text-sm text-zinc-500">PO not found.</p>;
+  if (!can(user, "procurement.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
+  if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!data?.po) return <p className="text-sm text-muted-foreground">PO not found.</p>;
 
   return (
     <PODetail

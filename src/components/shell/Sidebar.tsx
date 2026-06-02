@@ -89,10 +89,10 @@ export function Sidebar({ groups }: { groups: NavGroup[] }) {
                         "group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
                         active
                           ? "bg-primary/10 font-medium text-primary"
-                          : "text-zinc-600 hover:bg-accent hover:text-accent-foreground"
+                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                       )}
                     >
-                      <Icon className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-zinc-400 group-hover:text-zinc-600")} />
+                      <Icon className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-muted-foreground group-hover:text-muted-foreground")} />
                       <span className="truncate">{item.label}</span>
                     </Link>
                   </li>

@@ -19,14 +19,14 @@ export default function ForgotPassword() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h1 className="mb-1 text-lg font-semibold text-zinc-900">Reset password</h1>
+    <div className="flex min-h-screen items-center justify-center bg-muted/50 px-4">
+      <div className="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-sm">
+        <h1 className="mb-1 text-lg font-semibold text-foreground">Reset password</h1>
         {sent ? (
-          <p className="text-sm text-zinc-600">If an account exists for <b>{email}</b>, a reset link is on its way.</p>
+          <p className="text-sm text-muted-foreground">If an account exists for <b>{email}</b>, a reset link is on its way.</p>
         ) : (
           <form onSubmit={onSubmit} className="space-y-4">
-            <p className="text-sm text-zinc-500">Enter your email and we&apos;ll send a reset link.</p>
+            <p className="text-sm text-muted-foreground">Enter your email and we&apos;ll send a reset link.</p>
             <div>
               <Label htmlFor="email" required>Email</Label>
               <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -36,7 +36,7 @@ export default function ForgotPassword() {
           </form>
         )}
         <div className="mt-4 text-center">
-          <Link to="/login" className="text-xs text-emerald-700 hover:underline">Back to sign in</Link>
+          <Link to="/login" className="text-xs text-primary hover:underline">Back to sign in</Link>
         </div>
       </div>
     </div>

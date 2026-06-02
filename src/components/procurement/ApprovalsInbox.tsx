@@ -29,17 +29,17 @@ export function ApprovalsInbox({ items, onChanged }: { items: PendingItem[]; onC
   }
 
   if (items.length === 0) {
-    return <p className="py-6 text-center text-sm text-zinc-400">Nothing awaiting your approval. 🎉</p>;
+    return <p className="py-6 text-center text-sm text-muted-foreground">Nothing awaiting your approval. 🎉</p>;
   }
 
   return (
     <div>
-      <ul className="divide-y divide-zinc-100">
+      <ul className="divide-y divide-border">
         {items.map((it) => (
           <li key={it.id} className="flex items-center justify-between gap-3 py-2.5">
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-zinc-900">{it.label}</p>
-              <p className="text-xs text-zinc-500">
+              <p className="truncate text-sm font-medium text-foreground">{it.label}</p>
+              <p className="text-xs text-muted-foreground">
                 <Badge tone="amber">{it.entity_type.replace(/_/g, " ")}</Badge>{" "}
                 from {it.requested_by_name ?? "—"}
               </p>
@@ -55,7 +55,7 @@ export function ApprovalsInbox({ items, onChanged }: { items: PendingItem[]; onC
           </li>
         ))}
       </ul>
-      {msg && <p className="mt-2 text-xs text-zinc-500">{msg}</p>}
+      {msg && <p className="mt-2 text-xs text-muted-foreground">{msg}</p>}
     </div>
   );
 }

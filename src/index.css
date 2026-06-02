@@ -1,40 +1,82 @@
 @import "tailwindcss";
 
-/* shadcn/ui-style design tokens (light "zinc" neutrals + emerald brand primary).
-   Exposed to Tailwind v4 as semantic color utilities: bg-background, text-muted-
-   foreground, border-border, bg-primary, ring-ring, etc. */
-@theme {
-  --color-background: #ffffff;
-  --color-foreground: #18181b;
+/* Enable class-based dark mode: utilities like dark:… and our token overrides
+   activate when <html> (or an ancestor) has the `dark` class. */
+@custom-variant dark (&:where(.dark, .dark *));
 
-  --color-card: #ffffff;
-  --color-card-foreground: #18181b;
+/* shadcn/ui-style tokens. Light values in :root, dark overrides in .dark.
+   @theme inline maps Tailwind color utilities to these vars, so the whole UI
+   switches theme by toggling one class — no per-component dark: variants. */
+:root {
+  --background: #ffffff;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #10b981;
+  --primary: #059669;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --sidebar: #fafafa;
+  --sidebar-border: #ececee;
+}
 
-  --color-popover: #ffffff;
-  --color-popover-foreground: #18181b;
+.dark {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  --card: #18181b;
+  --card-foreground: #f4f4f5;
+  --popover: #18181b;
+  --popover-foreground: #f4f4f5;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --border: #27272a;
+  --input: #3f3f46;
+  --ring: #10b981;
+  --primary: #10b981;
+  --primary-foreground: #052e16;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+  --sidebar: #111113;
+  --sidebar-border: #232327;
+}
 
-  --color-muted: #f4f4f5;
-  --color-muted-foreground: #71717a;
-
-  --color-accent: #f4f4f5;
-  --color-accent-foreground: #18181b;
-
-  --color-border: #e4e4e7;
-  --color-input: #e4e4e7;
-  --color-ring: #10b981;
-
-  --color-primary: #059669;
-  --color-primary-foreground: #ffffff;
-
-  --color-secondary: #f4f4f5;
-  --color-secondary-foreground: #18181b;
-
-  --color-destructive: #dc2626;
-  --color-destructive-foreground: #ffffff;
-
-  --color-sidebar: #fafafa;
-  --color-sidebar-border: #ececee;
-
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-border: var(--sidebar-border);
   --radius: 0.6rem;
 }
 
@@ -45,26 +87,22 @@ body,
 }
 
 body {
-  background: var(--color-background);
-  color: var(--color-foreground);
+  background: var(--background);
+  color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Refined, subtle scrollbars to match the admin aesthetic. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #d4d4d8 transparent;
+  scrollbar-color: var(--border) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #d4d4d8;
+  background: var(--border);
   border-radius: 9999px;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: #a1a1aa;
 }

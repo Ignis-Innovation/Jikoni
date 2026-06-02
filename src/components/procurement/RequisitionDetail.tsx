@@ -50,26 +50,26 @@ export function RequisitionDetail({
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs text-zinc-400">Procure-to-Pay · Requisition</p>
-          <h1 className="flex items-center gap-3 text-xl font-semibold tracking-tight text-zinc-900">
+          <p className="text-xs text-muted-foreground">Procure-to-Pay · Requisition</p>
+          <h1 className="flex items-center gap-3 text-xl font-semibold tracking-tight text-foreground">
             {req.code ?? "Draft"}
             <Badge tone={TONE[req.status] ?? "zinc"}>{req.status.replace(/_/g, " ")}</Badge>
           </h1>
         </div>
         <div className="text-right">
-          <p className="text-xs text-zinc-400">Total</p>
-          <p className="text-lg font-semibold text-zinc-900">{formatMoney(total, req.currency_code)}</p>
+          <p className="text-xs text-muted-foreground">Total</p>
+          <p className="text-lg font-semibold text-foreground">{formatMoney(total, req.currency_code)}</p>
         </div>
       </div>
 
       <Card>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-zinc-900">Line items</h2>
+          <h2 className="text-sm font-semibold text-foreground">Line items</h2>
           {editable && <Button size="sm" variant="outline" onClick={addLine}><Plus className="h-3.5 w-3.5" /> Add line</Button>}
         </div>
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-zinc-400">
+            <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground">
               <th className="pb-2 font-medium">Item</th>
               <th className="pb-2 font-medium w-20">Qty</th>
               <th className="pb-2 font-medium w-36">Unit price</th>
@@ -79,7 +79,7 @@ export function RequisitionDetail({
           </thead>
           <tbody>
             {lines.map((l, i) => (
-              <tr key={i} className="border-t border-zinc-100">
+              <tr key={i} className="border-t border-border">
                 <td className="py-1.5 pr-2">
                   <Input value={l.item_desc} disabled={!editable} onChange={(e) => setLine(i, { item_desc: e.target.value })} placeholder="Description" />
                 </td>
@@ -90,10 +90,10 @@ export function RequisitionDetail({
                   <Input type="number" step="0.01" value={l.est_unit_price_minor / 100} disabled={!editable}
                     onChange={(e) => setLine(i, { est_unit_price_minor: Math.round(Number(e.target.value) * 100) })} />
                 </td>
-                <td className="py-1.5 text-right text-zinc-700">{formatMoney(Math.round(l.qty * l.est_unit_price_minor), req.currency_code)}</td>
+                <td className="py-1.5 text-right text-foreground">{formatMoney(Math.round(l.qty * l.est_unit_price_minor), req.currency_code)}</td>
                 <td className="py-1.5 pl-2 text-right">
                   {editable && (
-                    <button onClick={() => setLines((ls) => ls.filter((_, idx) => idx !== i))} className="text-zinc-400 hover:text-red-600">
+                    <button onClick={() => setLines((ls) => ls.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-red-600">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   )}
@@ -101,7 +101,7 @@ export function RequisitionDetail({
               </tr>
             ))}
             {lines.length === 0 && (
-              <tr><td colSpan={5} className="py-6 text-center text-sm text-zinc-400">No lines yet.</td></tr>
+              <tr><td colSpan={5} className="py-6 text-center text-sm text-muted-foreground">No lines yet.</td></tr>
             )}
           </tbody>
         </table>
@@ -116,7 +116,7 @@ export function RequisitionDetail({
 
       {/* Workflow actions reflect status (PRD §2D/§2E). */}
       <Card>
-        <h2 className="mb-3 text-sm font-semibold text-zinc-900">Workflow</h2>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Workflow</h2>
         <div className="flex flex-wrap items-center gap-2">
           {req.status === "draft" && caps.edit && (
             <Button disabled={busy || lines.length === 0} onClick={() => run(() => submitRequisition(req.id))}>
@@ -141,7 +141,7 @@ export function RequisitionDetail({
           {req.status === "converted" && <p className="text-sm text-blue-700">Converted to a purchase order.</p>}
           {req.status === "rejected" && <p className="text-sm text-red-700">Rejected.</p>}
         </div>
-        {msg && <p className="mt-3 text-xs text-zinc-500">{msg}</p>}
+        {msg && <p className="mt-3 text-xs text-muted-foreground">{msg}</p>}
       </Card>
     </div>
   );

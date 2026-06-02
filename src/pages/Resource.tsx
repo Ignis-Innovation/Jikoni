@@ -8,9 +8,9 @@ export default function Resource() {
   const { user } = useAuth();
   const resource = slug ? getResource(slug) : undefined;
 
-  if (!resource) return <p className="text-sm text-zinc-500">Unknown resource.</p>;
+  if (!resource) return <p className="text-sm text-muted-foreground">Unknown resource.</p>;
   if (!can(user, `${resource.module}.view`)) {
-    return <p className="text-sm text-zinc-500">You don&apos;t have access to {resource.title}.</p>;
+    return <p className="text-sm text-muted-foreground">You don&apos;t have access to {resource.title}.</p>;
   }
   return (
     <ResourceView

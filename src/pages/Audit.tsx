@@ -16,36 +16,36 @@ export default function Audit() {
     return data ?? [];
   }, []);
 
-  if (!can(user, "audit.view")) return <p className="text-sm text-zinc-500">You don&apos;t have access to the Audit Log.</p>;
+  if (!can(user, "audit.view")) return <p className="text-sm text-muted-foreground">You don&apos;t have access to the Audit Log.</p>;
 
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-5">
-        <p className="text-xs text-zinc-400">Spine</p>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Audit Log</h1>
-        <p className="text-sm text-zinc-500">Immutable who-did-what-when. Append-only — no app path can edit these rows.</p>
+        <p className="text-xs text-muted-foreground">Spine</p>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">Audit Log</h1>
+        <p className="text-sm text-muted-foreground">Immutable who-did-what-when. Append-only — no app path can edit these rows.</p>
       </div>
-      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-xs uppercase tracking-wider text-zinc-500">
+            <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-2.5 font-medium">When</th>
               <th className="px-4 py-2.5 font-medium">Action</th>
               <th className="px-4 py-2.5 font-medium">Table</th>
               <th className="px-4 py-2.5 font-medium">Record</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100">
+          <tbody className="divide-y divide-border">
             {(rows ?? []).map((r) => (
-              <tr key={r.id} className="hover:bg-zinc-50">
-                <td className="px-4 py-2 text-xs text-zinc-500">{new Date(r.created_at).toLocaleString("en-GB")}</td>
+              <tr key={r.id} className="hover:bg-muted/50">
+                <td className="px-4 py-2 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString("en-GB")}</td>
                 <td className="px-4 py-2"><Badge tone={tone[r.action] ?? "zinc"}>{r.action}</Badge></td>
-                <td className="px-4 py-2 font-mono text-xs text-zinc-700">{r.table_name}</td>
-                <td className="px-4 py-2 font-mono text-[11px] text-zinc-400">{r.record_id?.slice(0, 8)}</td>
+                <td className="px-4 py-2 font-mono text-xs text-foreground">{r.table_name}</td>
+                <td className="px-4 py-2 font-mono text-[11px] text-muted-foreground">{r.record_id?.slice(0, 8)}</td>
               </tr>
             ))}
             {!loading && (!rows || rows.length === 0) && (
-              <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-zinc-400">No audit entries yet.</td></tr>
+              <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-muted-foreground">No audit entries yet.</td></tr>
             )}
           </tbody>
         </table>

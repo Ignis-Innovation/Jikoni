@@ -26,9 +26,9 @@ export default function InvoiceDetailPage() {
     return { inv, poTotal, received, poCode };
   }, [id]);
 
-  if (!can(user, "finance.view")) return <p className="text-sm text-zinc-500">No access.</p>;
-  if (loading) return <p className="text-sm text-zinc-400">Loading…</p>;
-  if (!data?.inv) return <p className="text-sm text-zinc-500">Invoice not found.</p>;
+  if (!can(user, "finance.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
+  if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!data?.inv) return <p className="text-sm text-muted-foreground">Invoice not found.</p>;
 
   return (
     <InvoiceDetail

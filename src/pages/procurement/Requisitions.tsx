@@ -20,22 +20,22 @@ export default function Requisitions() {
     return data ?? [];
   }, []);
 
-  if (!can(user, "procurement.view")) return <p className="text-sm text-zinc-500">No access.</p>;
+  if (!can(user, "procurement.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
 
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-5 flex items-center justify-between">
         <div>
-          <p className="text-xs text-zinc-400">Procure-to-Pay</p>
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Requisitions</h1>
-          <p className="text-sm text-zinc-500">Request → budget check → approval routing.</p>
+          <p className="text-xs text-muted-foreground">Procure-to-Pay</p>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">Requisitions</h1>
+          <p className="text-sm text-muted-foreground">Request → budget check → approval routing.</p>
         </div>
         {can(user, "procurement.create") && <NewRequisition />}
       </div>
-      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-xs uppercase tracking-wider text-zinc-500">
+            <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-2.5 font-medium">Code</th>
               <th className="px-4 py-2.5 font-medium">Total</th>
               <th className="px-4 py-2.5 font-medium">Need by</th>
@@ -43,18 +43,18 @@ export default function Requisitions() {
               <th className="px-4 py-2.5 font-medium">Created</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100">
+          <tbody className="divide-y divide-border">
             {(rows ?? []).map((r) => (
-              <tr key={r.id} className="hover:bg-zinc-50">
-                <td className="px-4 py-2.5 font-medium text-emerald-700"><Link to={`/procurement/requisitions/${r.id}`}>{r.code ?? "—"}</Link></td>
+              <tr key={r.id} className="hover:bg-muted/50">
+                <td className="px-4 py-2.5 font-medium text-primary"><Link to={`/procurement/requisitions/${r.id}`}>{r.code ?? "—"}</Link></td>
                 <td className="px-4 py-2.5">{formatMoney(r.total_minor, r.currency_code)}</td>
-                <td className="px-4 py-2.5 text-zinc-600">{formatDate(r.need_by_date)}</td>
+                <td className="px-4 py-2.5 text-muted-foreground">{formatDate(r.need_by_date)}</td>
                 <td className="px-4 py-2.5"><Badge tone={TONE[r.status] ?? "zinc"}>{r.status?.replace(/_/g, " ")}</Badge></td>
-                <td className="px-4 py-2.5 text-zinc-500">{formatDate(r.created_at)}</td>
+                <td className="px-4 py-2.5 text-muted-foreground">{formatDate(r.created_at)}</td>
               </tr>
             ))}
             {(!rows || rows.length === 0) && (
-              <tr><td colSpan={5} className="px-4 py-12 text-center text-sm text-zinc-400">No requisitions yet.</td></tr>
+              <tr><td colSpan={5} className="px-4 py-12 text-center text-sm text-muted-foreground">No requisitions yet.</td></tr>
             )}
           </tbody>
         </table>

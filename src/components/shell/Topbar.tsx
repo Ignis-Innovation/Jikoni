@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Bell, LogOut, Search, User } from "lucide-react";
+import { ThemeToggle } from "@/components/shell/ThemeToggle";
 
 export function Topbar({ user }: { user: { full_name: string | null; email: string } }) {
   const navigate = useNavigate();
@@ -43,6 +44,7 @@ export function Topbar({ user }: { user: { full_name: string | null; email: stri
       </div>
 
       <div className="flex items-center gap-2">
+        <ThemeToggle />
         <button
           className="relative flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           aria-label="Notifications"

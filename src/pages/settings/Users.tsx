@@ -44,7 +44,7 @@ export default function Users() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  if (!can(user, "identity.users.view")) return <p className="text-sm text-zinc-500">You don&apos;t have access to Users.</p>;
+  if (!can(user, "identity.users.view")) return <p className="text-sm text-muted-foreground">You don&apos;t have access to Users.</p>;
 
   async function invite(e: React.FormEvent) {
     e.preventDefault();
@@ -69,19 +69,19 @@ export default function Users() {
     <div className="mx-auto max-w-5xl">
       <div className="mb-5 flex items-center justify-between">
         <div>
-          <p className="text-xs text-zinc-400">Settings</p>
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Users</h1>
-          <p className="text-sm text-zinc-500">Identity &amp; access — invite people and assign roles.</p>
+          <p className="text-xs text-muted-foreground">Settings</p>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">Users</h1>
+          <p className="text-sm text-muted-foreground">Identity &amp; access — invite people and assign roles.</p>
         </div>
         {can(user, "identity.users.create") && (
           <Button onClick={() => { setMsg(null); setOpen(true); }}><Plus className="h-4 w-4" /> Invite user</Button>
         )}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-xs uppercase tracking-wider text-zinc-500">
+            <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-2.5 font-medium">Name</th>
               <th className="px-4 py-2.5 font-medium">Email</th>
               <th className="px-4 py-2.5 font-medium">Roles</th>
@@ -89,12 +89,12 @@ export default function Users() {
               <th className="px-4 py-2.5 font-medium">Last login</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100">
+          <tbody className="divide-y divide-border">
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {((data?.users ?? []) as any[]).map((u) => (
-              <tr key={u.id} className="hover:bg-zinc-50">
-                <td className="px-4 py-2.5 font-medium text-zinc-900">{u.full_name ?? "—"}</td>
-                <td className="px-4 py-2.5 text-zinc-600">{u.email}</td>
+              <tr key={u.id} className="hover:bg-muted/50">
+                <td className="px-4 py-2.5 font-medium text-foreground">{u.full_name ?? "—"}</td>
+                <td className="px-4 py-2.5 text-muted-foreground">{u.email}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex flex-wrap gap-1">
                     {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -102,11 +102,11 @@ export default function Users() {
                   </div>
                 </td>
                 <td className="px-4 py-2.5"><Badge tone={statusTone[u.status] ?? "zinc"}>{u.status}</Badge></td>
-                <td className="px-4 py-2.5 text-zinc-500">{u.last_login_at ? formatDate(u.last_login_at) : "—"}</td>
+                <td className="px-4 py-2.5 text-muted-foreground">{u.last_login_at ? formatDate(u.last_login_at) : "—"}</td>
               </tr>
             ))}
             {!loading && (data?.users.length ?? 0) === 0 && (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-zinc-400">No users.</td></tr>
+              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">No users.</td></tr>
             )}
           </tbody>
         </table>
@@ -122,7 +122,7 @@ export default function Users() {
               {(data?.roles ?? []).map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
             </Select>
           </div>
-          {msg && <p className="rounded-md bg-zinc-100 px-3 py-2 text-xs text-zinc-700">{msg}</p>}
+          {msg && <p className="rounded-md bg-muted px-3 py-2 text-xs text-foreground">{msg}</p>}
           <div className="flex gap-2 pt-2">
             <Button type="submit" disabled={busy || !email}>{busy ? "Inviting…" : "Create user"}</Button>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Close</Button>
