@@ -849,6 +849,8 @@ insert into public.roles (key, name, description, is_system) values
   ('hr',              'HR',              'People Ops modules',                                 true),
   ('project_manager', 'Project Manager', 'Projects, budgets, milestones',                      true),
   ('bd',              'Business Dev',    'CRM, opportunities, BD intelligence',                true),
+  ('partner_manager', 'Partner Manager', 'Partners/parties, CRM pipeline, procurement',        true),
+  ('sales_manager',   'Sales Manager',   'Revenue, CRM pipeline, parties, procurement',        true),
   ('field_officer',   'Field Officer',   'Mobile/field modules, asset deployment',             true),
   ('viewer',          'Viewer',          'Read-only across permitted modules',                 true)
 on conflict (key) do nothing;
@@ -2000,5 +2002,250 @@ begin
   returning next_val - 1, pad into v_val, v_pad;
 
   return p_prefix || '-' || lpad(v_val::text, v_pad, '0');
+end;
+$$;
+
+-- ============================================================================
+-- 0028_partner_manager.sql — grant the Partner Manager role its module access.
+-- Runs after every module's permissions are seeded (procurement, crm), so the
+-- keys it references already exist. Idempotent: safe to re-run.
+-- Partner Manager works across partners/parties, the CRM pipeline, and
+-- procurement: view/create/edit on each (no destructive delete).
+-- ============================================================================
+
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id
+from public.roles r
+join public.permissions p
+  on p.module in ('parties', 'crm', 'procurement')
+ and p.action in ('view', 'create', 'edit')
+where r.key = 'partner_manager'
+on conflict do nothing;
+
+-- ============================================================================
+-- 0029_sales_manager.sql — grant the Sales Manager role its module access.
+-- Runs after every module's permissions are seeded (procurement, revenue, crm),
+-- so the keys it references already exist. Idempotent: safe to re-run.
+-- Sales Manager works across revenue, the CRM pipeline, parties, and
+-- procurement: view/create/edit on each (no destructive delete).
+-- ============================================================================
+
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id
+from public.roles r
+join public.permissions p
+  on p.module in ('revenue', 'crm', 'parties', 'procurement')
+ and p.action in ('view', 'create', 'edit')
+where r.key = 'sales_manager'
+on conflict do nothing;
+-- ============================================================================
+-- 0030_partner_manager_experience.sql — engagement title, CRM/leave grants,
+-- leave-type seed. Idempotent: safe to re-run.
+-- ============================================================================
+
+-- 1. Free-text engagement name (the "engagement name" a manager types).
+alter table public.engagements add column if not exists title text;
+
+-- 2. HR can view the CRM pipeline/engagements, so partner-created rows are
+--    visible across the org (admin & sales_manager already have crm).
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id from public.roles r
+join public.permissions p on p.module = 'crm' and p.action = 'view'
+where r.key = 'hr'
+on conflict do nothing;
+
+-- 3. Partner Manager can file leave (people view/create/edit). Their nav only
+--    surfaces Leave Application from the People area (see ROLE_NAV).
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id from public.roles r
+join public.permissions p on p.module = 'people' and p.action in ('view', 'create', 'edit')
+where r.key = 'partner_manager'
+on conflict do nothing;
+
+-- 4. Partner Manager no longer needs procurement (not in their nav).
+delete from public.role_permissions rp
+using public.roles r, public.permissions p
+where rp.role_id = r.id and rp.permission_id = p.id
+  and r.key = 'partner_manager' and p.module = 'procurement';
+
+-- 5. Seed baseline leave types so the Leave Application form is usable.
+insert into public.leave_types (name, annual_days, accrual)
+select v.name, v.days, 'annual'
+from (values ('Annual', 21), ('Sick', 14), ('Compassionate', 5)) as v(name, days)
+where not exists (select 1 from public.leave_types lt where lt.name = v.name and lt.deleted_at is null);
+-- ============================================================================
+-- 0031_tasks_and_self_leave.sql — personal tasks + self-service leave.
+-- Idempotent: safe to re-run.
+-- ============================================================================
+
+-- ---- Tasks -----------------------------------------------------------------
+-- User-scoped (not module-scoped): you see/manage tasks you own or are assigned.
+-- assigned_by/assignee_id let HR assign tasks to others later (HR is the creator,
+-- which the insert policy already permits).
+create table if not exists public.tasks (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  description text,
+  status text not null default 'pending' check (status in ('pending', 'in_progress', 'done')),
+  priority text default 'medium',
+  due_date date,
+  assignee_id uuid references public.users(id),
+  assigned_by uuid references public.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id),
+  updated_by uuid references public.users(id),
+  deleted_at timestamptz
+);
+
+select public.apply_standard_triggers('tasks');
+
+alter table public.tasks enable row level security;
+drop policy if exists tasks_sel on public.tasks;
+drop policy if exists tasks_ins on public.tasks;
+drop policy if exists tasks_upd on public.tasks;
+drop policy if exists tasks_del on public.tasks;
+create policy tasks_sel on public.tasks for select to authenticated
+  using (assignee_id = auth.uid() or created_by = auth.uid());
+create policy tasks_ins on public.tasks for insert to authenticated
+  with check (created_by = auth.uid() or assignee_id = auth.uid());
+create policy tasks_upd on public.tasks for update to authenticated
+  using (assignee_id = auth.uid() or created_by = auth.uid())
+  with check (assignee_id = auth.uid() or created_by = auth.uid());
+create policy tasks_del on public.tasks for delete to authenticated
+  using (created_by = auth.uid());
+
+-- ---- Self-service leave ----------------------------------------------------
+-- Tie a leave application to the applying user so anyone can apply for their own
+-- leave (in addition to the existing people.* policies used for HR oversight).
+alter table public.leave_applications add column if not exists user_id uuid references public.users(id);
+
+drop policy if exists leave_self_sel on public.leave_applications;
+drop policy if exists leave_self_ins on public.leave_applications;
+drop policy if exists leave_self_upd on public.leave_applications;
+drop policy if exists leave_self_del on public.leave_applications;
+create policy leave_self_sel on public.leave_applications for select to authenticated
+  using (user_id = auth.uid());
+create policy leave_self_ins on public.leave_applications for insert to authenticated
+  with check (user_id = auth.uid());
+create policy leave_self_upd on public.leave_applications for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy leave_self_del on public.leave_applications for delete to authenticated
+  using (user_id = auth.uid());
+-- ============================================================================
+-- 0032_hr_people_grants.sql — give HR ownership of the People module so HR can
+-- view employees/leave and approve leave applications. Idempotent.
+-- ============================================================================
+
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id from public.roles r
+join public.permissions p on p.module = 'people' and p.action in ('view', 'create', 'edit', 'delete')
+where r.key = 'hr'
+on conflict do nothing;
+
+-- ============================================================================
+-- 0033_task_assignment_notify.sql — track task-assignment email delivery.
+-- When HR assigns a task to a team member, the row sits with notified_at = null
+-- until scripts/send-task-assignments.mjs emails the assignee (then stamps it),
+-- so an assignee is mailed exactly once. Idempotent: safe to re-run.
+-- ============================================================================
+
+alter table public.tasks add column if not exists notified_at timestamptz;
+
+-- Helps the mailer find the un-notified assigned tasks quickly.
+create index if not exists tasks_pending_notify_idx
+  on public.tasks (created_at)
+  where notified_at is null and assigned_by is not null;
+
+-- ============================================================================
+-- 0034_payment_requests.sql — self-service payment / reimbursement requests.
+-- A user submits a request (title, amount, date, short description); it sits
+-- pending until an admin OR HR approves/rejects it. After approval, admin/HR
+-- marks it paid once cash is disbursed (handled manually — no card/M-Pesa).
+-- Mirrors the self-service leave flow (0031): the requester is scoped to their
+-- own rows via user_id; approvers see/act on all rows via the 'payments' module
+-- permission. Idempotent: safe to re-run.
+-- ============================================================================
+
+-- ---- Permissions -----------------------------------------------------------
+-- Seed payments.view/create/edit/delete and grant to super_admin + admin (and
+-- view to viewer). Then give HR the whole module so HR can approve alongside admin.
+select public.seed_module_permissions('payments', 'Payment requests');
+
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id from public.roles r
+join public.permissions p on p.module = 'payments'
+where r.key = 'hr'
+on conflict do nothing;
+
+-- ---- Table -----------------------------------------------------------------
+-- Money stored in integer minor units (cents) to match the rest of the system
+-- (see formatMoney in src/lib/utils.ts). status walks
+-- pending -> approved -> paid, with rejected / cancelled as terminal branches.
+create table if not exists public.payment_requests (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  amount_minor bigint not null check (amount_minor > 0),
+  currency text not null default 'KES',
+  request_date date not null default current_date,
+  description text,
+  status text not null default 'pending'
+    check (status in ('pending', 'approved', 'rejected', 'paid', 'cancelled')),
+  decided_by uuid references public.users(id),
+  decided_at timestamptz,
+  decision_note text,
+  paid_by uuid references public.users(id),
+  paid_at timestamptz,
+  user_id uuid references public.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references public.users(id),
+  updated_by uuid references public.users(id),
+  deleted_at timestamptz
+);
+
+select public.apply_standard_triggers('payment_requests');
+
+-- ---- RLS -------------------------------------------------------------------
+alter table public.payment_requests enable row level security;
+drop policy if exists payreq_sel on public.payment_requests;
+drop policy if exists payreq_ins on public.payment_requests;
+drop policy if exists payreq_upd on public.payment_requests;
+drop policy if exists payreq_del on public.payment_requests;
+
+-- See your own requests; approvers (admin / HR) see everyone's.
+create policy payreq_sel on public.payment_requests for select to authenticated
+  using (user_id = auth.uid() or public.has_module_access('payments'));
+-- Anyone can file a request for themselves.
+create policy payreq_ins on public.payment_requests for insert to authenticated
+  with check (user_id = auth.uid());
+-- Requester can edit/cancel their own; approvers can act on any.
+create policy payreq_upd on public.payment_requests for update to authenticated
+  using (user_id = auth.uid() or public.has_module_access('payments'))
+  with check (user_id = auth.uid() or public.has_module_access('payments'));
+-- Hard delete reserved for the requester (the app soft-deletes via deleted_at).
+create policy payreq_del on public.payment_requests for delete to authenticated
+  using (user_id = auth.uid());
+
+-- Helps approver screens skip soft-deleted rows quickly.
+create index if not exists payment_requests_status_idx
+  on public.payment_requests (status) where deleted_at is null;
+
+-- ---- In-app notification fan-out to approvers ------------------------------
+-- Mirrors notify_approvers (0026) but targets the payments module, so admin + HR
+-- get a bell notification when a new payment request is submitted.
+create or replace function public.notify_payment_approvers(
+  p_type text, p_title text, p_body text default null, p_link text default null
+) returns int language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  insert into public.notifications(user_id, channel, type, title, body, link, status)
+  select distinct ur.user_id, 'in_app', p_type, p_title, p_body, p_link, 'sent'
+  from public.user_roles ur
+  join public.role_permissions rp on rp.role_id = ur.role_id
+  join public.permissions p on p.id = rp.permission_id
+  where p.module = 'payments' and p.action = 'edit';
+  get diagnostics n = row_count;
+  return n;
 end;
 $$;

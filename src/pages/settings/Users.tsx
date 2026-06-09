@@ -1,14 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { useAuth, can } from "@/lib/auth";
 import { useData } from "@/lib/useData";
 import { Button, Input, Label, Select, Badge } from "@/components/ui/primitives";
-import { SlideOver } from "@/components/data/SlideOver";
+import { Modal } from "@/components/data/Modal";
 import { formatDate } from "@/lib/utils";
 import { Plus } from "lucide-react";
 
 const statusTone: Record<string, "green" | "amber" | "red"> = { active: "green", invited: "amber", suspended: "red" };
+
+// Roles offered in the invite flow, in display order. Other roles still exist
+// in the DB (so already-assigned users keep them) but aren't offered to new
+// invites. Add a key here to surface a role in the dropdown.
+const INVITE_ROLE_KEYS = ["admin", "hr", "sales_manager", "partner_manager"];
 
 // Throwaway client (no session persistence) so creating a user doesn't replace
 // the admin's own session. The service_role key is never shipped to the SPA.
@@ -40,9 +45,17 @@ export default function Users() {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
-  const [role, setRole] = useState("viewer");
+  const [role, setRole] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  const byKey = new Map((data?.roles ?? []).map((r) => [r.key, r]));
+  const visibleRoles = INVITE_ROLE_KEYS.map((k) => byKey.get(k)).filter((r): r is { key: string; name: string } => Boolean(r));
+
+  // Default to (and stay on) a role that's actually offered — never a hidden one.
+  useEffect(() => {
+    if (visibleRoles.length && !visibleRoles.some((r) => r.key === role)) setRole(visibleRoles[0].key);
+  }, [data?.roles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!can(user, "identity.users.view")) return <p className="text-sm text-muted-foreground">You don&apos;t have access to Users.</p>;
 
@@ -79,30 +92,30 @@ export default function Users() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
+        <table className="w-full text-[15px]">
           <thead>
             <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
-              <th className="px-4 py-2.5 font-medium">Name</th>
-              <th className="px-4 py-2.5 font-medium">Email</th>
-              <th className="px-4 py-2.5 font-medium">Roles</th>
-              <th className="px-4 py-2.5 font-medium">Status</th>
-              <th className="px-4 py-2.5 font-medium">Last login</th>
+              <th className="px-5 py-3.5 font-medium">Name</th>
+              <th className="px-5 py-3.5 font-medium">Email</th>
+              <th className="px-5 py-3.5 font-medium">Roles</th>
+              <th className="px-5 py-3.5 font-medium">Status</th>
+              <th className="px-5 py-3.5 font-medium">Last login</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {((data?.users ?? []) as any[]).map((u) => (
               <tr key={u.id} className="hover:bg-muted/50">
-                <td className="px-4 py-2.5 font-medium text-foreground">{u.full_name ?? "—"}</td>
-                <td className="px-4 py-2.5 text-muted-foreground">{u.email}</td>
-                <td className="px-4 py-2.5">
+                <td className="px-5 py-4 font-medium text-foreground">{u.full_name ?? "—"}</td>
+                <td className="px-5 py-4 text-muted-foreground">{u.email}</td>
+                <td className="px-5 py-4">
                   <div className="flex flex-wrap gap-1">
                     {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                     {(u.user_roles ?? []).map((ur: any, i: number) => <Badge key={i} tone="blue">{ur.roles?.key}</Badge>)}
                   </div>
                 </td>
-                <td className="px-4 py-2.5"><Badge tone={statusTone[u.status] ?? "zinc"}>{u.status}</Badge></td>
-                <td className="px-4 py-2.5 text-muted-foreground">{u.last_login_at ? formatDate(u.last_login_at) : "—"}</td>
+                <td className="px-5 py-4"><Badge tone={statusTone[u.status] ?? "zinc"}>{u.status}</Badge></td>
+                <td className="px-5 py-4 text-muted-foreground">{u.last_login_at ? formatDate(u.last_login_at) : "—"}</td>
               </tr>
             ))}
             {!loading && (data?.users.length ?? 0) === 0 && (
@@ -112,23 +125,23 @@ export default function Users() {
         </table>
       </div>
 
-      <SlideOver open={open} title="Invite user" onClose={() => setOpen(false)}>
+      <Modal open={open} title="Invite user" onClose={() => setOpen(false)}>
         <form onSubmit={invite} className="space-y-4">
           <div><Label required>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></div>
           <div><Label>Full name</Label><Input value={fullName} onChange={(e) => setFullName(e.target.value)} /></div>
           <div>
             <Label required>Role</Label>
             <Select value={role} onChange={(e) => setRole(e.target.value)}>
-              {(data?.roles ?? []).map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
+              {visibleRoles.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
             </Select>
           </div>
           {msg && <p className="rounded-md bg-muted px-3 py-2 text-xs text-foreground">{msg}</p>}
           <div className="flex gap-2 pt-2">
-            <Button type="submit" disabled={busy || !email}>{busy ? "Inviting…" : "Create user"}</Button>
+            <Button type="submit" disabled={busy || !email || !role}>{busy ? "Inviting…" : "Create user"}</Button>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Close</Button>
           </div>
         </form>
-      </SlideOver>
+      </Modal>
     </div>
   );
 }

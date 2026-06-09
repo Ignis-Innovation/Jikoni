@@ -78,7 +78,7 @@ export function RequisitionDetail({
           <h2 className="text-sm font-semibold text-foreground">Line items</h2>
           {editable && <Button size="sm" variant="outline" onClick={addLine}><Plus className="h-3.5 w-3.5" /> Add line</Button>}
         </div>
-        <table className="w-full text-sm">
+        <table className="w-full text-[15px]">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground">
               <th className="pb-2 font-medium">Item</th>
@@ -91,18 +91,18 @@ export function RequisitionDetail({
           <tbody>
             {lines.map((l, i) => (
               <tr key={i} className="border-t border-border">
-                <td className="py-1.5 pr-2">
+                <td className="py-2.5 pr-2">
                   <Input value={l.item_desc} disabled={!editable} onChange={(e) => setLine(i, { item_desc: e.target.value })} placeholder="Description" />
                 </td>
-                <td className="py-1.5 pr-2">
+                <td className="py-2.5 pr-2">
                   <Input type="number" value={l.qty} disabled={!editable} onChange={(e) => setLine(i, { qty: Number(e.target.value) })} />
                 </td>
-                <td className="py-1.5 pr-2">
+                <td className="py-2.5 pr-2">
                   <Input type="number" step="0.01" value={l.est_unit_price_minor / 100} disabled={!editable}
                     onChange={(e) => setLine(i, { est_unit_price_minor: Math.round(Number(e.target.value) * 100) })} />
                 </td>
-                <td className="py-1.5 text-right text-foreground">{formatMoney(Math.round(l.qty * l.est_unit_price_minor), req.currency_code)}</td>
-                <td className="py-1.5 pl-2 text-right">
+                <td className="py-2.5 text-right text-foreground">{formatMoney(Math.round(l.qty * l.est_unit_price_minor), req.currency_code)}</td>
+                <td className="py-2.5 pl-2 text-right">
                   {editable && (
                     <button onClick={() => setLines((ls) => ls.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-red-600">
                       <Trash2 className="h-4 w-4" />

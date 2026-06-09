@@ -23,6 +23,7 @@ const SPINE: NavGroup = {
     { label: "Organisation", href: "/org", module: "org", enabled: true },
     { label: "Chart of Accounts", href: "/coa", module: "coa", enabled: true },
     { label: "Approvals", href: "/approvals", module: "approvals", enabled: true },
+    { label: "Payment Approvals", href: "/finance/payment-approvals", module: "payments", enabled: true },
     { label: "Audit Log", href: "/audit", module: "audit", enabled: true },
   ],
 };
@@ -57,7 +58,6 @@ const GROUP_ORDER = [
   "Projects",
   "CRM",
   "Intelligence",
-  "Governance",
   "Field & Portals",
   "Business Development",
 ];
@@ -72,16 +72,55 @@ const resourceGroups: NavGroup[] = GROUP_ORDER.map((g) => ({
   })),
 })).filter((g) => g.items.length > 0);
 
-// Add the dedicated CRM pipeline board at the top of the CRM group.
+// CRM group: pin the Pipeline board on top and route Engagements to its
+// dedicated page (timeline + follow-ups) instead of the generic resource list.
 const crmGroup = resourceGroups.find((g) => g.label === "CRM");
 if (crmGroup) {
+  crmGroup.items = crmGroup.items.map((i) => (i.href === "/r/engagements" ? { ...i, href: "/crm/engagements" } : i));
   crmGroup.items.unshift({ label: "Pipeline", href: "/crm/pipeline", module: "crm", enabled: true });
 }
 
+// People (HR) group. The generic "/r/leave" resource duplicates the
+// self-service Leave Application in Workspace, so drop it from the HR nav and
+// give HR the workflow screens instead: assign tasks + approve leave.
+const peopleGroup = resourceGroups.find((g) => g.label === "People");
+if (peopleGroup) {
+  peopleGroup.items = peopleGroup.items.filter((i) => i.href !== "/r/leave");
+  peopleGroup.items.push({ label: "Assign Task", href: "/hr/assign-task", module: "people", enabled: true });
+  peopleGroup.items.push({ label: "Leave Approvals", href: "/hr/leave-approvals", module: "people", enabled: true });
+}
+
+// Personal workspace — available to every authenticated user (module "*").
+// Tasks and Leave are user-scoped via RLS, so they need no module permission.
+const WORKSPACE: NavGroup = {
+  label: "Workspace",
+  items: [
+    { label: "Tasks", href: "/tasks", module: "*", enabled: true },
+    { label: "Leave Application", href: "/leave", module: "*", enabled: true },
+    { label: "Payment Requests", href: "/payment-requests", module: "*", enabled: true },
+  ],
+};
+
 export const NAV: NavGroup[] = [
-  { label: "Overview", items: [{ label: "Home", href: "/", module: "*", enabled: true }] },
+  {
+    label: "Overview",
+    items: [
+      { label: "Home", href: "/", module: "*", enabled: true },
+      // Calendar is company-wide (module "*"): every role sees it.
+      { label: "Calendar", href: "/calendar", module: "*", enabled: true },
+    ],
+  },
+  WORKSPACE,
   SPINE,
   PROCUREMENT,
   ...resourceGroups,
   SETTINGS,
 ];
+
+// Per-role nav allow-lists. A role listed here sees ONLY these hrefs (module
+// permissions still apply as a safety net via RLS). Roles NOT listed here fall
+// back to the default module-permission filter (see AppLayout). This lets a role
+// show a single item from a group (e.g. just Leave) without the whole group.
+export const ROLE_NAV: Record<string, string[]> = {
+  partner_manager: ["/", "/calendar", "/tasks", "/leave", "/payment-requests", "/crm/pipeline", "/crm/engagements", "/r/opportunities", "/r/partners"],
+};

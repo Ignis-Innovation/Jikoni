@@ -30,25 +30,25 @@ export default function Invoices() {
         <p className="text-sm text-muted-foreground">Vendor invoices, three-way match, payment.</p>
       </div>
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
+        <table className="w-full text-[15px]">
           <thead>
             <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
-              <th className="px-4 py-2.5 font-medium">Code</th>
-              <th className="px-4 py-2.5 font-medium">Vendor</th>
-              <th className="px-4 py-2.5 font-medium">Amount</th>
-              <th className="px-4 py-2.5 font-medium">Match</th>
-              <th className="px-4 py-2.5 font-medium">Status</th>
+              <th className="px-5 py-3.5 font-medium">Code</th>
+              <th className="px-5 py-3.5 font-medium">Vendor</th>
+              <th className="px-5 py-3.5 font-medium">Amount</th>
+              <th className="px-5 py-3.5 font-medium">Match</th>
+              <th className="px-5 py-3.5 font-medium">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {((rows ?? []) as any[]).map((r) => (
               <tr key={r.id} className="hover:bg-muted/50">
-                <td className="px-4 py-2.5 font-medium text-primary"><Link to={`/procurement/invoices/${r.id}`}>{r.code ?? "—"}</Link></td>
-                <td className="px-4 py-2.5 text-muted-foreground">{r.parties?.display_name ?? "—"}</td>
-                <td className="px-4 py-2.5">{formatMoney(r.amount_minor, r.currency_code)}</td>
-                <td className="px-4 py-2.5"><Badge tone={MTONE[r.match_status] ?? "zinc"}>{r.match_status}</Badge></td>
-                <td className="px-4 py-2.5"><Badge tone={TONE[r.status] ?? "zinc"}>{r.status}</Badge></td>
+                <td className="px-5 py-4 font-medium text-primary"><Link to={`/procurement/invoices/${r.id}`}>{r.code ?? "—"}</Link></td>
+                <td className="px-5 py-4 text-muted-foreground">{r.parties?.display_name ?? "—"}</td>
+                <td className="px-5 py-4">{formatMoney(r.amount_minor, r.currency_code)}</td>
+                <td className="px-5 py-4"><Badge tone={MTONE[r.match_status] ?? "zinc"}>{r.match_status}</Badge></td>
+                <td className="px-5 py-4"><Badge tone={TONE[r.status] ?? "zinc"}>{r.status}</Badge></td>
               </tr>
             ))}
             {(!rows || rows.length === 0) && (

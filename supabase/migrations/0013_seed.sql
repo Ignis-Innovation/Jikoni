@@ -12,6 +12,8 @@ insert into public.roles (key, name, description, is_system) values
   ('hr',              'HR',              'People Ops modules',                                 true),
   ('project_manager', 'Project Manager', 'Projects, budgets, milestones',                      true),
   ('bd',              'Business Dev',    'CRM, opportunities, BD intelligence',                true),
+  ('partner_manager', 'Partner Manager', 'Partners/parties, CRM pipeline, procurement',        true),
+  ('sales_manager',   'Sales Manager',   'Revenue, CRM pipeline, parties, procurement',        true),
   ('field_officer',   'Field Officer',   'Mobile/field modules, asset deployment',             true),
   ('viewer',          'Viewer',          'Read-only across permitted modules',                 true)
 on conflict (key) do nothing;

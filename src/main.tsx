@@ -9,6 +9,13 @@ import Login from "@/pages/Login";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import Home from "@/pages/Home";
+import CalendarPage from "@/pages/Calendar";
+import Tasks from "@/pages/Tasks";
+import Leave from "@/pages/Leave";
+import PaymentRequests from "@/pages/PaymentRequests";
+import PaymentApprovals from "@/pages/finance/PaymentApprovals";
+import LeaveApprovals from "@/pages/hr/LeaveApprovals";
+import AssignTask from "@/pages/hr/AssignTask";
 import Parties from "@/pages/Parties";
 import Audit from "@/pages/Audit";
 import Resource from "@/pages/Resource";
@@ -17,6 +24,8 @@ import Users from "@/pages/settings/Users";
 import Roles from "@/pages/settings/Roles";
 import Reference from "@/pages/settings/Reference";
 import CrmPipeline from "@/pages/crm/Pipeline";
+import Engagements from "@/pages/crm/Engagements";
+import EngagementDetail from "@/pages/crm/EngagementDetail";
 import Hub from "@/pages/procurement/Hub";
 import Requisitions from "@/pages/procurement/Requisitions";
 import RequisitionDetailPage from "@/pages/procurement/RequisitionDetailPage";
@@ -36,6 +45,13 @@ createRoot(document.getElementById("root")!).render(
 
           <Route element={<AppLayout />}>
             <Route path="/" element={<Home />} />
+            <Route path="/calendar" element={<CalendarPage />} />
+            <Route path="/tasks" element={<Tasks />} />
+            <Route path="/leave" element={<Leave />} />
+            <Route path="/payment-requests" element={<PaymentRequests />} />
+            <Route path="/finance/payment-approvals" element={<PaymentApprovals />} />
+            <Route path="/hr/assign-task" element={<AssignTask />} />
+            <Route path="/hr/leave-approvals" element={<LeaveApprovals />} />
             <Route path="/parties" element={<Parties />} />
             <Route path="/org" element={<Org />} />
             <Route path="/coa" element={<Coa />} />
@@ -43,6 +59,8 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/audit" element={<Audit />} />
             <Route path="/r/:slug" element={<Resource />} />
             <Route path="/crm/pipeline" element={<CrmPipeline />} />
+            <Route path="/crm/engagements" element={<Engagements />} />
+            <Route path="/crm/engagements/:id" element={<EngagementDetail />} />
 
             <Route path="/procurement" element={<Hub />} />
             <Route path="/procurement/requisitions" element={<Requisitions />} />

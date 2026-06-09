@@ -26,22 +26,22 @@ export default function Audit() {
         <p className="text-sm text-muted-foreground">Immutable who-did-what-when. Append-only — no app path can edit these rows.</p>
       </div>
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
+        <table className="w-full text-[15px]">
           <thead>
             <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
-              <th className="px-4 py-2.5 font-medium">When</th>
-              <th className="px-4 py-2.5 font-medium">Action</th>
-              <th className="px-4 py-2.5 font-medium">Table</th>
-              <th className="px-4 py-2.5 font-medium">Record</th>
+              <th className="px-5 py-3.5 font-medium">When</th>
+              <th className="px-5 py-3.5 font-medium">Action</th>
+              <th className="px-5 py-3.5 font-medium">Table</th>
+              <th className="px-5 py-3.5 font-medium">Record</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {(rows ?? []).map((r) => (
               <tr key={r.id} className="hover:bg-muted/50">
-                <td className="px-4 py-2 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString("en-GB")}</td>
-                <td className="px-4 py-2"><Badge tone={tone[r.action] ?? "zinc"}>{r.action}</Badge></td>
-                <td className="px-4 py-2 font-mono text-xs text-foreground">{r.table_name}</td>
-                <td className="px-4 py-2 font-mono text-[11px] text-muted-foreground">{r.record_id?.slice(0, 8)}</td>
+                <td className="px-5 py-3.5 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString("en-GB")}</td>
+                <td className="px-5 py-3.5"><Badge tone={tone[r.action] ?? "zinc"}>{r.action}</Badge></td>
+                <td className="px-5 py-3.5 font-mono text-xs text-foreground">{r.table_name}</td>
+                <td className="px-5 py-3.5 font-mono text-[11px] text-muted-foreground">{r.record_id?.slice(0, 8)}</td>
               </tr>
             ))}
             {!loading && (!rows || rows.length === 0) && (

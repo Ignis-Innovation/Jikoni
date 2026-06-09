@@ -33,24 +33,24 @@ export default function Requisitions() {
         {can(user, "procurement.create") && <NewRequisition />}
       </div>
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
+        <table className="w-full text-[15px]">
           <thead>
             <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
-              <th className="px-4 py-2.5 font-medium">Code</th>
-              <th className="px-4 py-2.5 font-medium">Total</th>
-              <th className="px-4 py-2.5 font-medium">Need by</th>
-              <th className="px-4 py-2.5 font-medium">Status</th>
-              <th className="px-4 py-2.5 font-medium">Created</th>
+              <th className="px-5 py-3.5 font-medium">Code</th>
+              <th className="px-5 py-3.5 font-medium">Total</th>
+              <th className="px-5 py-3.5 font-medium">Need by</th>
+              <th className="px-5 py-3.5 font-medium">Status</th>
+              <th className="px-5 py-3.5 font-medium">Created</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {(rows ?? []).map((r) => (
               <tr key={r.id} className="hover:bg-muted/50">
-                <td className="px-4 py-2.5 font-medium text-primary"><Link to={`/procurement/requisitions/${r.id}`}>{r.code ?? "—"}</Link></td>
-                <td className="px-4 py-2.5">{formatMoney(r.total_minor, r.currency_code)}</td>
-                <td className="px-4 py-2.5 text-muted-foreground">{formatDate(r.need_by_date)}</td>
-                <td className="px-4 py-2.5"><Badge tone={TONE[r.status] ?? "zinc"}>{r.status?.replace(/_/g, " ")}</Badge></td>
-                <td className="px-4 py-2.5 text-muted-foreground">{formatDate(r.created_at)}</td>
+                <td className="px-5 py-4 font-medium text-primary"><Link to={`/procurement/requisitions/${r.id}`}>{r.code ?? "—"}</Link></td>
+                <td className="px-5 py-4">{formatMoney(r.total_minor, r.currency_code)}</td>
+                <td className="px-5 py-4 text-muted-foreground">{formatDate(r.need_by_date)}</td>
+                <td className="px-5 py-4"><Badge tone={TONE[r.status] ?? "zinc"}>{r.status?.replace(/_/g, " ")}</Badge></td>
+                <td className="px-5 py-4 text-muted-foreground">{formatDate(r.created_at)}</td>
               </tr>
             ))}
             {(!rows || rows.length === 0) && (

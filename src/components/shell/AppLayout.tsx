@@ -2,7 +2,7 @@ import { Navigate, Outlet } from "react-router-dom";
 import { useAuth, hasModule } from "@/lib/auth";
 import { Sidebar } from "@/components/shell/Sidebar";
 import { Topbar } from "@/components/shell/Topbar";
-import { NAV } from "@/lib/spine/nav";
+import { NAV, ROLE_NAV } from "@/lib/spine/nav";
 
 export function AppLayout() {
   const { loading, user } = useAuth();
@@ -19,10 +19,24 @@ export function AppLayout() {
   }
   if (!user) return <Navigate to="/login" replace />;
 
-  // Permission-filter the nav (PRD §1.2 / §1.7).
+  // Nav filtering: super admins see everything; roles with an explicit
+  // ROLE_NAV allow-list see only those hrefs (so a role can show one item from a
+  // group); everyone else falls back to the module-permission filter.
+  const allowed = user.isSuperAdmin
+    ? null
+    : user.roles.reduce<Set<string> | null>((acc, role) => {
+        const hrefs = ROLE_NAV[role];
+        if (!hrefs) return acc;
+        const set = acc ?? new Set<string>();
+        for (const h of hrefs) set.add(h);
+        return set;
+      }, null);
+
   const groups = NAV.map((g) => ({
     ...g,
-    items: g.items.filter((i) => i.module === "*" || hasModule(user, i.module)),
+    items: g.items.filter((i) =>
+      allowed ? allowed.has(i.href) : i.module === "*" || hasModule(user, i.module)
+    ),
   })).filter((g) => g.items.length > 0);
 
   return (

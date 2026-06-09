@@ -144,7 +144,7 @@ export const RESOURCES: Resource[] = [
   },
   {
     slug: "leave", table: "leave_applications", module: "people",
-    group: "People", title: "Leave Applications", subtitle: "Apply, auto-calc working days, route for approval.",
+    group: "People", title: "Leave Application", subtitle: "Apply, auto-calc working days, route for approval.",
     select: "id,start_date,end_date,days,status,created_at",
     columns: [
       { key: "start_date", label: "From", kind: "date" },
@@ -223,15 +223,17 @@ export const RESOURCES: Resource[] = [
   {
     slug: "engagements", table: "engagements", module: "crm",
     group: "CRM", title: "Engagements", subtitle: "One row per partner relationship — the heart of the CRM.",
-    select: "id,code,stage,priority,status,next_action,due_by,view,created_at",
+    select: "id,code,title,stage,priority,status,next_action,due_by,view,created_at",
     columns: [
       { key: "code", label: "Code" },
+      { key: "title", label: "Name" },
       { key: "stage", label: "Stage", kind: "badge" },
       { key: "view", label: "View", kind: "badge" },
       { key: "next_action", label: "Next action" },
       { key: "due_by", label: "Due", kind: "date" },
     ],
     fields: [
+      { key: "title", label: "Engagement name", type: "text" },
       { key: "partner_party_id", label: "Partner", type: "ref", ref: { table: "parties", labelKey: "display_name", typeFilter: "partner" }, required: true },
       { key: "view", label: "View", type: "select", options: ["upstream", "downstream"], half: true },
       { key: "priority", label: "Priority", type: "select", options: ["low", "medium", "high", "critical"], half: true },
@@ -257,6 +259,26 @@ export const RESOURCES: Resource[] = [
       { key: "deadline", label: "Deadline", type: "date", half: true },
       { key: "source_url", label: "Source URL", type: "text" },
       { key: "status", label: "Status", type: "select", options: ["open", "pursuing", "submitted", "won", "lost", "closed"] },
+    ],
+  },
+
+  {
+    slug: "partners", table: "parties", module: "crm", partyType: "partner",
+    group: "CRM", title: "Partners", subtitle: "Funders, investors, government & institutional partners.",
+    select: "id,display_name,legal_name,kra_pin,email,phone,status,created_at",
+    columns: [
+      { key: "display_name", label: "Name" },
+      { key: "email", label: "Email" },
+      { key: "phone", label: "Phone" },
+      STATUS,
+      { key: "created_at", label: "Added", kind: "date" },
+    ],
+    fields: [
+      { key: "display_name", label: "Display name", type: "text", required: true },
+      { key: "legal_name", label: "Legal name", type: "text" },
+      { key: "kra_pin", label: "KRA PIN", type: "text", half: true },
+      { key: "phone", label: "Phone", type: "text", half: true },
+      { key: "email", label: "Email", type: "text" },
     ],
   },
 

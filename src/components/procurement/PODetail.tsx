@@ -69,7 +69,7 @@ export function PODetail({
 
       <Card>
         <h2 className="mb-3 text-sm font-semibold text-foreground">Lines</h2>
-        <table className="w-full text-sm">
+        <table className="w-full text-[15px]">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground">
               <th className="pb-2 font-medium">Item</th>
@@ -84,15 +84,15 @@ export function PODetail({
               const outstanding = l.qty_ordered - l.qty_received;
               return (
                 <tr key={l.id} className="border-t border-border">
-                  <td className="py-2 text-foreground">{l.item_desc}</td>
-                  <td className="py-2 text-muted-foreground">{l.qty_ordered}</td>
-                  <td className="py-2 text-muted-foreground">
+                  <td className="py-3 text-foreground">{l.item_desc}</td>
+                  <td className="py-3 text-muted-foreground">{l.qty_ordered}</td>
+                  <td className="py-3 text-muted-foreground">
                     {l.qty_received}
                     {l.qty_received >= l.qty_ordered ? <Badge tone="green" className="ml-2">full</Badge> : l.qty_received > 0 ? <Badge tone="amber" className="ml-2">partial</Badge> : null}
                   </td>
-                  <td className="py-2 text-right text-muted-foreground">{formatMoney(l.unit_price_minor, po.currency_code)}</td>
+                  <td className="py-3 text-right text-muted-foreground">{formatMoney(l.unit_price_minor, po.currency_code)}</td>
                   {receiving && (
-                    <td className="py-2">
+                    <td className="py-3">
                       <Input type="number" min={0} max={outstanding} value={recv[l.id] ?? ""} placeholder={`≤ ${outstanding}`}
                         onChange={(e) => setRecv((s) => ({ ...s, [l.id]: Math.min(outstanding, Number(e.target.value)) }))} />
                     </td>

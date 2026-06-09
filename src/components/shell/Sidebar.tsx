@@ -5,11 +5,19 @@ import {
   Home, Users, Building2, Calculator, CheckCircle2, ScrollText, ShoppingCart, FileText,
   ClipboardList, Receipt, Truck, UserRound, CalendarDays, Package, Wrench, Flag, Handshake,
   Target, FileSignature, ShieldAlert, CalendarCheck, LifeBuoy, BarChart3, Leaf, Lightbulb,
-  ShieldCheck, Database, Lock, Circle, Columns3, type LucideIcon,
+  ShieldCheck, Database, Lock, Circle, Columns3, ListTodo, UserPlus, ClipboardCheck,
+  Wallet, Banknote,
+  type LucideIcon,
 } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
   "/": Home,
+  "/tasks": ListTodo,
+  "/leave": CalendarCheck,
+  "/payment-requests": Wallet,
+  "/finance/payment-approvals": Banknote,
+  "/hr/assign-task": UserPlus,
+  "/hr/leave-approvals": ClipboardCheck,
   "/parties": Users,
   "/org": Building2,
   "/coa": Calculator,

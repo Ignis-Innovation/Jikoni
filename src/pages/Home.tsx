@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth, can } from "@/lib/auth";
 import { useData } from "@/lib/useData";
 import { Card, Badge, PageHeader } from "@/components/ui/primitives";
+import { Users, Truck, ShoppingCart, CheckCircle2, FolderKanban, ArrowUpRight, type LucideIcon } from "lucide-react";
 
 // Friendly labels for the activity feed (instead of raw "table.action").
 const NOUN: Record<string, string> = {
@@ -78,12 +79,12 @@ export default function Home() {
     return { parties, vendors, openPOs, activeProjects, pendingApprovals, impact, feed, myApprovals, myActions };
   }, [user?.id]);
 
-  const tiles = [
-    { label: "Parties", value: data?.parties, perm: "parties.view", href: "/parties" },
-    { label: "Vendors", value: data?.vendors, perm: "procurement.view", href: "/r/vendors" },
-    { label: "Open POs", value: data?.openPOs, perm: "procurement.view", href: "/procurement/pos" },
-    { label: "Approvals due", value: data?.pendingApprovals, perm: "approvals.view", href: "/procurement" },
-    { label: "Active projects", value: data?.activeProjects, perm: "org.view", href: "/org" },
+  const tiles: { label: string; value: number | undefined; perm: string; href: string; icon: LucideIcon; tone: string }[] = [
+    { label: "Parties", value: data?.parties, perm: "parties.view", href: "/parties", icon: Users, tone: "text-blue-600 bg-blue-50" },
+    { label: "Vendors", value: data?.vendors, perm: "procurement.view", href: "/r/vendors", icon: Truck, tone: "text-violet-600 bg-violet-50" },
+    { label: "Open POs", value: data?.openPOs, perm: "procurement.view", href: "/procurement/pos", icon: ShoppingCart, tone: "text-amber-600 bg-amber-50" },
+    { label: "Approvals due", value: data?.pendingApprovals, perm: "approvals.view", href: "/procurement", icon: CheckCircle2, tone: "text-rose-600 bg-rose-50" },
+    { label: "Active projects", value: data?.activeProjects, perm: "org.view", href: "/org", icon: FolderKanban, tone: "text-emerald-600 bg-emerald-50" },
   ].filter((t) => can(user, t.perm));
 
   const dueLabel = (d: string | null) => {
@@ -106,10 +107,16 @@ export default function Home() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Company Pulse</h2>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {tiles.map((t) => (
-            <Link key={t.label} to={t.href}>
-              <Card className="p-4 transition-colors hover:border-primary/40">
+            <Link key={t.label} to={t.href} className="group">
+              <Card className="p-4 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
+                <div className="flex items-start justify-between">
+                  <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${t.tone}`}>
+                    <t.icon className="h-5 w-5" />
+                  </span>
+                  <ArrowUpRight className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                </div>
+                <p className="mt-3 text-2xl font-semibold text-foreground">{loading ? "…" : t.value}</p>
                 <p className="text-xs text-muted-foreground">{t.label}</p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">{loading ? "…" : t.value}</p>
               </Card>
             </Link>
           ))}
