@@ -16,8 +16,8 @@ if (!supabaseConfigured) {
 // dashboard. All access is governed by RLS, so the client only ever holds the
 // anon key — never the service_role key.
 export const supabase = createClient(
-  SUPABASE_URL || "",
-  SUPABASE_ANON_KEY || "",
+  SUPABASE_URL || "https://placeholder-project.supabase.co",
+  SUPABASE_ANON_KEY || "placeholder-anon-key",
   {
     auth: {
       persistSession: true,
