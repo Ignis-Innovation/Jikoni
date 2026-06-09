@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button, Input, Label, Select, Badge, PageHeader, Table, THead, TH, TBody, TR, TD } from "@/components/ui/primitives";
-import { SlideOver } from "@/components/data/SlideOver";
+import { Modal } from "@/components/data/Modal";
 import { Pencil, Trash2, Plus, Search } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
@@ -214,7 +214,7 @@ function PartyForm({
   }
 
   return (
-    <SlideOver open={open} title={editing ? "Edit party" : "Add party"} onClose={onClose}>
+    <Modal open={open} title={editing ? "Edit party" : "Add party"} onClose={onClose}>
       <form
         onSubmit={(e) => { e.preventDefault(); save(false); }}
         className="space-y-4"
@@ -258,6 +258,6 @@ function PartyForm({
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
         </div>
       </form>
-    </SlideOver>
+    </Modal>
   );
 }

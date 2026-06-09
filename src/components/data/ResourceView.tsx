@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Button, Input, Label, Select, Textarea, Badge, PageHeader, Table, THead, TH, TBody, TR, TD } from "@/components/ui/primitives";
-import { SlideOver } from "@/components/data/SlideOver";
+import { Button, Input, Label, Select, Textarea, Badge, PageHeader, StatChip, Table, THead, TH, TBody, TR, TD } from "@/components/ui/primitives";
+import { Modal } from "@/components/data/Modal";
 import { Pencil, Trash2, Plus, Search } from "lucide-react";
-import { formatDate, formatMoney } from "@/lib/utils";
+import { formatDate, formatMoney, statusTone } from "@/lib/utils";
+import { resourceIcon } from "@/lib/spine/icons";
 import type { Resource, Field, Column } from "@/lib/spine/resources";
 
 type Caps = { create: boolean; edit: boolean; del: boolean };
@@ -18,6 +19,21 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
   const [toast, setToast] = useState<string | null>(null);
 
   const searchCol = resource.columns[0]?.key ?? "id";
+  const Icon = resourceIcon(resource.slug, resource.group);
+
+  // The first badge column (status/stage/etc.) drives the summary band.
+  const groupCol = resource.columns.find((c) => c.kind === "badge");
+  const summary = useMemo(() => {
+    if (!groupCol) return [];
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const v = r[groupCol.key];
+      if (v == null || v === "") continue;
+      const key = String(v);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [rows, groupCol]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,7 +69,7 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
     if (v == null || v === "") return <span className="text-muted-foreground">—</span>;
     if (col.kind === "money") return formatMoney(Number(v), (row.currency_code as string) ?? "KES");
     if (col.kind === "date") return formatDate(v as string);
-    if (col.kind === "badge") return <Badge tone="blue">{String(v)}</Badge>;
+    if (col.kind === "badge") return <Badge tone={statusTone(v)}>{String(v).replace(/_/g, " ")}</Badge>;
     return String(v);
   }
 
@@ -63,6 +79,7 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
         eyebrow={resource.group}
         title={resource.title}
         subtitle={resource.subtitle}
+        icon={Icon}
         actions={caps.create ? (
           <Button onClick={() => { setEditing(null); setPanelOpen(true); }}>
             <Plus className="h-4 w-4" /> Add
@@ -70,11 +87,25 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
         ) : null}
       />
 
-      <div className="mb-3 flex items-center gap-2">
+      {!loading && rows.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <StatChip label={`total ${resource.title.toLowerCase()}`} value={rows.length} tone="blue" />
+          {summary.map(([k, n]) => (
+            <StatChip key={k} label={k.replace(/_/g, " ")} value={n} tone={statusTone(k)} />
+          ))}
+        </div>
+      )}
+
+      <div className="mb-3 flex items-center gap-3">
         <div className="relative w-72">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder={`Search ${resource.title.toLowerCase()}…`} value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
+        {!loading && (
+          <span className="text-xs text-muted-foreground">
+            {rows.length} {rows.length === 1 ? "record" : "records"}{search ? " matched" : ""}
+          </span>
+        )}
       </div>
 
       <Table>
@@ -85,7 +116,7 @@ export function ResourceView({ resource, caps }: { resource: Resource; caps: Cap
         <TBody>
           {loading ? (
             [...Array(5)].map((_, i) => (
-              <tr key={i}><td colSpan={resource.columns.length + 1} className="px-4 py-3"><div className="h-4 w-full animate-pulse rounded bg-muted" /></td></tr>
+              <tr key={i}><td colSpan={resource.columns.length + 1} className="px-5 py-4"><div className="h-4 w-full animate-pulse rounded bg-muted" /></td></tr>
             ))
           ) : rows.length === 0 ? (
             <tr>
@@ -239,7 +270,7 @@ function ResourceForm({
   }
 
   return (
-    <SlideOver open={open} title={`${editing ? "Edit" : "Add"} — ${resource.title}`} onClose={onClose}>
+    <Modal open={open} title={`${editing ? "Edit" : "Add"} — ${resource.title}`} onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); save(false); }} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           {resource.fields.map((f) => (
@@ -258,6 +289,6 @@ function ResourceForm({
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
         </div>
       </form>
-    </SlideOver>
+    </Modal>
   );
 }

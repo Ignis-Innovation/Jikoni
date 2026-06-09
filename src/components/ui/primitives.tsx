@@ -113,20 +113,55 @@ export function PageHeader({
   title,
   subtitle,
   actions,
+  icon: Icon,
 }: {
   eyebrow?: string;
   title: string;
   subtitle?: string;
   actions?: React.ReactNode;
+  icon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
     <div className="mb-6 flex items-start justify-between gap-4">
-      <div className="min-w-0">
-        {eyebrow && <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{eyebrow}</p>}
-        <h1 className="truncate text-xl font-semibold tracking-tight text-foreground">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
+      <div className="flex min-w-0 items-start gap-3">
+        {Icon && (
+          <div className="mt-0.5 hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/60 text-primary sm:flex">
+            <Icon className="h-5 w-5" />
+          </div>
+        )}
+        <div className="min-w-0">
+          {eyebrow && <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{eyebrow}</p>}
+          <h1 className="truncate text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+          {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
+        </div>
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/* Compact labelled stat used in summary bands above lists/dashboards. */
+export function StatChip({
+  label,
+  value,
+  tone = "zinc",
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: "zinc" | "green" | "red" | "amber" | "blue";
+}) {
+  const dot: Record<string, string> = {
+    zinc: "bg-zinc-400",
+    green: "bg-emerald-500",
+    red: "bg-red-500",
+    amber: "bg-amber-500",
+    blue: "bg-blue-500",
+  };
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot[tone])} />
+      <span className="text-sm font-semibold text-foreground">{value}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
     </div>
   );
 }
@@ -135,21 +170,21 @@ export function PageHeader({
 export function Table({ children }: { children: React.ReactNode }) {
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
-      <table className="w-full text-sm">{children}</table>
+      <table className="w-full text-[15px]">{children}</table>
     </div>
   );
 }
 export function THead({ children }: { children: React.ReactNode }) {
   return (
     <thead>
-      <tr className="border-b border-border bg-muted/50 text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+      <tr className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
         {children}
       </tr>
     </thead>
   );
 }
 export function TH({ className, children }: { className?: string; children?: React.ReactNode }) {
-  return <th className={cn("px-4 py-2.5 font-medium", className)}>{children}</th>;
+  return <th className={cn("px-5 py-3.5 font-medium", className)}>{children}</th>;
 }
 export function TBody({ children }: { children: React.ReactNode }) {
   return <tbody className="divide-y divide-border">{children}</tbody>;
@@ -163,7 +198,7 @@ export function TR({ className, children, ...props }: React.HTMLAttributes<HTMLT
 }
 export function TD({ className, children, ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <td className={cn("px-4 py-2.5 text-muted-foreground", className)} {...props}>
+    <td className={cn("px-5 py-4 text-muted-foreground", className)} {...props}>
       {children}
     </td>
   );
