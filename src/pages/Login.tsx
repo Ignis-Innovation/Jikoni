@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseConfigured } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { Button, Input, Label } from "@/components/ui/primitives";
 
@@ -12,6 +12,22 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  if (!supabaseConfigured) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-red-50 px-4 py-20">
+        <div className="w-full max-w-xl rounded-3xl border border-red-200 bg-white p-8 shadow-sm">
+          <h1 className="text-xl font-semibold text-red-800">Deployment configuration missing</h1>
+          <p className="mt-3 text-sm text-red-700">
+            Jikoni needs Supabase environment variables to run. Please set
+            <strong className="text-red-900"> VITE_SUPABASE_URL </strong> and
+            <strong className="text-red-900"> VITE_SUPABASE_ANON_KEY </strong>
+            in your Vercel project settings and redeploy.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Already signed in → bounce to where they came from (or home).
   if (!loading && user) {

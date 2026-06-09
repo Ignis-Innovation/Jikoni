@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseConfigured } from "@/lib/supabase";
 
 export type CurrentUser = {
   id: string;
@@ -63,6 +63,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    if (!supabaseConfigured) {
+      setLoading(false);
+      return;
+    }
+
     let active = true;
 
     // Initial load — always clear `loading`, even if the RPC fails.
