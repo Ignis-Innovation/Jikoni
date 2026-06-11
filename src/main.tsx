@@ -26,6 +26,15 @@ import Reference from "@/pages/settings/Reference";
 import CrmPipeline from "@/pages/crm/Pipeline";
 import Engagements from "@/pages/crm/Engagements";
 import EngagementDetail from "@/pages/crm/EngagementDetail";
+import SalesDashboard from "@/pages/sales/Dashboard";
+import SalesAccounts from "@/pages/sales/Accounts";
+import SalesProducts from "@/pages/sales/Products";
+import SalesInventory from "@/pages/sales/Inventory";
+import PlaceOrder from "@/pages/sales/PlaceOrder";
+import SalesOrders from "@/pages/sales/Orders";
+import SalesInvoices from "@/pages/sales/Invoices";
+import SalesPayments from "@/pages/sales/Payments";
+import SalesTargets from "@/pages/sales/Targets";
 import Hub from "@/pages/procurement/Hub";
 import Requisitions from "@/pages/procurement/Requisitions";
 import RequisitionDetailPage from "@/pages/procurement/RequisitionDetailPage";
@@ -61,6 +70,16 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/crm/pipeline" element={<CrmPipeline />} />
             <Route path="/crm/engagements" element={<Engagements />} />
             <Route path="/crm/engagements/:id" element={<EngagementDetail />} />
+
+            <Route path="/sales" element={<SalesDashboard />} />
+            <Route path="/sales/accounts" element={<SalesAccounts />} />
+            <Route path="/sales/products" element={<SalesProducts />} />
+            <Route path="/sales/inventory" element={<SalesInventory />} />
+            <Route path="/sales/orders" element={<SalesOrders />} />
+            <Route path="/sales/orders/new" element={<PlaceOrder />} />
+            <Route path="/sales/invoices" element={<SalesInvoices />} />
+            <Route path="/sales/payments" element={<SalesPayments />} />
+            <Route path="/sales/targets" element={<SalesTargets />} />
 
             <Route path="/procurement" element={<Hub />} />
             <Route path="/procurement/requisitions" element={<Requisitions />} />

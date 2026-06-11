@@ -107,3 +107,19 @@ SUPABASE_DB_URL="postgresql://postgres.<ref>:<db-password>@aws-0-eu-west-1.poole
 1. Modules reference spine data by ID — never duplicate it.
 2. Every write fires an event the spine logs.
 3. Every module exposes a read API.
+
+
+## M-Pesa (Daraja) — Sales module
+
+STK Push is handled by Vercel serverless functions in `api/` (`mpesa-stk-push.js`,
+`mpesa-callback.js`). **Credentials are NOT stored here** — they live in `.env.local`
+(local, git-ignored) and in the Vercel project's Environment Variables (production):
+
+```
+MPESA_ENV, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET,
+MPESA_SHORTCODE, MPESA_PASSKEY, MPESA_CALLBACK_URL
+```
+
+Sandbox uses Safaricom's public test Shortcode (`174379`) and LNM passkey. Swap in
+real production values when going live. The `/api` routes also need
+`SUPABASE_SERVICE_ROLE_KEY` and (for emails) the `SMTP_*` vars set in Vercel.

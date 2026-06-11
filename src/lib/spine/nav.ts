@@ -50,6 +50,24 @@ const PROCUREMENT: NavGroup = {
   ],
 };
 
+// Sales CRM (Phase 12) — dedicated workflow pages (order wizard, aging, targets),
+// so it's a hand-built group. Invoices/Payments read the revenue spine; the rest
+// are gated on the 'sales' module. RLS is the real guard either way.
+const SALES: NavGroup = {
+  label: "Sales",
+  items: [
+    { label: "Dashboard", href: "/sales", module: "sales", enabled: true },
+    { label: "Accounts", href: "/sales/accounts", module: "sales", enabled: true },
+    { label: "Products", href: "/sales/products", module: "sales", enabled: true },
+    { label: "Inventory", href: "/sales/inventory", module: "sales", enabled: true },
+    { label: "Place Order", href: "/sales/orders/new", module: "sales", enabled: true },
+    { label: "Orders", href: "/sales/orders", module: "sales", enabled: true },
+    { label: "Invoices", href: "/sales/invoices", module: "revenue", enabled: true },
+    { label: "Payments", href: "/sales/payments", module: "revenue", enabled: true },
+    { label: "Targets", href: "/sales/targets", module: "sales", enabled: true },
+  ],
+};
+
 // Build remaining resource-backed groups in a stable, phase-ordered sequence.
 const GROUP_ORDER = [
   "Revenue",
@@ -112,6 +130,7 @@ export const NAV: NavGroup[] = [
   },
   WORKSPACE,
   SPINE,
+  SALES,
   PROCUREMENT,
   ...resourceGroups,
   SETTINGS,
@@ -121,6 +140,16 @@ export const NAV: NavGroup[] = [
 // permissions still apply as a safety net via RLS). Roles NOT listed here fall
 // back to the default module-permission filter (see AppLayout). This lets a role
 // show a single item from a group (e.g. just Leave) without the whole group.
+// All Sales-section hrefs (the hand-built SALES group above), reused by the
+// sales roles below so adding a Sales page only needs one edit there + here.
+const SALES_HREFS = SALES.items.map((i) => i.href);
+
+const PARTNER_MANAGER_HREFS = ["/", "/calendar", "/tasks", "/leave", "/payment-requests", "/crm/pipeline", "/crm/engagements", "/r/opportunities", "/r/partners"];
+
 export const ROLE_NAV: Record<string, string[]> = {
-  partner_manager: ["/", "/calendar", "/tasks", "/leave", "/payment-requests", "/crm/pipeline", "/crm/engagements", "/r/opportunities", "/r/partners"],
+  partner_manager: PARTNER_MANAGER_HREFS,
+  // Sales Manager = the Partner Manager experience PLUS the full Sales section.
+  sales_manager: [...PARTNER_MANAGER_HREFS, ...SALES_HREFS],
+  sales_rep: ["/", "/calendar", "/tasks", "/leave", "/payment-requests", ...SALES_HREFS],
+  inventory_clerk: ["/", "/calendar", "/tasks", "/leave", "/sales/products", "/sales/inventory"],
 };
