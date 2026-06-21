@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useAuth, can } from "@/lib/auth";
 import { useData } from "@/lib/useData";
-import { Card, PageHeader, Badge } from "@/components/ui/primitives";
+import { Card, PageHeader, Badge, TONE_TILE, TONE_FILL } from "@/components/ui/primitives";
 import { formatMoney, formatDate, cn } from "@/lib/utils";
 import {
   LayoutDashboard, TrendingUp, Receipt, Building2, Boxes, Trophy, Package,
@@ -130,7 +130,7 @@ export default function Dashboard() {
   const prodMax = Math.max(1, ...(data?.topProducts ?? []).map((p) => p.revenue));
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full">
       <PageHeader eyebrow="Sales" title="Sales dashboard" subtitle="Performance, pipeline and stock at a glance." icon={LayoutDashboard} />
 
       {/* KPI cards */}
@@ -259,7 +259,7 @@ export default function Dashboard() {
 }
 
 // --- small presentational helpers ------------------------------------------
-const TONE_BG: Record<string, string> = { green: "bg-emerald-50 text-emerald-600", amber: "bg-amber-50 text-amber-600", blue: "bg-blue-50 text-blue-600", zinc: "bg-zinc-100 text-zinc-600" };
+const TONE_BG = TONE_TILE;
 
 function Kpi({ icon: Icon, label, value, sub, tone }: { icon: ComponentType<{ className?: string }>; label: string; value: string; sub: string; tone: string }) {
   return (
@@ -281,18 +281,18 @@ function SectionTitle({ icon: Icon, children }: { icon: ComponentType<{ classNam
 }
 
 function Bar({ pct, tone = "primary" }: { pct: number; tone?: "primary" | "green" | "blue" }) {
-  const bg = tone === "green" ? "bg-emerald-500" : tone === "blue" ? "bg-blue-500" : "bg-primary";
+  const bg = tone === "green" ? TONE_FILL.green : tone === "blue" ? TONE_FILL.blue : "bg-primary";
   return <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={cn("h-full rounded-full", bg)} style={{ width: `${Math.max(2, Math.min(100, pct))}%` }} /></div>;
 }
 
 function RankDot({ i }: { i: number }) {
-  const tones = ["bg-amber-400", "bg-zinc-400", "bg-orange-400"];
-  return <span className={cn("flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white", tones[i] ?? "bg-zinc-300")}>{i + 1}</span>;
+  const tones = [TONE_FILL.amber, TONE_FILL.blue, TONE_FILL.green];
+  return <span className={cn("flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white", tones[i] ?? TONE_FILL.zinc)}>{i + 1}</span>;
 }
 
 function FeedIcon({ kind }: { kind: "order" | "payment" | "account" }) {
   const map = { order: ShoppingCart, payment: Wallet, account: UserPlus };
-  const tone = { order: "bg-blue-50 text-blue-600", payment: "bg-emerald-50 text-emerald-600", account: "bg-amber-50 text-amber-600" }[kind];
+  const tone = { order: TONE_TILE.blue, payment: TONE_TILE.green, account: TONE_TILE.amber }[kind];
   const Icon = map[kind];
   return <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", tone)}><Icon className="h-4 w-4" /></div>;
 }

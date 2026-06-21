@@ -4,55 +4,91 @@
    activate when <html> (or an ancestor) has the `dark` class. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* shadcn/ui-style tokens. Light values in :root, dark overrides in .dark.
-   @theme inline maps Tailwind color utilities to these vars, so the whole UI
-   switches theme by toggling one class — no per-component dark: variants. */
+/* ============================================================
+   Jikoni "stove & counter" theme.
+   Light = warm paper counter with a dark stove sidebar.
+   Dark  = the stove body extended across the whole surface.
+   Palette mirrors the Ignis design language:
+     flame  #0E8AA8  primary action / on-track / focus
+     ember  #E2632A  energy / attention / call-to-action
+     ink    #1A1512  text on counter
+   The whole UI re-skins by toggling one class — no per-component
+   dark: variants needed, because utilities map to these vars below.
+   ============================================================ */
 :root {
-  --background: #ffffff;
-  --foreground: #18181b;
+  --background: #fbfaf7; /* counter */
+  --foreground: #1a1512; /* ink */
   --card: #ffffff;
-  --card-foreground: #18181b;
+  --card-foreground: #1a1512;
   --popover: #ffffff;
-  --popover-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
-  --border: #e4e4e7;
-  --input: #e4e4e7;
-  --ring: #10b981;
-  --primary: #059669;
+  --popover-foreground: #1a1512;
+  --muted: #f3efe7;
+  --muted-foreground: #74695d; /* ink-soft */
+  --accent: #f1ede5;
+  --accent-foreground: #1a1512;
+  --border: #ece7de; /* hairline */
+  --input: #e2dcd1; /* hairline-2 */
+  --ring: #0e8aa8; /* flame */
+  --primary: #e2632a; /* ember — primary call-to-action */
   --primary-foreground: #ffffff;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #18181b;
-  --destructive: #dc2626;
+  --secondary: #f1ede5;
+  --secondary-foreground: #1a1512;
+  --destructive: #cf483b;
   --destructive-foreground: #ffffff;
-  --sidebar: #fafafa;
-  --sidebar-border: #ececee;
+
+  /* Sidebar is the "stove body" — always dark, in both themes. */
+  --sidebar: #17120e;
+  --sidebar-foreground: #e9e2d7;
+  --sidebar-border: #2c2219;
+  --sidebar-accent: #2c221a; /* hover / active row */
+  --sidebar-muted: #8a7d6c; /* group labels, secondary text */
+
+  /* Signature accents, exposed as utilities (bg-flame, text-ember, …). */
+  --flame: #0e8aa8;
+  --flame-soft: #e2f1f5;
+  --ember: #e2632a;
+  --ember-soft: #fbeadf;
+  --success: #3c8a5e;
+  --success-soft: #e7f2eb;
+  --warning: #e2632a;
+  --warning-soft: #fbeadf;
 }
 
 .dark {
-  --background: #09090b;
-  --foreground: #f4f4f5;
-  --card: #18181b;
-  --card-foreground: #f4f4f5;
-  --popover: #18181b;
-  --popover-foreground: #f4f4f5;
-  --muted: #27272a;
-  --muted-foreground: #a1a1aa;
-  --accent: #27272a;
-  --accent-foreground: #fafafa;
-  --border: #27272a;
-  --input: #3f3f46;
-  --ring: #10b981;
-  --primary: #10b981;
-  --primary-foreground: #052e16;
-  --secondary: #27272a;
-  --secondary-foreground: #fafafa;
-  --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
-  --sidebar: #111113;
-  --sidebar-border: #232327;
+  --background: #17120e; /* stove */
+  --foreground: #ece6db;
+  --card: #211913; /* stove-2 */
+  --card-foreground: #ece6db;
+  --popover: #211913;
+  --popover-foreground: #ece6db;
+  --muted: #2c221a; /* stove-3 */
+  --muted-foreground: #a89c8e;
+  --accent: #2c221a;
+  --accent-foreground: #fbfaf7;
+  --border: #34281e;
+  --input: #3a2d22;
+  --ring: #0e8aa8;
+  --primary: #e2632a;
+  --primary-foreground: #ffffff;
+  --secondary: #2c221a;
+  --secondary-foreground: #fbfaf7;
+  --destructive: #cf483b;
+  --destructive-foreground: #ffffff;
+
+  --sidebar: #120e0a;
+  --sidebar-foreground: #e9e2d7;
+  --sidebar-border: #2c2219;
+  --sidebar-accent: #2c221a;
+  --sidebar-muted: #8a7d6c;
+
+  --flame: #1597b8;
+  --flame-soft: #0e2a31;
+  --ember: #e2632a;
+  --ember-soft: #3a2114;
+  --success: #4ca06f;
+  --success-soft: #16291e;
+  --warning: #e2632a;
+  --warning-soft: #3a2114;
 }
 
 @theme inline {
@@ -75,15 +111,43 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+
   --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-border: var(--sidebar-border);
-  --radius: 0.6rem;
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-muted: var(--sidebar-muted);
+
+  --color-flame: var(--flame);
+  --color-flame-soft: var(--flame-soft);
+  --color-ember: var(--ember);
+  --color-ember-soft: var(--ember-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+
+  --radius: 0.875rem;
 }
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+/* Display type for headings, matching the mockup's Space Grotesk titling. */
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
 }
 
 /* Modal dialog entrance: fade the backdrop, fade + zoom the panel. */
@@ -96,12 +160,24 @@ body,
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* Live indicator pulse, used by the topbar status dot. */
+@keyframes jikoni-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--flame) 50%, transparent); }
+  70% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--flame) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--flame) 0%, transparent); }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--flame);
+  color: #fff;
 }
 
 * {

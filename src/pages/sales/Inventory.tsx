@@ -31,7 +31,7 @@ export default function Inventory() {
   const low = (rows ?? []).filter((r) => Number(r.qty_on_hand) <= Number(r.reorder_level)).length;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader eyebrow="Sales" title="Inventory" subtitle={low ? `${low} item(s) at or below reorder level.` : "Stock on hand per product."} icon={Boxes} />
       <Table>
         <THead><TH>SKU</TH><TH>Product</TH><TH>On hand</TH><TH>Reorder at</TH><TH>Last restock</TH><TH /></THead>

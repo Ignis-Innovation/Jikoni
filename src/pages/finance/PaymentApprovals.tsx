@@ -64,7 +64,7 @@ export default function PaymentApprovals() {
   const rows = [...(data ?? [])].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="Finance"
         icon={Banknote}

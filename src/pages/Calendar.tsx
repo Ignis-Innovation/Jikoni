@@ -32,7 +32,7 @@ export default function Calendar() {
   };
 
   return (
-    <div className="mx-auto max-w-[1100px]">
+    <div className="w-full">
       <PageHeader
         eyebrow="Company"
         icon={CalendarDays}

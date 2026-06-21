@@ -30,20 +30,40 @@ export function Topbar({ user }: { user: { full_name: string | null; email: stri
     .join("")
     .toUpperCase();
 
+  const firstName = (user.full_name ?? user.email).split(" ")[0];
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const dateline = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-background/80 px-5 backdrop-blur">
-      <div className="relative w-96 max-w-full">
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-background/85 px-6 backdrop-blur">
+      <div className="hidden min-w-0 sm:block">
+        <p className="truncate font-display text-base font-semibold tracking-tight text-foreground">
+          {greeting}, {firstName}
+        </p>
+        <p className="truncate font-mono text-[11px] text-muted-foreground">{dateline}</p>
+      </div>
+
+      <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-flame">
+        <span
+          className="h-[7px] w-[7px] rounded-full bg-flame"
+          style={{ animation: "jikoni-pulse 2.2s infinite" }}
+        />
+        Live
+      </div>
+
+      <div className="relative ml-auto hidden w-64 max-w-full md:block">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
-          placeholder="Search…"
-          className="h-9 w-full rounded-lg border border-input bg-muted/40 pl-9 pr-16 text-sm outline-none transition-colors focus:border-ring focus:bg-background focus:ring-2 focus:ring-ring"
+          placeholder="Search Jikoni…"
+          className="h-9 w-full rounded-lg border border-input bg-card pl-9 pr-16 text-sm outline-none transition-colors focus:border-ring focus:bg-background focus:ring-2 focus:ring-ring"
         />
         <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
           ⌘K
         </kbd>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 md:ml-0 ml-auto">
         <ThemeToggle />
         <button
           className="relative flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

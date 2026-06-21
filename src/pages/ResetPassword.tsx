@@ -36,7 +36,7 @@ export default function ResetPassword() {
               <Input id="pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
               <p className="mt-1 text-[11px] text-muted-foreground">At least 10 characters, 1 number, 1 symbol.</p>
             </div>
-            {error && <p className="text-xs text-red-600">{error}</p>}
+            {error && <p className="text-xs text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={!valid}>Update password</Button>
           </form>
         )}

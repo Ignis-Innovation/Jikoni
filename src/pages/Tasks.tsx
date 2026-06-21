@@ -68,7 +68,7 @@ export default function Tasks() {
   }
 
   return (
-    <div className="mx-auto max-w-[1100px]">
+    <div className="w-full">
       <PageHeader
         eyebrow="Workspace"
         icon={ListTodo}

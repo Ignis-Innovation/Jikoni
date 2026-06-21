@@ -79,7 +79,7 @@ export default function Users() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <div className="mb-5 flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">Settings</p>

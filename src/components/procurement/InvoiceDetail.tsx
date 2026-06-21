@@ -44,7 +44,7 @@ export function InvoiceDetail({
   ];
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="w-full space-y-6">
       <Link to="/procurement/invoices" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-3.5 w-3.5" /> Payables
       </Link>
@@ -80,7 +80,7 @@ export function InvoiceDetail({
           ))}
         </div>
         {invoice.match_status === "variance" && (
-          <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+          <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
             Figures don&apos;t reconcile within tolerance — payment is blocked until resolved.
           </p>
         )}

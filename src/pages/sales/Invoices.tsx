@@ -56,7 +56,7 @@ export default function Invoices() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader eyebrow="Sales" title="Unpaid invoices" subtitle="Outstanding receivables by age." icon={Receipt} />
       <div className="mb-4 flex flex-wrap gap-2">
         <StatChip label="0–30 days" value={formatMoney(sumIn((d) => d <= 30))} tone="green" />

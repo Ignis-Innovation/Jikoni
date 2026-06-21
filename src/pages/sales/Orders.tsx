@@ -24,7 +24,7 @@ export default function Orders() {
   if (!can(user, "sales.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader eyebrow="Sales" title="Orders" subtitle="Sales orders and fulfillment." icon={ClipboardList} />
       <Table>
         <THead><TH>Order</TH><TH>Account</TH><TH>Method</TH><TH>Total</TH><TH>Fulfillment</TH><TH>Date</TH></THead>

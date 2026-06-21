@@ -3,6 +3,32 @@ import { cn } from "@/lib/utils";
 
 /* shadcn/ui-style primitives built on the semantic design tokens in index.css. */
 
+/* Shared warm-palette tone maps so dashboards/tiles/pipelines don't scatter
+   hardcoded hues. Keys are the semantic names callers already use; values map
+   to the "stove & counter" tokens (flame/ember/success/destructive/muted). */
+export const TONE_TILE: Record<string, string> = {
+  blue: "bg-flame-soft text-flame",
+  green: "bg-success-soft text-success",
+  amber: "bg-ember-soft text-ember",
+  red: "bg-destructive/10 text-destructive",
+  zinc: "bg-muted text-muted-foreground",
+};
+export const TONE_DOT: Record<string, string> = {
+  blue: "bg-flame",
+  green: "bg-success",
+  amber: "bg-ember",
+  red: "bg-destructive",
+  zinc: "bg-muted-foreground",
+};
+/* Solid fills (e.g. progress bars, rank chips, pipeline column accents). */
+export const TONE_FILL: Record<string, string> = {
+  blue: "bg-flame",
+  green: "bg-success",
+  amber: "bg-ember",
+  red: "bg-destructive",
+  zinc: "bg-muted-foreground/40",
+};
+
 export function Button({
   className,
   variant = "primary",
@@ -80,11 +106,11 @@ export function Badge({
   tone?: "zinc" | "green" | "red" | "amber" | "blue";
 }) {
   const tones: Record<string, string> = {
-    zinc: "border-zinc-200 bg-zinc-50 text-zinc-600",
-    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    red: "border-red-200 bg-red-50 text-red-700",
-    amber: "border-amber-200 bg-amber-50 text-amber-700",
-    blue: "border-blue-200 bg-blue-50 text-blue-700",
+    zinc: "border-border bg-muted text-muted-foreground",
+    green: "border-success/30 bg-success-soft text-success",
+    red: "border-destructive/30 bg-destructive/10 text-destructive",
+    amber: "border-ember/30 bg-ember-soft text-ember",
+    blue: "border-flame/30 bg-flame-soft text-flame",
   };
   return (
     <span
@@ -101,7 +127,7 @@ export function Badge({
 
 export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <div className={cn("rounded-xl border border-border bg-card text-card-foreground shadow-sm", className ?? "p-5")}>
+    <div className={cn("rounded-[var(--radius)] border border-border bg-card text-card-foreground shadow-sm", className ?? "p-5")}>
       {children}
     </div>
   );
@@ -151,11 +177,11 @@ export function StatChip({
   tone?: "zinc" | "green" | "red" | "amber" | "blue";
 }) {
   const dot: Record<string, string> = {
-    zinc: "bg-zinc-400",
-    green: "bg-emerald-500",
-    red: "bg-red-500",
-    amber: "bg-amber-500",
-    blue: "bg-blue-500",
+    zinc: "bg-muted-foreground",
+    green: "bg-success",
+    red: "bg-destructive",
+    amber: "bg-ember",
+    blue: "bg-flame",
   };
   return (
     <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">

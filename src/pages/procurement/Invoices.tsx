@@ -23,7 +23,7 @@ export default function Invoices() {
   if (!can(user, "finance.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <div className="mb-5">
         <p className="text-xs text-muted-foreground">Procure-to-Pay</p>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Payables</h1>

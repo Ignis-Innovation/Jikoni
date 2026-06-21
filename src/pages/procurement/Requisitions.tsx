@@ -23,7 +23,7 @@ export default function Requisitions() {
   if (!can(user, "procurement.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <div className="mb-5 flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">Procure-to-Pay</p>

@@ -46,7 +46,7 @@ export default function LeaveApprovals() {
   });
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="People Ops"
         title="Leave Approvals"

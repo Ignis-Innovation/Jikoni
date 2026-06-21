@@ -30,7 +30,7 @@ export default function Payments() {
   const list = (rows ?? []).filter((r) => method === "all" || (r.method ?? "") === method);
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="Sales" title="Payment history" subtitle="All receipts across cash, M-Pesa and bank." icon={Wallet}
         actions={

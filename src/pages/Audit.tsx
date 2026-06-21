@@ -19,7 +19,7 @@ export default function Audit() {
   if (!can(user, "audit.view")) return <p className="text-sm text-muted-foreground">You don&apos;t have access to the Audit Log.</p>;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <div className="mb-5">
         <p className="text-xs text-muted-foreground">Spine</p>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Audit Log</h1>

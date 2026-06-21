@@ -16,7 +16,7 @@ export default function Roles() {
   if (!can(user, "identity.roles.view")) return <p className="text-sm text-muted-foreground">You don&apos;t have access to Roles.</p>;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <div className="mb-5">
         <p className="text-xs text-muted-foreground">Settings</p>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Roles</h1>

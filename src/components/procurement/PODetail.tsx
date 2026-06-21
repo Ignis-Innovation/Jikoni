@@ -44,7 +44,7 @@ export function PODetail({
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="w-full space-y-6">
       <Link to="/procurement/pos" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-3.5 w-3.5" /> Purchase Orders
       </Link>

@@ -62,7 +62,7 @@ export default function Hub() {
   ];
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="w-full space-y-8">
       <div>
         <p className="text-xs text-muted-foreground">Phase 2</p>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Procure-to-Pay</h1>
@@ -74,7 +74,7 @@ export default function Hub() {
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           {stages.map((s) => (
             <Link key={s.label} to={s.href}>
-              <Card className="p-4 transition-colors hover:border-emerald-300">
+              <Card className="p-4 transition-colors hover:border-primary/40">
                 <p className="text-2xl font-semibold text-foreground">{s.value}</p>
                 <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{s.label}</p>
               </Card>

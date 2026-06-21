@@ -65,7 +65,7 @@ export default function PaymentRequests() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="Workspace"
         icon={Wallet}
@@ -104,7 +104,7 @@ export default function PaymentRequests() {
                 {r.title}
                 {r.description && <span className="block text-xs font-normal text-muted-foreground">{r.description}</span>}
                 {r.status === "rejected" && r.decision_note && (
-                  <span className="block text-xs font-normal text-red-600">Reason: {r.decision_note}</span>
+                  <span className="block text-xs font-normal text-destructive">Reason: {r.decision_note}</span>
                 )}
               </TD>
               <TD>{formatMoney(r.amount_minor, r.currency)}</TD>

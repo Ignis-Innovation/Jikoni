@@ -39,7 +39,7 @@ export default function Targets() {
       .reduce((s, p) => s + p.amount_minor, 0);
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="Sales" title="Sales targets" subtitle="Monthly & quarterly goals vs. paid revenue." icon={TargetIcon}
         actions={canManage && <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4" /> Set target</Button>}
@@ -58,7 +58,7 @@ export default function Targets() {
                 <p className="text-sm font-semibold">{formatMoney(got, t.currency_code)} <span className="text-muted-foreground font-normal">/ {formatMoney(t.target_minor, t.currency_code)}</span></p>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div className={`h-full rounded-full ${pct >= 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${pct}%` }} />
+                <div className={`h-full rounded-full ${pct >= 100 ? "bg-success" : "bg-primary"}`} style={{ width: `${pct}%` }} />
               </div>
               <p className="mt-1 text-right text-xs text-muted-foreground">{pct}%</p>
             </Card>

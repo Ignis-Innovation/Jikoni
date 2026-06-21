@@ -14,7 +14,7 @@ export default function Reference() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="w-full space-y-6">
       <div>
         <p className="text-xs text-muted-foreground">Settings</p>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Reference Data</h1>

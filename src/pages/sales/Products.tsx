@@ -34,7 +34,7 @@ export default function Products() {
   if (!can(user, "sales.view")) return <p className="text-sm text-muted-foreground">No access.</p>;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="Sales" title="Products" subtitle="Catalogue — SKU, cost and selling price." icon={Package}
         actions={canEdit && <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" /> New product</Button>}

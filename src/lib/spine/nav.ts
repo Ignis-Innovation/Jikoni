@@ -33,7 +33,6 @@ const SETTINGS: NavGroup = {
   items: [
     { label: "Users", href: "/settings/users", module: "identity", enabled: true },
     { label: "Roles", href: "/settings/roles", module: "identity", enabled: true },
-    { label: "Reference Data", href: "/settings/reference", module: "refdata", enabled: true },
   ],
 };
 
@@ -69,10 +68,10 @@ const SALES: NavGroup = {
 };
 
 // Build remaining resource-backed groups in a stable, phase-ordered sequence.
+// (Assets is intentionally omitted from the sidebar.)
 const GROUP_ORDER = [
   "Revenue",
   "People",
-  "Assets",
   "Projects",
   "CRM",
   "Intelligence",
@@ -129,8 +128,8 @@ export const NAV: NavGroup[] = [
     ],
   },
   WORKSPACE,
-  SPINE,
   SALES,
+  SPINE,
   PROCUREMENT,
   ...resourceGroups,
   SETTINGS,

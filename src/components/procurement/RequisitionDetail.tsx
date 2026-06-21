@@ -51,7 +51,7 @@ export function RequisitionDetail({
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="w-full space-y-6">
       <Link to="/procurement/requisitions" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-3.5 w-3.5" /> Requisitions
       </Link>
@@ -104,7 +104,7 @@ export function RequisitionDetail({
                 <td className="py-2.5 text-right text-foreground">{formatMoney(Math.round(l.qty * l.est_unit_price_minor), req.currency_code)}</td>
                 <td className="py-2.5 pl-2 text-right">
                   {editable && (
-                    <button onClick={() => setLines((ls) => ls.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-red-600">
+                    <button onClick={() => setLines((ls) => ls.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   )}
@@ -135,7 +135,7 @@ export function RequisitionDetail({
             </Button>
           )}
           {req.status === "pending_approval" && (
-            <p className="text-sm text-amber-700">Waiting on an approver — see the Procurement hub inbox.</p>
+            <p className="text-sm text-ember">Waiting on an approver — see the Procurement hub inbox.</p>
           )}
           {req.status === "approved" && caps.create && (
             <div className="flex items-center gap-2">
@@ -149,8 +149,8 @@ export function RequisitionDetail({
               </Button>
             </div>
           )}
-          {req.status === "converted" && <p className="text-sm text-blue-700">Converted to a purchase order.</p>}
-          {req.status === "rejected" && <p className="text-sm text-red-700">Rejected.</p>}
+          {req.status === "converted" && <p className="text-sm text-flame">Converted to a purchase order.</p>}
+          {req.status === "rejected" && <p className="text-sm text-destructive">Rejected.</p>}
         </div>
         {msg && <p className="mt-3 text-xs text-muted-foreground">{msg}</p>}
       </Card>

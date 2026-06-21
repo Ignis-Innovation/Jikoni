@@ -31,7 +31,7 @@ export default function ForgotPassword() {
               <Label htmlFor="email" required>Email</Label>
               <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             </div>
-            {error && <p className="text-xs text-red-600">{error}</p>}
+            {error && <p className="text-xs text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={!email}>Send reset link</Button>
           </form>
         )}

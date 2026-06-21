@@ -19,10 +19,13 @@ export function AppLayout() {
   }
   if (!user) return <Navigate to="/login" replace />;
 
-  // Nav filtering: super admins see everything; roles with an explicit
-  // ROLE_NAV allow-list see only those hrefs (so a role can show one item from a
-  // group); everyone else falls back to the module-permission filter.
-  const allowed = user.isSuperAdmin
+  // Nav filtering: super admins (and HR, which is granted the same full nav as
+  // admin) see every item; roles with an explicit ROLE_NAV allow-list see only
+  // those hrefs (so a role can show one item from a group); everyone else falls
+  // back to the module-permission filter. (Nav visibility is cosmetic — RLS is
+  // the real data guard.)
+  const fullNav = user.isSuperAdmin || user.roles.includes("hr");
+  const allowed = fullNav
     ? null
     : user.roles.reduce<Set<string> | null>((acc, role) => {
         const hrefs = ROLE_NAV[role];
@@ -35,7 +38,7 @@ export function AppLayout() {
   const groups = NAV.map((g) => ({
     ...g,
     items: g.items.filter((i) =>
-      allowed ? allowed.has(i.href) : i.module === "*" || hasModule(user, i.module)
+      fullNav ? true : allowed ? allowed.has(i.href) : i.module === "*" || hasModule(user, i.module)
     ),
   })).filter((g) => g.items.length > 0);
 

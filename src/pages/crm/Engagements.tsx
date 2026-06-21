@@ -62,7 +62,7 @@ export default function Engagements() {
   const rows = data?.engagements ?? [];
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="CRM"
         title="Engagements"

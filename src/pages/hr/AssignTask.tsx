@@ -81,7 +81,7 @@ export default function AssignTask() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="People Ops"
         icon={UserPlus}

@@ -162,44 +162,9 @@ export const RESOURCES: Resource[] = [
     ],
   },
 
-  // ---------------- Phase 5 — Assets ----------------
-  {
-    slug: "assets", table: "assets", module: "assets",
-    group: "Assets", title: "Asset Register", subtitle: "Every cooker/utility/laptop with serial, location, custodian.",
-    select: "id,code,name,serial_no,status,nbv_minor,created_at",
-    columns: [
-      { key: "code", label: "Code" },
-      { key: "name", label: "Name" },
-      { key: "serial_no", label: "Serial" },
-      { key: "nbv_minor", label: "NBV", kind: "money" },
-      STATUS,
-    ],
-    fields: [
-      { key: "name", label: "Asset name", type: "text", required: true },
-      { key: "category_id", label: "Category", type: "ref", ref: { table: "categories", labelKey: "name" }, half: true },
-      { key: "serial_no", label: "Serial no", type: "text", half: true },
-      { key: "location_id", label: "Location", type: "ref", ref: { table: "locations", labelKey: "name" }, half: true },
-      { key: "cost_minor", label: "Cost", type: "money", half: true },
-      { key: "status", label: "Status", type: "select", options: ["in_store", "deployed", "maintenance", "disposed"] },
-    ],
-  },
-  {
-    slug: "work-orders", table: "work_orders", module: "assets",
-    group: "Assets", title: "Work Orders", subtitle: "Scheduled and ad-hoc maintenance jobs.",
-    select: "id,code,type,status,created_at",
-    columns: [
-      { key: "code", label: "Code" },
-      { key: "type", label: "Type" },
-      STATUS,
-      { key: "created_at", label: "Raised", kind: "date" },
-    ],
-    fields: [
-      { key: "asset_id", label: "Asset", type: "ref", ref: { table: "assets", labelKey: "name" }, required: true },
-      { key: "type", label: "Type", type: "text", half: true },
-      { key: "assignee_user_id", label: "Assignee", type: "ref", ref: { table: "users", labelKey: "full_name" }, half: true },
-      { key: "status", label: "Status", type: "select", options: ["open", "in_progress", "done", "cancelled"] },
-    ],
-  },
+  // ---------------- Phase 5 — Assets (removed from the product surface) ----------------
+  // The Assets module (Asset Register, Work Orders) was retired from the nav and
+  // routes. Tables still exist in the DB; re-add resources here to bring it back.
 
   // ---------------- Phase 6 — Projects ----------------
   {

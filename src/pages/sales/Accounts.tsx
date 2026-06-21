@@ -50,7 +50,7 @@ export default function Accounts() {
   const list = (rows ?? []).filter((a) => filter === "all" || a.approval_status === filter);
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <PageHeader
         eyebrow="Sales" title="Accounts" subtitle="Leads & customers — new accounts wait for approval before ordering."
         icon={Building2}

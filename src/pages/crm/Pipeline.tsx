@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, can } from "@/lib/auth";
 import { useData } from "@/lib/useData";
-import { Badge, PageHeader, Card } from "@/components/ui/primitives";
+import { Badge, PageHeader, Card, TONE_FILL } from "@/components/ui/primitives";
 import { Modal } from "@/components/data/Modal";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -24,11 +24,13 @@ const STAGE_LABEL: Record<string, string> = {
   other: "Other",
   open: "Open", pursuing: "Pursuing", submitted: "Submitted", won: "Won", lost: "Lost", closed: "Closed",
 };
+// Warm progression: flame (early) → ember (mid) → success (closed-won),
+// destructive (lost), muted (closed/other). Limited palette by design.
 const COL_ACCENT: Record<string, string> = {
-  discovery: "bg-sky-400", materials: "bg-indigo-400", negotiation: "bg-violet-400", term_sheet: "bg-amber-400", drawdown: "bg-emerald-500",
-  identification: "bg-sky-400", EOI: "bg-indigo-400", site_visit: "bg-violet-400", contracting: "bg-amber-400", deployment: "bg-emerald-500",
-  open: "bg-sky-400", pursuing: "bg-violet-400", submitted: "bg-amber-400", won: "bg-emerald-500", lost: "bg-red-400", closed: "bg-zinc-300",
-  other: "bg-zinc-300",
+  discovery: TONE_FILL.blue, materials: TONE_FILL.blue, negotiation: TONE_FILL.amber, term_sheet: TONE_FILL.amber, drawdown: TONE_FILL.green,
+  identification: TONE_FILL.blue, EOI: TONE_FILL.blue, site_visit: TONE_FILL.amber, contracting: TONE_FILL.amber, deployment: TONE_FILL.green,
+  open: TONE_FILL.blue, pursuing: TONE_FILL.amber, submitted: TONE_FILL.amber, won: TONE_FILL.green, lost: TONE_FILL.red, closed: TONE_FILL.zinc,
+  other: TONE_FILL.zinc,
 };
 const PRIORITY_TONE: Record<string, "red" | "amber" | "blue" | "zinc"> = { critical: "red", high: "amber", medium: "blue", low: "zinc" };
 const OPP_TONE: Record<string, "blue" | "amber" | "green" | "red" | "zinc"> = { open: "blue", pursuing: "amber", submitted: "blue", won: "green", lost: "red", closed: "zinc" };
@@ -79,13 +81,13 @@ export default function CrmPipeline() {
   // Small type tag shown at the top of every card.
   const TypeTag = ({ kind }: { kind: "engagement" | "opportunity" }) => (
     <span className={cn("inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider",
-      kind === "engagement" ? "bg-blue-100 text-blue-700" : "bg-violet-100 text-violet-700")}>
+      kind === "engagement" ? "bg-flame-soft text-flame" : "bg-ember-soft text-ember")}>
       {kind}
     </span>
   );
 
   return (
-    <div className="mx-auto max-w-[1500px]">
+    <div className="w-full">
       <PageHeader
         eyebrow="CRM"
         title="Pipeline"
@@ -109,7 +111,7 @@ export default function CrmPipeline() {
           if (col === "other" && items.length === 0) return null;
           return (
             <div key={col} className="flex min-w-[260px] flex-col overflow-hidden rounded-xl border border-border bg-card">
-              <div className={cn("h-1 w-full", COL_ACCENT[col] ?? "bg-zinc-300")} />
+              <div className={cn("h-1 w-full", COL_ACCENT[col] ?? TONE_FILL.zinc)} />
               <div className="flex items-center justify-between border-b border-border px-3.5 py-3">
                 <span className="text-sm font-semibold text-foreground">{STAGE_LABEL[col] ?? col}</span>
                 <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{items.length}</span>
@@ -171,7 +173,7 @@ export default function CrmPipeline() {
         {opp && (
           <div className="space-y-3">
             <div>
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider bg-violet-100 text-violet-700">opportunity</span>
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider bg-ember-soft text-ember">opportunity</span>
               <h3 className="mt-1.5 text-lg font-semibold text-foreground">{opp.title}</h3>
             </div>
             <dl className="grid grid-cols-2 gap-3 text-sm">

@@ -116,7 +116,7 @@ export default function PlaceOrder() {
   if (!can(user, "sales.create")) return <p className="text-sm text-muted-foreground">No access.</p>;
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="w-full">
       <PageHeader eyebrow="Sales" title="Place order" icon={ShoppingCart} />
       <div className="mb-6 flex justify-center"><Stepper steps={STEPS} current={step} /></div>
 
@@ -129,7 +129,7 @@ export default function PlaceOrder() {
               <option value="">— choose —</option>
               {(accounts ?? []).map((a) => <option key={a.party_id} value={a.party_id}>{a.parties?.display_name}</option>)}
             </Select>
-            {(accounts ?? []).length === 0 && <p className="text-xs text-amber-600">No approved accounts yet. Approve an account first.</p>}
+            {(accounts ?? []).length === 0 && <p className="text-xs text-ember">No approved accounts yet. Approve an account first.</p>}
             <div className="flex justify-end"><Button disabled={!accountId} onClick={() => setStep(1)}>Next</Button></div>
           </div>
         )}
@@ -208,7 +208,7 @@ export default function PlaceOrder() {
               <span className="text-lg font-semibold">{formatMoney(total)}</span>
             </div>
 
-            {status && <p className="text-sm text-amber-600">{status}</p>}
+            {status && <p className="text-sm text-ember">{status}</p>}
             <div className="flex justify-between pt-2">
               <Button variant="outline" onClick={() => setStep(2)} disabled={busy}>Back</Button>
               <Button
