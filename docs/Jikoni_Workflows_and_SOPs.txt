@@ -1,0 +1,228 @@
+
+JIKONI   ·   CleanCookIQ · Ignis
+
+Workflows & Standard
+Operating Procedures
+An implementation & operations guide — for the team, and for anyone building this system for the first time
+Prepared for  Dennis (MD), Brian (Platform / Tech), and the build team
+Prepared by  Joan Wanjiku, Operations
+Companion to  Jikoni — Module Documentation (functional spec). This guide covers the how: the workflows, their states, the controls, and what to build.
+
+What's in this guide
+Part A · Foundations — the ideas every module reuses — one spine, records with states, access, audit, document-driven chains.
+Part B · Workflows & SOPs — nine end-to-end workflows written as SOPs — the procedure, the states, the controls, and builder notes.
+Part C · Controls & connections — the control catalogue and the cross-module map.
+Part D · Building it — a phased build sequence and a data-model primer.
+
+PART A   Foundations
+
+Jikoni is Ignis's internal operating system. The single most important idea is that it is one system on one spine, not a set of separate apps. Every module below reuses the same five foundations. If you are building this for the first time, build these first — everything else sits on them.
+1 · One source of truth
+Each fact — a cash balance, a stock level, an amount committed — is stored once and read everywhere. A payroll journal posted in HR is the same journal the ledger shows. Never copy a number between modules; reference it. This is what lets the home dashboard show the whole business without reconciliation.
+2 · Records have states
+Almost everything in Jikoni is a record that moves through a defined lifecycle — a state machine. A requisition is Draft, then Submitted, then Approved, then converted. A purchase order is Open, then Partially received, then Closed. Build each record as an explicit set of states with allowed transitions, because the controls, the permissions and the audit trail all hang off those transitions. If you model records as free-form rows without states, the process controls have nowhere to live.
+3 · Role-based access & segregation of duties
+People see and do only what their role allows, granted per module by a super admin. Beyond visibility, certain roles must be different people on the same transaction — the person who requests a purchase cannot be the one who approves it or the one who receives it. This separation (segregation of duties) is a control, not a nicety; enforce it in the transition logic, not just the UI. Note the build order (Part D): the system is built open, with the checkpoint in every transition and an owner/entity on every record from the start; enforcement is switched on at those checkpoints as the final phase, once the whole architecture is working and the real access surface is known.
+4 · The audit log
+Every create, edit, approval, state change and document view writes an append-only audit event: who, what, when, from which value to which. It is never editable. Auditors and investors ask for this first, and several controls below are only meaningful if the log is trustworthy. Build the audit writer once, centrally, and call it from every transition.
+5 · Document-driven chains & the country dimension
+In the operational chains, each document authorises the next: a requisition authorises a purchase order, a goods-received note plus the invoice authorise a payment. A later step cannot happen until the earlier document exists and matches. Finally, country and entity (Kenya live, Uganda next) sit on records from the start — tax rules, currency and payment rails differ, so this cannot be retrofitted.
+
+For the builder  Before any module: build the audit log, the entity/country dimension, the chart of accounts, the generic “record with states + transitions” pattern, and permission hooks left open (always-allow). Identity at this stage is only “who is logged in.” Roles and enforcement are added last (Part D) — but the audit log and the permission hooks must be in from day one, because a trustworthy trail and clean checkpoints cannot be retrofitted.
+
+PART B   Workflows & SOPs
+
+Each workflow below is written as a standard operating procedure: what it is for, who does it, what triggers it, the states the records pass through, the numbered steps, the controls that must hold, and notes for the builder. Read Procure-to-Pay first — it is the backbone, and the others follow its shape.
+B1 · Procure-to-Pay
+
+The backbone of spend control. Its job is that nothing is bought without budget and approval, and nothing is paid without proof that it was ordered and received.
+Roles  Requester · Budget owner · Approver(s) · Procurement officer · Receiver · Finance
+Trigger  A team member needs to buy goods or a service.
+States   Requisition: Draft  →  Submitted  →  Approved  →  PO: Open  →  Partially received  →  Received  →  Matched  →  Closed / Paid
+Procedure
+1.  Raise a requisition. The requester enters the item, quantity, the coding (cost centre or project) and the amount. Coding is mandatory — it is how the cost finds its budget and, later, its project.
+2.  Budget check. The system checks the amount against the coded budget line and shows within budget, over 80%, or exceeds — using committed plus actual, not just actual.
+3.  Approval routing. The system routes by amount: under 5,000 auto-approves; up to 100,000 one approver; up to 500,000 two; above 500,000 the MD. The requester can never be the approver.
+4.  Decision. The approver approves, queries or rejects. The decision, with who and when, is written to the audit log.
+5.  Source (if required). For competitive buys, run an RFQ: invite vendors, compare quotes, score, and record an award recommendation with justification. Single-source buys need a documented reason.
+6.  Raise the PO. The approved requisition converts to a purchase order against the chosen vendor, with line items, delivery terms and currency, and is issued.
+7.  Receive the goods. On delivery the receiver records a goods-received note against the PO — full or partial, quantity and quality inspected, with photo evidence. The receiver is not the requester.
+8.  Capture the invoice. The supplier invoice is captured against the PO.
+9.  Three-way match. The PO, the GRN and the invoice are matched. If they agree, the item is cleared for payment; if not, it is held as an exception and payment is blocked until resolved.
+10.  Pay & post. Finance releases payment (M-Pesa or bank), the entry posts to the general ledger, and the cost lands against the project or cost centre coded in step 1.
+
+Control  Budget is committed at requisition/PO stage, not only at payment — so two people cannot each spend the same remaining budget.
+Control  Segregation of duties: requester ≠ approver ≠ receiver, enforced in the transition logic.
+Control  Sanctions screening is a hard gate: a vendor cannot be awarded a PO until screening is cleared and recorded.
+Control  Three-way match: no invoice is paid unless the PO authorised it and the GRN confirms delivery.
+
+For the builder  Model four record types (requisition, PO, GRN, invoice) each with the states above. Build a budget-line ledger holding budget / committed / actual. Build an approval-matrix config (thresholds by amount, category, entity). Build the match engine with a tolerance setting. Write an audit event on every transition.
+
+B2 · Raise a Requisition (detail)
+
+The front door to Procure-to-Pay, expanded because it is the step most people touch. It forces the budget question up front and gets the right sign-off for the amount.
+Roles  Requester · (system) · Approver
+Trigger  A need to buy, or an inventory item falling below its reorder point.
+States   Draft  →  Submitted  →  Approved / MD review  →  Converted to PO
+Procedure
+1.  Open the form. From Procurement › Requisitions → New requisition, or automatically pre-filled from an inventory reorder.
+2.  Describe the need. Enter what is needed and the quantity; attach a spec or quote if available.
+3.  Code it. Choose the cost centre or project. This drives both the budget check and where the cost eventually lands.
+4.  Enter the amount. As you type, the budget panel resolves to within budget (green), over 80% (amber), or exceeds budget (red), showing the remaining figure and the resulting utilisation.
+5.  Read the routing. The routing panel shows who must approve, by amount, before you submit.
+6.  Submit. The requisition enters the approver's queue with its budget flag; auto-approved items skip straight to approved.
+
+For the builder  This is one screen with two live panels (budget check, routing) that recompute on every keystroke against the coded budget line and the approval matrix. On submit, create the requisition record in the correct starting state and notify the approver.
+
+B3 · Order-to-Cash
+
+The revenue side: raising a compliant invoice to an institution and collecting against it.
+Roles  Finance · (institution customer)
+Trigger  A deployment or sale to an institution is ready to bill.
+States   Draft  →  Issued (eTIMS filed)  →  Part-paid  →  Paid / Overdue
+Procedure
+1.  Raise the invoice. Select the institution, add the description and the net amount; the system computes VAT at 16% and the total.
+2.  Issue & file. On issue the invoice is filed to KRA eTIMS and appears in receivables.
+3.  Track. The invoice ages through debtor buckets; dunning reminders fire on overdue accounts.
+4.  Collect. On payment, record a receipt (channel and reference). The invoice is marked collected, cleared from aging, and posted to the ledger.
+
+Control  Every sales invoice files to eTIMS on issue — a legal requirement in Kenya, not optional.
+
+For the builder  Integrate eTIMS at issue. Build aging buckets and a dunning schedule. Receipt posting reduces receivables and writes a GL entry.
+
+B4 · Payroll → General Ledger
+
+Run payroll, compute statutory deductions, and land the result in the books cleanly.
+Roles  HR · Finance approver
+Trigger  Monthly payroll cycle.
+States   Draft  →  Prepared  →  Approved  →  Posted
+Procedure
+1.  Prepare the run. HR enters inputs; the system computes gross, PAYE, NSSF, SHIF and the Housing Levy, and net pay.
+2.  Sign off. The run is routed for approval; the preparer cannot approve their own run.
+3.  Post the journal. On sign-off, a balanced payroll journal posts to the general ledger and the net-pay payment file is generated.
+4.  Remit. Statutory deductions are remitted by their due dates, tracked on the compliance calendar.
+
+Control  Statutory rates are configuration, not code — they change, and Uganda differs from Kenya.
+Control  Segregation of duties between the preparer and the approver.
+
+For the builder  A statutory calculation engine with configurable rates per entity; balanced journal posting; the bank/M-Pesa payment file; links to the statutory calendar.
+
+B5 · Engagement → Won Deal → Project
+
+Turn a closed partnership into a delivery project without re-keying anything, so delivery and reporting live in the system.
+Roles  BD (upstream Wilson / downstream Elizabeth) · Operations
+Trigger  A downstream engagement is won.
+States   Engagement: stages  →  Won  →  Project: Setup  →  Active  →  Reporting
+Procedure
+1.  Log the engagement. Capture the partner, stage, owner and next action; log updates and action items as you go.
+2.  Progress it. Move through the pipeline stages; the record carries its diary and tasks.
+3.  Create the project. On a won deal, create a project from the engagement — it carries the funder across and seeds a starter milestone sequence.
+4.  Deliver. The project tracks budget, milestones, drawdowns and field activity; costs post to the project code.
+
+For the builder  One engagement model with two pipeline views. A create-project action that writes the project, seeds milestones, and stores the two-way engagement↔project link so each opens the other.
+
+B6 · Fundraise: Term Sheet → Commitment
+
+Keep the raise honest and current, so the committed total against target is always live — the answer when an investor opens the hood.
+Roles  BD upstream (Wilson) · MD · Operations
+Trigger  A funder moves through the raise pipeline.
+States   Deal: Discovery  →  Materials  →  Negotiation  →  Term sheet  →  Committed
+Procedure
+1.  Track the funder. Record instrument, indicative amount, probability and stage in the raise pipeline.
+2.  Manage the term sheet. Move it received → negotiating → signed.
+3.  Record the commitment. On a signed term sheet, record the commitment; the committed total updates against the $3M target, split by instrument (equity vs concessional).
+4.  Run diligence. Grant time-boxed data-room access (logged); assign and answer diligence questions; share back.
+
+Control  Data-room access is time-boxed and every document open is logged.
+Control  Committed totals should reconcile to signed instruments and the cap table, not to optimism.
+
+For the builder  A raise state holding committed amounts by instrument that recomputes the meter. Data-room access control with per-open audit. A diligence-request (DDQ) tracker.
+
+B7 · Inventory: Receive → Dispatch → Reorder
+
+Bridge the physical chain between buying and deploying — hold stock by item and location, move it to sites, and replenish before it runs out.
+Roles  Stores / Operations · Field · Finance (assets)
+Trigger  Goods received from a PO, a dispatch to a site, or an item falling below its reorder point.
+States   Movement: Receipt  →  Issue  →  Transfer  →  Adjustment  →  Dispatch: Scheduled  →  In transit  →  Delivered
+Procedure
+1.  Receive into stock. A goods-received note increments stock at a location as a receipt movement.
+2.  Dispatch to site. A dispatch issues stock to a deployment site — creating an issue movement, decrementing on-hand, and linking to the project and deployment record.
+3.  Reorder. When an item falls below its reorder point, raise a requisition pre-filled with the item and coding — which enters Procure-to-Pay (B1).
+4.  Capitalise. Capitalised items enter the asset register; monthly depreciation posts to the general ledger.
+
+Control  Every movement is audit-logged; stock on hand is always the sum of movements, never edited directly.
+
+For the builder  A stock ledger keyed by item × location, with typed movements. A reorder trigger that opens a pre-filled requisition. An asset register with a depreciation schedule that posts to the GL.
+
+B8 · Vendor Onboarding & Sanctions Screening
+
+Bring a supplier onto the system cleanly, so that awards are defensible and donor-audit-safe.
+Roles  Procurement officer · Compliance
+Trigger  A new supplier is needed, or an existing one must be re-verified.
+States   Draft  →  In screening  →  Prequalified  →  Active  →  Suspended / Blacklisted
+Procedure
+1.  Capture. Record the vendor: KRA PIN, tax status, bank details, category, country and registration documents.
+2.  Prequalify. Score against prequalification criteria.
+3.  Screen. Run sanctions and PEP screening; record the check, the result and who screened.
+4.  Activate. On a clear result, activate the vendor; track tax and compliance certificate expiry.
+
+Control  No vendor may be awarded a PO until screening is cleared and recorded — the hard gate in B1, step 6.
+Control  Grant-funded procurement must also satisfy the specific donor's rules, not just company policy.
+
+For the builder  A vendor master with a screening sub-record (check, result, screener, date) and certificate-expiry alerts. The award step in Procurement reads the screening state.
+
+B9 · Access Provisioning (Onboarding & Offboarding)
+
+Give people exactly the access they need and remove it cleanly when they leave — the control auditors test first.
+Roles  HR · Super admin (Wanjiku / Dennis)
+Trigger  A hire, a role change, or an exit.
+States   Requested  →  Granted (least privilege)  →  Modified  →  Revoked
+Procedure
+1.  Provision. HR onboarding creates the account from a least-privilege role template.
+2.  Grant. The super admin grants module access per person, no more than the role needs.
+3.  Enforce separation. Ensure the same person does not hold conflicting rights (request / approve / receive) on the same process.
+4.  Revoke. On exit, offboarding revokes all access; the audit history is retained.
+
+Control  Least privilege by default; access is granted, never assumed.
+Control  Segregation-of-duties conflicts are blocked at grant time.
+
+For the builder  Build this last, as a layer over the finished architecture. It switches on enforcement at the transition checkpoints and the record owner/entity fields already placed in Phase 0 — so this phase is turning on rules, not surgery. A permission matrix (module × level) with role templates, tied to the HR onboarding and offboarding steps. The audit log, by contrast, is live from day one, not deferred.
+
+PART C   Controls & connections
+
+The control catalogue
+These controls recur across the workflows. Build each once and reuse it; do not re-implement per module.
+Budget check — checks an amount against committed + actual on the coded line; blocks or warns on overrun.
+Approval matrix — routes for sign-off by amount / category / entity; requester is never the approver.
+Segregation of duties — keeps request, approval and receipt in different hands on one transaction.
+Three-way match — PO ↔ GRN ↔ invoice must agree before payment; mismatches are held.
+Sanctions screening — a hard gate before any award; the check and result are recorded.
+eTIMS — sales invoices file to KRA on issue.
+Access control — granted per person, least privilege, time-boxed for the data room.
+Audit log — append-only record of every create, edit, approval, state change and document open.
+How the modules connect
+Procurement commitments and payments post to the Finance ledger; an approved requisition becomes a PO, whose GRN and invoice must match before Finance pays. Inventory receives from goods-received notes and issues on dispatch, with reorder looping back into a requisition. HR posts the payroll journal to Finance and provisions access through User Management. CRM hands a won deal to Projects, whose costs and drawdowns run through Finance on the project code. Fundraise records commitments that move the raise total and grants audited data-room access. Compliance holds the contract registry that Procurement and CRM link to, and the statutory calendar that Finance and HR file against. The audit log sits under all of it.
+
+PART D   Building it
+
+A phased build sequence — build open, enforce access last
+The strategy is to build the whole architecture open first, so the full system is visible and working end to end, and to add roles and access enforcement as the final layer over a known surface. Two things are the exception and go in from day one: the audit log (whether an action is recorded is independent of who may do it) and permission hooks — a checkpoint in every state transition and an owner/entity on every record, left always-allow until the final phase. With those in place, “enforce last” becomes switching on rules at existing checkpoints, not a rebuild.
+Phase 0 · Foundations (open) — entities/country, the chart of accounts, the record-with-states pattern, the audit log (live), and permission hooks left open. Identity is just “who is logged in” — no enforcement yet.
+Phase 1 · The spine — the Finance ledger and the full Procure-to-Pay chain (B1) — built open. This is the spine and proves the controls end to end.
+Phase 2 · Operations — Inventory and HR/Payroll (B4, B7) — open.
+Phase 3 · Growth & delivery — CRM, Projects and Fundraise (B5, B6) — open. The full architecture is now working end to end.
+Phase 4 · Reporting & integrations — Compliance, reporting and dashboards; then the integrations — eTIMS, M-Pesa / bank, sanctions lists.
+Phase 5 · Access & governance (enforce last) — roles, the permission matrix, segregation-of-duties and least-privilege (B9) — switched on at the checkpoints already in place. Access is the final layer, added once the whole system is visible and the real access surface is known.
+A data-model primer
+The core entities and how they relate. Almost every operational record carries entity/country, an owner, a state, and an audit trail.
+Foundation — Entity/Country, User, Role/Permission, Account (chart of accounts), CostCentre & Project (which hold budget lines), Document, AuditEvent.
+Procure-to-pay — Vendor (with a Screening sub-record), Requisition → PurchaseOrder → GoodsReceivedNote → Invoice(AP) → Payment → JournalEntry.
+Order-to-cash — Invoice(AR) → Receipt → JournalEntry.
+Inventory — StockItem, StockLocation, StockMovement, Dispatch, Asset.
+People — Employee, PayrollRun → JournalEntry.
+CRM & delivery — Partner, Engagement (→ Project), Project (Milestone, Drawdown, FieldActivity).
+Fundraise — Funder/Deal, TermSheet, Commitment, DiligenceRequest, DataRoomAccess.
+
+For the builder  The relationships carry the meaning: a Payment must trace to an Invoice, a GRN and a PO; a JournalEntry ties every money movement back to the ledger; a Project links back to the Engagement it came from. Model these links first — they are the “single spine.”
+
+This guide describes the workflows demonstrated in the Jikoni prototype, where each flow is clickable on illustrative data. The build work is to wire these procedures to the database, the posting engine, the integrations and the access policies.

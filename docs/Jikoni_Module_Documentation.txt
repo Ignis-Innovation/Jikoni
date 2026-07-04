@@ -1,0 +1,247 @@
+
+JIKONI   ·   CleanCookIQ · Ignis
+
+Module Documentation
+Functional reference — what each module and sub-feature does
+Prepared for  Brian (Platform / Tech) and the build team; Dennis (MD)
+Prepared by  Joan Wanjiku, Operations
+Companion to  the Workflows & SOPs guide. This document answers what each module is; that one answers how the processes flow and how to build them. Each module below points to the workflows it takes part in.
+
+How Jikoni is organised
+Jikoni is Ignis's internal operating system — one place for finance, procurement, inventory, people, partnerships, projects, the raise and governance. The modules are not separate apps; they share one foundation and read from one another.
+The full treatment of that foundation — one source of truth, records-with-states, role-based access and segregation of duties, the audit log, and document-driven chains — is in Part A of the Workflows & SOPs guide, and is not repeated here.
+How to read this document
+The left sidebar lists the modules; a module expands to reveal its sub-features, and a breadcrumb shows where you are. Each sub-feature is its own focused screen; lists open a record in a side drawer. Below, each module gives its sub-features and what they do, the records it opens, and — in the tinted box — the workflows it takes part in, keyed to the SOP guide (B1, B4, and so on).
+
+Finance & Accounting
+
+One chart of accounts across the business, Kenya and Uganda held separately and consolidated on demand. It runs the full ledger and the day-to-day money workflows; every figure it produces reads the same everywhere else in Jikoni.
+Sub-features
+Sub-feature
+What it does
+Overview
+Position at a glance — cash, payables, receivables, runway, approvals — with an income-statement snapshot and expense/revenue charts.
+General Ledger
+Chart of accounts, journal entries, trial balance and period close.
+Payables
+Supplier invoices captured against POs, three-way match and payables aging.
+Receivables
+eTIMS sales invoices, receipts/collection, debtor aging and dunning.
+Bank & Cash
+Bank and mobile-money accounts, reconciliation, and a cash forecast.
+Petty Cash
+Floats by custodian, coded receipt-backed vouchers, reconciliation and replenishment.
+Budgets & Costing
+Budget vs actual by cost centre, and project accounting on shared project codes.
+Reporting & Compliance
+P&L, balance sheet, cash flow, trial balance; VAT/eTIMS, withholding, Housing Levy; multi-currency; IFRS-for-SMEs.
+
+WORKFLOWS  B1 Procure-to-Pay (payables, three-way match, GL posting) · B3 Order-to-Cash (receivables) · B4 Payroll → GL (the journal lands here) · B7 Inventory (asset depreciation posts here). See the Workflows & SOPs guide.
+
+Procurement
+
+Procure-to-pay on one connected chain: each document authorises the next, so nothing is ordered without an approved requisition and nothing is paid without a matched goods-received note.
+Sub-features
+Sub-feature
+What it does
+Overview
+Spend by category and trend, the procure-to-pay chain, and exceptions holding payment.
+Vendors
+Registry with tax-compliance status, sanctions screening and performance ratings.
+Requisitions
+Purchase requisitions with live budget check and approval routing.
+Purchase Orders
+PO lifecycle — open, partially received, closed — raised only from an approved requisition.
+Goods Received
+Goods-received / delivery notes against a PO, with partial deliveries and photo evidence.
+Sourcing / RFQ
+Quote comparison with scoring and a documented award recommendation.
+Contracts
+Framework agreements at agreed rates, linked to the contract registry.
+Records
+A vendor — or any of its contracts — opens the vendor record: relationship history, contracts and every document shared (certificates, the signed contract, and the linked POs, GRNs and invoices).
+Ignis-specific
+Sanctions screening is a hard gate before award, per Procurement Manual IGN-PROC-001. Grant-funded buys must also satisfy the donor's own procurement rules.
+
+WORKFLOWS  B1 Procure-to-Pay · B2 Raise a Requisition · B8 Vendor Onboarding & Sanctions Screening. See the Workflows & SOPs guide.
+
+Inventory Management
+
+The bridge between buying and deploying — stock of cookstoves, spares and sensors from goods-received to dispatch, held by item and location, with reorder tied back to procurement.
+Sub-features
+Sub-feature
+What it does
+Overview
+Stock value, low-stock alerts, in-transit and dispatched counts, and a movements trend.
+Stock Items
+Item catalogue with on-hand quantity, reorder point and valuation.
+Locations
+Stock across the central store and the county hubs.
+Stock Movements
+Receipts, issues, transfers and adjustments — the movement ledger.
+Dispatch & Deployment
+Units issued out to sites, linked to the project and deployment record.
+Reorder
+Items below their reorder point, each able to raise a pre-filled requisition.
+Asset Register
+Capitalised assets with net book value; depreciation posts to the GL.
+Records
+An item opens its record: stock by location, recent movements, reorder status and a link to its supplier.
+
+WORKFLOWS  B7 Inventory: Receive → Dispatch → Reorder; reorder feeds B1/B2 (a requisition). See the Workflows & SOPs guide.
+
+Human Resources
+
+Staff files, leave, payroll, recruitment and the field workforce in one module, with statutory IDs and documents versioned and access-controlled on every record.
+Sub-features
+Sub-feature
+What it does
+Overview
+Headcount, the HR to-do list, and workforce-composition charts.
+Staff Files
+Employee registry with contracts, statutory IDs (KRA PIN, NSSF, SHIF) and versioned documents.
+Leave
+Application-to-approval workflow, balances and the leave-type policy.
+Payroll
+Statutory computation (PAYE, NSSF, SHIF, Housing Levy) and the payslip run; posts the journal to the GL.
+Recruitment
+Requisitions, an applicant pipeline scored against a rubric, and onboarding checklists.
+Field Workforce
+Enumerator rosters by county, per-diem workflows and short-term / casual contracts.
+Ignis-specific
+The field workforce — enumerators, install crews and short-term staff on per-diems — is a first-class part of the module, not an edge case.
+
+WORKFLOWS  B4 Payroll → GL · B9 Access Provisioning (onboarding creates the account, offboarding revokes it). See the Workflows & SOPs guide.
+
+Staff Portal
+
+The self-service view every employee sees of themselves — pay, leave and documents — which keeps routine HR requests out of email.
+Sub-features
+Sub-feature
+What it does
+This month
+Next payday, leave balance and the tasks assigned to the employee.
+My leave
+Balances by type, an application form, and request history.
+My payslips
+Monthly payslips to view and download.
+My documents
+The employee's own personal file — contract, IDs, certificates — with upload.
+Ignis-specific
+An employee sees only their own file; HR can view it; no one else can unless a super admin grants access.
+
+WORKFLOWS  Surfaces B4 (payslips) and the leave process to the employee; strictly self-scoped by the B9 access rule. See the Workflows & SOPs guide.
+
+Partnerships CRM
+
+One engagement engine, two views — upstream capital and downstream deployment on the same model — so the whole relationship book is answerable in one place.
+Sub-features
+Sub-feature
+What it does
+Overview
+Engagements by relationship type, upstream and downstream funnels, and needs-attention.
+Engagements
+The dual-pipeline engine with a per-engagement updates log and action items.
+Partners
+The partner registry, typed by relationship.
+Institution Pipeline
+Downstream institutions by county, tier and EOI stage.
+Opportunities
+RFPs, funding calls and windows, linked to the engagement pursuing them.
+Analytics
+Pipeline conversion and velocity; capital committed against target.
+Records
+An engagement opens its record: status and next action, the updates log, action items, documents, and links to the linked project or Fundraise.
+Ignis-specific
+The dual-pipeline-on-one-engine design is deliberate — two very different motions (raising capital, deploying stoves) sharing one engagement model and two lenses.
+
+WORKFLOWS  B5 Engagement → Won Deal → Project; upstream funders feed B6 Fundraise. See the Workflows & SOPs guide.
+
+Projects & Programmes
+
+Every funded project and deployment on one project code — budget, milestones, deliverables, drawdowns and field activity — so project profitability and grant compliance live in the system.
+Sub-features
+Sub-feature
+What it does
+Overview
+Portfolio budget and burn charts, and items needing attention across projects.
+Projects
+The project registry — funder, budget, spend and status.
+Budgets
+Budget vs actual by project, with portfolio variance and forecast.
+Milestones
+Milestones and deliverables by due date.
+Grants & Drawdowns
+Grant register, drawdown tranches and the funder reporting calendar.
+Field Activity
+Site visits, installations and readiness assessments; carries the field evidence.
+Records
+A project opens its record: funder, timeline and team, budget vs spent, the milestone sequence, drawdowns, reporting cadence, documents and the originating engagement.
+
+WORKFLOWS  B5 Engagement → Won Deal → Project (created here); consumes costs from B1 and dispatch from B7. See the Workflows & SOPs guide.
+
+Fundraise & Diligence
+
+Where the $3M raise stands, funder by funder — pipeline, term sheets, the data room and diligence — with the committed total always live against target.
+Sub-features
+Sub-feature
+What it does
+Overview
+Progress-to-target meter, pipeline-by-stage funnel, and raise/diligence needs-attention.
+Raise Pipeline
+Funders by stage with instrument, indicative amount and probability.
+Term Sheets
+Term-sheet tracker: received → negotiating → signed.
+Data Room
+Diligence documents by category and per-funder access.
+Diligence Requests
+Inbound diligence questions with owner and status.
+Close
+Closing checklist and use of funds.
+Records
+A funder opens its deal record: instrument, amount, probability, term-sheet and diligence status, documents, and a link to the CRM engagement.
+Ignis-specific
+Signing a term sheet records the commitment and moves the committed total against the $3M target, split equity vs concessional.
+
+WORKFLOWS  B6 Fundraise: Term Sheet → Commitment; data-room access is B9-style access control. See the Workflows & SOPs guide.
+
+Compliance & Governance
+
+The single home for policies and manuals, statutory documents, the compliance calendar and the risk register — the material an auditor or diligence reviewer asks for first.
+Sub-features
+Sub-feature
+What it does
+Policies & Manuals
+The versioned policy and manual library, with owner and version (e.g. IGN-PROC-001).
+Company Documents
+Statutory documents — incorporation, KRA PIN, Tax Compliance Certificate, CR12, permits — with expiry flags.
+Compliance Calendar
+Upcoming statutory obligations and their due dates.
+Risk Register
+Risks with owner, severity and mitigation.
+
+WORKFLOWS  Holds the contract registry used by B1/B8 and the statutory calendar used by B4; access is governed by B9. See the Workflows & SOPs guide.
+
+User Management (Access & Audit)
+
+Who can see and do what, granted per person and per module by a super admin — and the append-only record of everything done. This module underpins the controls in every other one.
+Sub-features
+Sub-feature
+What it does
+Users & Roles
+The permission matrix (module × level: none / view / edit / full), role templates and super-admin.
+Access Records
+Per-person access on least-privilege, with segregation-of-duties conflicts blocked.
+Audit
+The append-only log of every create, edit, approval, state change and document view.
+Records
+A person opens their access record: the permission matrix across modules, with the role template applied.
+
+WORKFLOWS  B9 Access Provisioning; underpins the segregation-of-duties control in B1 and the audit trail everywhere. See the Workflows & SOPs guide.
+
+Adjacent modules
+Two further modules exist in the system and are being built out to the same depth; they are noted here for completeness:
+Deployment & Carbon — deployment tracking and carbon / dMRV — where field installs and monitoring data feed carbon crediting. Draws on Inventory dispatch and Projects field activity.
+Institution Readiness — the institutional readiness scoring that feeds the downstream CRM pipeline and, potentially, CleanCookIQ.
+
+This document describes the module scope reflected in the current Jikoni prototype, where each sub-feature is a working screen on illustrative data. Read alongside the Workflows & SOPs guide for the processes and the build sequence.

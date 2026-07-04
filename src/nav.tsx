@@ -1,0 +1,75 @@
+// Navigation config: module labels + sub-feature tabs, and the breadcrumb.
+import { CrumbChev } from "./components/icons";
+import { useApp } from "./store";
+
+export const moduleLabels: Record<string, string> = {
+  finance: "Finance & Accounting",
+  procurement: "Procurement",
+  hr: "Human Resources",
+  projects: "Projects & Programmes",
+  crm: "Partnerships CRM",
+  compliance: "Compliance & Governance",
+};
+
+export const subnavs: Record<string, { t: string; l: string }[]> = {
+  finance: [
+    { t: "f-over", l: "Overview" },
+    { t: "f-gl", l: "General Ledger" },
+    { t: "f-ap", l: "Payables" },
+    { t: "f-ar", l: "Receivables" },
+    { t: "f-bank", l: "Bank & Cash" },
+    { t: "f-petty", l: "Petty Cash" },
+    { t: "f-budget", l: "Budgets & Costing" },
+    { t: "f-report", l: "Reporting & Compliance" },
+  ],
+  procurement: [
+    { t: "p-over", l: "Overview" },
+    { t: "p-vendors", l: "Vendors" },
+    { t: "p-req", l: "Requisitions" },
+    { t: "p-po", l: "Purchase Orders" },
+    { t: "p-grn", l: "Goods Received" },
+    { t: "p-rfq", l: "Sourcing / RFQ" },
+    { t: "p-contracts", l: "Contracts" },
+  ],
+  hr: [
+    { t: "h-over", l: "Overview" },
+    { t: "h-staff", l: "Staff Files" },
+    { t: "h-leave", l: "Leave" },
+    { t: "h-pay", l: "Payroll" },
+    { t: "h-recruit", l: "Recruitment" },
+    { t: "h-field", l: "Field Workforce" },
+  ],
+  projects: [
+    { t: "pr-over", l: "Overview" },
+    { t: "pr-projects", l: "Projects" },
+    { t: "pr-budget", l: "Budgets" },
+    { t: "pr-milestones", l: "Milestones" },
+    { t: "pr-grants", l: "Grants & Drawdowns" },
+    { t: "pr-field", l: "Field Activity" },
+  ],
+  crm: [
+    { t: "cr-over", l: "Overview" },
+    { t: "cr-eng", l: "Engagements" },
+    { t: "cr-partners", l: "Partners" },
+    { t: "cr-inst", l: "Institution Pipeline" },
+    { t: "cr-opps", l: "Opportunities" },
+    { t: "cr-analytics", l: "Analytics" },
+  ],
+  compliance: [
+    { t: "c-policies", l: "Policies & Manuals" },
+    { t: "c-docs", l: "Company Documents" },
+    { t: "c-cal", l: "Compliance Calendar" },
+    { t: "c-risk", l: "Risk Register" },
+  ],
+};
+
+export function Crumb({ view }: { view: string }) {
+  const { tabs } = useApp();
+  const tab = tabs[view];
+  const label = subnavs[view]?.find((s) => s.t === tab)?.l || "";
+  return (
+    <div className="crumb">
+      {moduleLabels[view]} <CrumbChev /> <b>{label}</b>
+    </div>
+  );
+}
