@@ -5,6 +5,7 @@ import { useApp } from "./store";
 export const moduleLabels: Record<string, string> = {
   finance: "Finance & Accounting",
   procurement: "Procurement",
+  inventory: "Inventory & Assets",
   hr: "Human Resources",
   projects: "Projects & Programmes",
   crm: "Partnerships CRM",
@@ -21,6 +22,13 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "f-petty", l: "Petty Cash" },
     { t: "f-budget", l: "Budgets & Costing" },
     { t: "f-report", l: "Reporting & Compliance" },
+  ],
+  inventory: [
+    { t: "i-over", l: "Overview" },
+    { t: "i-items", l: "Stock Items" },
+    { t: "i-move", l: "Movements" },
+    { t: "i-dsp", l: "Dispatches" },
+    { t: "i-assets", l: "Asset Register" },
   ],
   procurement: [
     { t: "p-over", l: "Overview" },

@@ -162,6 +162,7 @@ export const roleMeta: Record<string, [string, string]> = {
 export const accessModules = [
   { k: "finance", l: "Finance & Accounting" },
   { k: "procurement", l: "Procurement" },
+  { k: "inventory", l: "Inventory & Assets" },
   { k: "hr", l: "Human Resources" },
   { k: "deploy", l: "Deployment & Carbon" },
   { k: "readiness", l: "Institution Readiness" },
@@ -182,9 +183,9 @@ const allFull: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 3]));
 
 export const roleTemplates: Record<string, Perms> = {
   admin: { ...allFull },
-  fin: { finance: 3, procurement: 3, hr: 1, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 2, reports: 2, dataroom: 0, settings: 0, users: 0 },
-  std: { finance: 0, procurement: 1, hr: 0, deploy: 1, readiness: 1, raise: 1, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
-  view: { finance: 0, procurement: 0, hr: 0, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 0, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  fin: { finance: 3, procurement: 3, inventory: 3, hr: 1, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 2, reports: 2, dataroom: 0, settings: 0, users: 0 },
+  std: { finance: 0, procurement: 1, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 1, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  view: { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 0, reports: 1, dataroom: 0, settings: 0, users: 0 },
 };
 
 // the super admins who can assign rights — Wanjiku is signed in as one
@@ -194,11 +195,11 @@ export const superAdmins = ["dennis@ignis.africa", "wanjiku@ignis.africa"];
 export const initialPerms: Record<string, Perms> = {
   "dennis@ignis.africa": { ...allFull },
   "wanjiku@ignis.africa": { ...allFull },
-  "brian@ignis.africa": { finance: 1, procurement: 1, hr: 1, deploy: 3, readiness: 2, raise: 1, crm: 1, projects: 2, reports: 2, dataroom: 1, settings: 3, users: 3 },
-  "joan@ignis.africa": { finance: 3, procurement: 3, hr: 2, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 2, reports: 2, dataroom: 0, settings: 0, users: 0 },
-  "wilson@ignis.africa": { finance: 0, procurement: 0, hr: 0, deploy: 1, readiness: 1, raise: 2, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
-  "elizabeth@ignis.africa": { finance: 0, procurement: 0, hr: 0, deploy: 1, readiness: 2, raise: 0, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
-  "lily@ignis.africa": { finance: 0, procurement: 0, hr: 0, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 0, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  "brian@ignis.africa": { finance: 1, procurement: 1, inventory: 3, hr: 1, deploy: 3, readiness: 2, raise: 1, crm: 1, projects: 2, reports: 2, dataroom: 1, settings: 3, users: 3 },
+  "joan@ignis.africa": { finance: 3, procurement: 3, inventory: 3, hr: 2, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 2, reports: 2, dataroom: 0, settings: 0, users: 0 },
+  "wilson@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 2, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  "elizabeth@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 2, raise: 0, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  "lily@ignis.africa": { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 0, reports: 1, dataroom: 0, settings: 0, users: 0 },
 };
 
 /* ----- vendor records ----- */

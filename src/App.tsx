@@ -4,7 +4,7 @@ import { flagColors } from "./data";
 import { moduleLabels, subnavs } from "./nav";
 import {
   BrandMark, ChevDown, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
-  ReadyI, ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI,
+  ReadyI, ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI, BoxI,
 } from "./components/icons";
 import { Toasts } from "./components/ui";
 import HomeView from "./views/Home";
@@ -12,6 +12,7 @@ import DeployView from "./views/Deploy";
 import ReadinessView from "./views/Readiness";
 import RaiseView from "./views/Raise";
 import ProcurementView from "./views/Procurement";
+import InventoryView from "./views/Inventory";
 import ProjectsView from "./views/Projects";
 import CrmView from "./views/Crm";
 import FinanceView from "./views/Finance";
@@ -25,7 +26,8 @@ import { InviteModal, TaskModal, ReqModal, POModal, InvoiceModal } from "./compo
 
 const views: Record<string, React.ComponentType> = {
   home: HomeView, deploy: DeployView, readiness: ReadinessView, raise: RaiseView,
-  procurement: ProcurementView, projects: ProjectsView, crm: CrmView, finance: FinanceView,
+  procurement: ProcurementView, inventory: InventoryView, projects: ProjectsView,
+  crm: CrmView, finance: FinanceView,
   hr: HrView, staffportal: StaffPortalView, compliance: ComplianceView,
   users: UsersView, settings: SettingsView,
 };
@@ -109,6 +111,7 @@ function Sidebar() {
         <div className="nav-group">Finance &amp; Operations</div>
         <NavModule v="finance" icon={<FinanceI />} collapsed={collapsed("finance")} setCollapsed={setCollapsed("finance")} />
         <NavModule v="procurement" icon={<ProcureI />} collapsed={collapsed("procurement")} setCollapsed={setCollapsed("procurement")} />
+        <NavModule v="inventory" icon={<BoxI />} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />
 
         <div className="nav-group">People</div>
         <NavModule v="hr" icon={<HrI />} badge="3" badgeCls="blue" collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />

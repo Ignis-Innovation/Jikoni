@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { budgetLines, kes, reqRouting, reqBudgetState } from "../data";
 
-function ModalShell({ open, onClose, width, children }: { open: boolean; onClose: () => void; width?: number; children: React.ReactNode }) {
+export function ModalShell({ open, onClose, width, children }: { open: boolean; onClose: () => void; width?: number; children: React.ReactNode }) {
   return (
     <div className={`modal-bg ${open ? "show" : ""}`} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={width ? { width } : undefined}>{children}</div>
@@ -14,15 +14,15 @@ function ModalShell({ open, onClose, width, children }: { open: boolean; onClose
 
 /* ================= INVITE ================= */
 export function InviteModal() {
-  const { inviteOpen, setInviteOpen, toast } = useApp();
+  const { inviteOpen, setInviteOpen, toast, sendInvite } = useApp();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  useEffect(() => { if (inviteOpen) { setName(""); setEmail(""); } }, [inviteOpen]);
+  const [role, setRole] = useState("std");
+  useEffect(() => { if (inviteOpen) { setName(""); setEmail(""); setRole("std"); } }, [inviteOpen]);
 
   function send() {
-    const n = name.trim() || "New member";
-    setInviteOpen(false);
-    toast("Invite sent to " + n, "They'll set a password and enrol in 2FA");
+    if (!name.trim() || !email.trim()) { toast("Name and email needed", "So the invite reaches the right person"); return; }
+    sendInvite(name.trim(), email.trim(), role);
   }
 
   return (
@@ -33,7 +33,7 @@ export function InviteModal() {
         <div><label>Work email</label><input className="field" placeholder="name@ignis.africa" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
         <div>
           <label>Role &amp; access</label>
-          <select className="field" defaultValue="std">
+          <select className="field" value={role} onChange={(e) => setRole(e.target.value)}>
             <option value="admin">Admin — full access</option>
             <option value="fin">Finance — ledgers, payables, approvals</option>
             <option value="std">Standard — assigned modules</option>
