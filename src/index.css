@@ -131,6 +131,10 @@
   .panel-h h3{font-family:var(--display);font-size:14.5px;font-weight:600;display:flex;align-items:center;gap:9px}
   .panel-h .meta{font-size:11px;color:var(--ink-soft);font-family:var(--mono)}
   .panel-h .glyph{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex-shrink:0}
+  /* compact variant — tighter header and rows for dense self-service cards */
+  .panel.sm .panel-h{padding:10px 14px}
+  .panel.sm .panel-h h3{font-size:13px}
+  .panel.sm .recon{padding:7px 14px;font-size:12px}
   .glyph.ember{background:var(--ember-soft);color:var(--ember)} .glyph.blue{background:var(--flame-soft);color:var(--flame)}
   .glyph svg{width:14px;height:14px}
 
@@ -230,6 +234,12 @@
   .field{font-family:var(--body);font-size:13px;border:1px solid var(--hairline-2);border-radius:9px;padding:9px 12px;
     background:#fff;color:var(--ink);outline:0;min-width:200px}
   .field:focus{border-color:var(--flame);box-shadow:0 0 0 3px rgba(14,138,168,.12)}
+  /* custom typeahead dropdown (dispatch Location) — drops below the input, full width */
+  .ac-menu{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:40;background:#fff;
+    border:1px solid var(--hairline-2);border-radius:9px;box-shadow:0 10px 28px -8px rgba(23,18,14,.28);
+    max-height:210px;overflow-y:auto;padding:4px}
+  .ac-item{font-size:13px;color:var(--ink);padding:8px 11px;border-radius:6px;cursor:pointer}
+  .ac-item:hover{background:var(--flame-soft);color:var(--flame)}
   .toggle{width:42px;height:24px;border-radius:20px;background:#D8D2C7;position:relative;cursor:pointer;transition:.18s;flex-shrink:0;border:0}
   .toggle::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
   .toggle.on{background:var(--flame)} .toggle.on::after{left:20px}
@@ -246,12 +256,12 @@
 
   /* toast */
   .toast-wrap{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;gap:10px}
-  .toast{background:var(--stove);color:#fff;padding:13px 16px;border-radius:11px;font-size:13px;font-weight:500;
-    box-shadow:0 12px 30px -8px rgba(23,18,14,.5);display:flex;align-items:center;gap:11px;
-    animation:slideIn .3s cubic-bezier(.2,.8,.2,1);max-width:340px;border-left:3px solid var(--flame)}
+  .toast{background:var(--stove);color:#fff;padding:17px 20px;border-radius:12px;font-size:15px;font-weight:500;
+    box-shadow:0 12px 30px -8px rgba(23,18,14,.5);display:flex;align-items:center;gap:13px;
+    animation:slideIn .3s cubic-bezier(.2,.8,.2,1);max-width:420px;border-left:4px solid var(--flame)}
   @keyframes slideIn{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
-  .toast .ti{width:24px;height:24px;border-radius:7px;background:rgba(14,138,168,.25);display:grid;place-items:center;flex-shrink:0;color:var(--flame)}
-  .toast small{display:block;color:#b3a99a;font-weight:400;font-size:11px;margin-top:1px}
+  .toast .ti{width:30px;height:30px;border-radius:8px;background:rgba(14,138,168,.25);display:grid;place-items:center;flex-shrink:0;color:var(--flame)}
+  .toast small{display:block;color:#b3a99a;font-weight:400;font-size:13px;margin-top:2px}
 
   /* finance workspace */
   .subtabs{display:flex;gap:2px;border-bottom:1px solid var(--hairline);margin-bottom:20px;overflow-x:auto}
@@ -350,7 +360,10 @@
   .modal .mh p{font-size:12.5px;color:var(--ink-soft);margin-top:3px}
   .modal .mb{padding:20px 22px;display:flex;flex-direction:column;gap:14px}
   .modal label{font-size:11.5px;font-weight:600;color:var(--ink-soft);letter-spacing:.4px;text-transform:uppercase;display:block;margin-bottom:6px}
-  .modal .field{width:100%}
+  .modal .field{width:100%;min-width:0}
+  .modal .mrow{display:grid;gap:12px}
+  .modal .mrow.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .modal .mrow.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
   .modal .mf{padding:16px 22px;background:#FCFAF6;border-top:1px solid var(--hairline);display:flex;gap:10px;justify-content:flex-end}
 
   .empty{padding:50px 20px;text-align:center;color:var(--ink-soft)}

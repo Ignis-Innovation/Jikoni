@@ -10,7 +10,7 @@ import { LoginGate } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
-  findEng, users,
+  findEng, users, kes,
 } from "./data";
 
 export interface Toast { id: number; title: string; sub?: string }
@@ -21,10 +21,60 @@ export interface NewInvoice { cust: string; id: string; tot: number; pillCls: st
 /* ---------- Inventory (Phase 2 — the one net-new module) ---------- */
 export interface StockItem { sku: string; name: string; category: string; unit: string; unitCost: number; reorderLevel: number; onHand: number; autoReq: string | null }
 export interface StockMovement { when: string; sku: string; type: string; qty: number; from: string | null; to: string | null; source: string | null; note: string | null }
-export interface DispatchRow { id: string; project: string | null; destination: string; lines: { sku: string; name: string; qty: number }[]; state: string }
+export interface DispatchRow { id: string; project: string | null; destination: string; lines: { sku: string; name: string; qty: number }[]; state: string; receipt?: string | null }
 export interface AssetRow { id: string; name: string; category: string; cost: number; accumDep: number; nbv: number; acquired: string; state: string }
 export interface InventoryData { items: StockItem[]; locations: string[]; movements: StockMovement[]; dispatches: DispatchRow[]; assets: AssetRow[] }
-export type StockModalMode = "receive" | "issue" | "dispatch" | null;
+export type StockModalMode = "receive" | "issue" | "dispatch" | "transfer" | "adjust" | null;
+// item form is "new" (create) or an existing row (edit); asset form is a simple open flag
+export type ItemModalMode = "new" | StockItem | null;
+
+/* ---------- Staff portal (Phase 2 HR — self-scoped leave) ---------- */
+export interface LeaveBalance { kind: string; year: number; entitled: number; used: number; reserved: number }
+export interface LeaveApp { id: string; kind: string; from: string; to: string; days: number; state: "pending" | "approved" | "rejected" | "cancelled"; docPath?: string | null }
+export interface Payslip { period: string; gross: number; paye: number; nssf: number; shif: number; housing: number; net: number }
+export interface StaffDoc { name: string; version: number; uploaded: string; path?: string | null; category?: string; leaveRef?: string | null }
+export interface HrSummary { leave: LeaveBalance[]; applications: LeaveApp[]; payslips: Payslip[]; docs: StaffDoc[] }
+export interface HrLeaveReq { id: string; who: string; kind: string; from: string; to: string; days: number; reason: string | null; state: string; docPath?: string | null }
+export interface HrBalanceRow { who: string; entitled: number; used: number; reserved: number }
+
+/* ---------- HR module read model (staff / payroll / recruitment / field) ---------- */
+export interface StaffRow {
+  appUserId: string; name: string; email: string; roleTitle: string | null; color: string | null; twoFa: boolean;
+  staffNo: string; contractType: string; startDate: string | null; grossSalary: number; bank: string | null;
+  kraPin: string | null; nssfNo: string | null; shifNo: string | null; state: string;
+  annualEntitled: number; annualUsed: number; docs: StaffDoc[];
+}
+export interface PayrollItemRow { name: string; gross: number; paye: number; nssf: number; shif: number; housing: number; net: number }
+export interface PayrollRun { ref: string; period: string; state: string; totals: { staff: number; gross: number; net: number } | null; items: PayrollItemRow[] }
+export interface CandidateRow { id: string; name: string; email: string | null; stage: string }
+export interface RecruitmentReq { ref: string; roleTitle: string; dept: string | null; state: string; candidates: CandidateRow[] }
+export interface EnumeratorRow { id: string; name: string; county: string | null; idNo: string | null; dailyRate: number; state: string }
+export interface FieldAssignmentRow { id: string; enumerator: string; county: string | null; project: string | null; period: string | null; days: number; perDiem: number; contractDoc: string | null; state: string }
+export interface HrData {
+  staff: StaffRow[];
+  runs: PayrollRun[];
+  recruitment: RecruitmentReq[];
+  enumerators: EnumeratorRow[];
+  fieldAssignments: FieldAssignmentRow[];
+}
+export type HrModalMode =
+  | { kind: "employee" }
+  | { kind: "staffDetail"; staff: StaffRow }
+  | { kind: "requisition" }
+  | { kind: "candidate"; reqRef: string }
+  | { kind: "enumerator" }
+  | { kind: "assignment" }
+  | null;
+
+/* ---------- Partnerships CRM (engagements / partners / opportunities) ---------- */
+export interface CrmEng { id: string; n: string; st: string; o: string; pl: string; plt: string }
+export interface Partner { id: string; name: string; type: string; country: string; ownerName: string; status: string; statusCls: string }
+export interface Opportunity { id: string; name: string; type: string; deadline: string; linkedTo: string; status: string; statusCls: string }
+export interface CrmData {
+  engUp: CrmEng[]; engDown: CrmEng[];
+  partners: Partner[]; opportunities: Opportunity[];
+  dropdowns: Record<string, string[]>; teamNames: string[];
+}
 
 interface AppApi {
   view: string;
@@ -95,6 +145,58 @@ interface AppApi {
   engToProject: Record<string, string>;
   projectToEng: Record<string, string>;
   createProjectFromEng: (id: string) => void;
+  addMilestone: (projectId: string, title: string, status?: string) => void;
+  setMilestoneStatus: (milestoneId: string, status: string) => void;
+  addDrawdown: (projectId: string, title: string, amount: string, status?: string) => void;
+  setDrawdownStatus: (drawdownId: string, status: string) => void;
+  logFieldActivity: (projectId: string, kind: string, county: string, note: string) => void;
+  setProjectState: (projectId: string, state: string) => void;
+
+  hrMe: HrSummary | null;
+  leaveOpen: boolean;
+  leaveEdit: LeaveApp | null;
+  openLeave: () => void;
+  openLeaveEdit: (a: LeaveApp) => void;
+  closeLeave: () => void;
+  applyLeave: (kind: string, from: string, to: string, reason: string, file?: File | null) => void;
+  updateLeave: (ref: string, kind: string, from: string, to: string, reason: string) => void;
+  deleteLeave: (ref: string) => void;
+  addStaffDocument: (file: File, name: string, category: string) => void;
+  deleteStaffDocument: (path: string, name: string) => void;
+  staffDocUrl: (path: string) => Promise<string | null>;
+  hrLeaveQueue: HrLeaveReq[];
+  hrBalances: HrBalanceRow[];
+  decideLeave: (ref: string, approve: boolean) => void;
+
+  // HR module (staff / payroll / recruitment / field workforce)
+  hrData: HrData | null;
+  hrModal: HrModalMode;
+  openHrModal: (m: HrModalMode) => void;
+  closeHrModal: () => void;
+  addEmployee: (v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string }) => void;
+  preparePayroll: (period: string) => void;
+  approvePayroll: (ref: string) => void;
+  postPayroll: (ref: string) => void;
+  createRecruitmentReq: (roleTitle: string, dept: string) => void;
+  addCandidate: (reqRef: string, name: string, email: string, stage: string) => void;
+  advanceCandidate: (id: string, stage: string) => void;
+  createEnumerator: (v: { name: string; county: string; idNo: string; dailyRate: number }) => void;
+  createFieldAssignment: (v: { enumeratorId: string; project: string; period: string; days: number; perDiem: number; contractDoc: string }) => void;
+  setFieldAssignmentState: (id: string, state: string) => void;
+
+  crm: CrmData;
+  engFormOpen: boolean;
+  openEngForm: () => void;
+  closeEngForm: () => void;
+  createEngagement: (name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string) => void;
+  partnerOpen: boolean;
+  openPartnerForm: () => void;
+  closePartnerForm: () => void;
+  createPartner: (name: string, type: string, country: string, owner: string, status: string) => void;
+  oppOpen: boolean;
+  openOppForm: () => void;
+  closeOppForm: () => void;
+  createOpportunity: (name: string, type: string, deadline: string, linkedTo: string, status: string) => void;
 
   inventory: InventoryData | null;
   stockModal: StockModalMode;
@@ -102,7 +204,23 @@ interface AppApi {
   closeStockModal: () => void;
   receiveStock: (sku: string, location: string, qty: number) => void;
   issueStock: (sku: string, location: string, qty: number, reason: string) => void;
+  transferStock: (sku: string, from: string, to: string, qty: number) => void;
+  adjustStock: (sku: string, location: string, newQty: number, reason: string) => void;
   createDispatch: (project: string, destination: string, sku: string, qty: number) => void;
+  setDispatchState: (ref: string, state: "delivered" | "cancelled") => void;
+  attachDispatchReceipt: (ref: string, file: File) => void;
+  receiptUrl: (path: string) => string;
+  itemModal: ItemModalMode;
+  openItemModal: (m: Exclude<ItemModalMode, null>) => void;
+  closeItemModal: () => void;
+  createStockItem: (v: { name: string; category: string; unit: string; unitCost: number; reorderLevel: number; reorderQty: number; budgetCode: string }) => void;
+  updateStockItem: (sku: string, reorderLevel: number, reorderQty: number, unitCost: number) => void;
+  assetOpen: boolean;
+  openAssetForm: () => void;
+  closeAssetForm: () => void;
+  registerAsset: (v: { name: string; category: string; cost: number; lifeMonths: number; acquired: string; salvage: number }) => void;
+  disposeAsset: (ref: string, reason: string) => void;
+  runDepreciation: (period: string) => void;
 }
 
 const Ctx = createContext<AppApi>(null!);
@@ -151,11 +269,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [stockModal, setStockModal] = useState<StockModalMode>(null);
+  const [itemModal, setItemModal] = useState<ItemModalMode>(null);
+  const [assetOpen, setAssetOpen] = useState(false);
+
+  const [hrMe, setHrMe] = useState<HrSummary | null>(null);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaveEdit, setLeaveEdit] = useState<LeaveApp | null>(null);
+  const [hrLeaveQueue, setHrLeaveQueue] = useState<HrLeaveReq[]>([]);
+  const [hrBalances, setHrBalances] = useState<HrBalanceRow[]>([]);
+  const [hrData, setHrData] = useState<HrData | null>(null);
+  const [hrModal, setHrModal] = useState<HrModalMode>(null);
+
+  const [crm, setCrm] = useState<CrmData>({
+    engUp: [], engDown: [], partners: [], opportunities: [], dropdowns: {}, teamNames: [],
+  });
+  const [engFormOpen, setEngFormOpen] = useState(false);
+  const [partnerOpen, setPartnerOpen] = useState(false);
+  const [oppOpen, setOppOpen] = useState(false);
 
   function toast(title: string, sub?: string) {
     const id = ++toastSeq;
     setToasts((t) => [...t, { id, title, sub }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3100);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4500);
   }
 
   /* ---------- auth session (Phase 0: "who is logged in") ---------- */
@@ -178,16 +313,113 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setExtraProjects(data.extraProjects as { name: string; funder: string }[]);
     setEngToProject(data.engToProject as Record<string, string>);
     setProjectToEng(data.projectToEng as Record<string, string>);
-    setInventory(data.inventory as InventoryData);
+    // Dispatch receipts live on a column bootstrap doesn't return — fold them in by ref.
+    const inv = data.inventory as InventoryData;
+    const { data: rc } = await supabase.from("dispatches").select("ref, receipt_path");
+    if (rc) {
+      const byRef = new Map((rc as { ref: string; receipt_path: string | null }[]).map((r) => [r.ref, r.receipt_path]));
+      inv.dispatches = inv.dispatches.map((d) => ({ ...d, receipt: byRef.get(d.id) ?? null }));
+    }
+    setInventory(inv);
+    // Partnerships CRM — engagements (two pipelines), partners, opportunities + editable dropdowns/owners
+    setCrm({
+      engUp: (data.engagements?.up ?? []) as CrmEng[],
+      engDown: (data.engagements?.down ?? []) as CrmEng[],
+      partners: (data.partners ?? []) as Partner[],
+      opportunities: (data.opportunities ?? []) as Opportunity[],
+      dropdowns: (data.crmDropdowns ?? {}) as Record<string, string[]>,
+      teamNames: (data.teamNames ?? []) as string[],
+    });
     // sync the req modal's live budget preview with the ledger (same object the modal imports)
     for (const [k, v] of Object.entries(data.budgetLines as Record<string, { b: number; u: number }>)) {
       if (budgetLines[k]) { budgetLines[k].b = v.b; budgetLines[k].u = v.u; }
     }
     return true;
   }
+  // self-scoped HR record (leave balances + my applications) — my_hr_summary()
+  async function loadHr() {
+    const { data, error } = await supabase.rpc("my_hr_summary");
+    if (error) { toast("Couldn't load your HR record", error.message); return; }
+    setHrMe({
+      leave: (data.leave ?? []) as LeaveBalance[], applications: (data.applications ?? []) as LeaveApp[],
+      payslips: (data.payslips ?? []) as Payslip[], docs: (data.docs ?? []) as StaffDoc[],
+    });
+  }
+
+  // everyone's leave applications, for the HR approvals queue (RLS: read for authenticated)
+  async function loadLeaveQueue() {
+    const { data, error } = await supabase
+      .from("leave_applications")
+      .select("ref, kind, from_date, to_date, days, reason, state, doc_path, applicant:app_users!leave_applications_app_user_id_fkey(name)")
+      .order("created_at", { ascending: false })
+      .limit(30);
+    if (error) { toast("Couldn't load leave queue", error.message); return; }
+    setHrLeaveQueue((data as any[]).map((r) => ({
+      id: r.ref, who: r.applicant?.name ?? "—", kind: r.kind, from: r.from_date, to: r.to_date,
+      days: Number(r.days), reason: r.reason, state: r.state, docPath: r.doc_path ?? null,
+    })));
+    const { data: bals, error: balErr } = await supabase
+      .from("leave_balances")
+      .select("entitled, used, reserved, app_users(name)")
+      .eq("kind", "annual")
+      .eq("year", new Date().getFullYear());
+    if (balErr) { toast("Couldn't load balances", balErr.message); return; }
+    setHrBalances((bals as any[])
+      .map((b) => ({ who: b.app_users?.name ?? "—", entitled: Number(b.entitled), used: Number(b.used), reserved: Number(b.reserved) }))
+      .sort((a, b) => a.who.localeCompare(b.who)));
+  }
+
+  // module-wide HR read model — direct table queries (same pattern as loadLeaveQueue)
+  async function loadHrModule() {
+    const year = new Date().getFullYear();
+    const [sf, lb, pr, rc, en, fa] = await Promise.all([
+      supabase.from("staff_files").select("app_user_id, staff_no, kra_pin, nssf_no, shif_no, contract_type, start_date, gross_salary, bank, docs, state, app_users(name, email, role_title, color, two_fa)"),
+      supabase.from("leave_balances").select("app_user_id, entitled, used").eq("kind", "annual").eq("year", year),
+      supabase.from("payroll_runs").select("ref, period, state, totals, payroll_items(gross, paye, nssf, shif, housing, net, app_users(name))").order("period", { ascending: false }),
+      supabase.from("recruitment_reqs").select("ref, role_title, dept, state, candidates(id, name, email, stage)").order("created_at"),
+      supabase.from("enumerators").select("id, name, county, id_no, daily_rate, state").order("name"),
+      supabase.from("field_assignments").select("id, project_name, period, days, per_diem, contract_doc, state, enumerators(name, county)").order("created_at", { ascending: false }),
+    ]);
+    const err = sf.error || lb.error || pr.error || rc.error || en.error || fa.error;
+    if (err) { toast("Couldn't load HR records", err.message); return; }
+    const balByUser = new Map((lb.data as any[]).map((b) => [b.app_user_id, b]));
+    setHrData({
+      staff: (sf.data as any[]).map((s) => {
+        const b = balByUser.get(s.app_user_id);
+        return {
+          appUserId: s.app_user_id, name: s.app_users?.name ?? "—", email: s.app_users?.email ?? "",
+          roleTitle: s.app_users?.role_title ?? null, color: s.app_users?.color ?? null, twoFa: !!s.app_users?.two_fa,
+          staffNo: s.staff_no, contractType: s.contract_type, startDate: s.start_date, grossSalary: Number(s.gross_salary),
+          bank: s.bank, kraPin: s.kra_pin, nssfNo: s.nssf_no, shifNo: s.shif_no, state: s.state,
+          annualEntitled: b ? Number(b.entitled) : 0, annualUsed: b ? Number(b.used) : 0,
+          docs: (s.docs ?? []) as StaffDoc[],
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name)),
+      runs: (pr.data as any[]).map((r) => ({
+        ref: r.ref, period: r.period, state: r.state, totals: r.totals,
+        items: (r.payroll_items ?? []).map((i: any) => ({
+          name: i.app_users?.name ?? "—", gross: Number(i.gross), paye: Number(i.paye), nssf: Number(i.nssf),
+          shif: Number(i.shif), housing: Number(i.housing), net: Number(i.net),
+        })),
+      })),
+      recruitment: (rc.data as any[]).map((r) => ({
+        ref: r.ref, roleTitle: r.role_title, dept: r.dept, state: r.state,
+        candidates: (r.candidates ?? []).map((c: any) => ({ id: c.id, name: c.name, email: c.email, stage: c.stage })),
+      })),
+      enumerators: (en.data as any[]).map((e) => ({ id: e.id, name: e.name, county: e.county, idNo: e.id_no, dailyRate: Number(e.daily_rate), state: e.state })),
+      fieldAssignments: (fa.data as any[]).map((a) => ({
+        id: a.id, enumerator: a.enumerators?.name ?? "—", county: a.enumerators?.county ?? null, project: a.project_name,
+        period: a.period, days: Number(a.days), perDiem: Number(a.per_diem), contractDoc: a.contract_doc, state: a.state,
+      })),
+    });
+  }
+
   useEffect(() => {
     if (!session) return;
     loadFromDb();
+    loadHr();
+    loadLeaveQueue();
+    loadHrModule();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
@@ -311,6 +543,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     xProject(name);
   }
 
+  /* ---------- project drawer mutations: RPC → upsert one project's detail → toast ---------- */
+  // each RPC returns { name, detail }; we replace just that project so the drawer + all tabs re-render
+  async function projectRpc(fn: string, args: Record<string, unknown>, okTitle: string, okSub: string) {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) { toast("Couldn't save", error.message); return; }
+    const name = data.name as string;
+    setProjectDetails((prev) => ({ ...prev, [name]: data.detail as ProjectDetail }));
+    toast(okTitle, okSub);
+  }
+  const addMilestone = (projectId: string, title: string, status = "todo") =>
+    projectRpc("add_project_milestone", { p_project_id: projectId, p_title: title, p_status: status }, "Milestone added", title);
+  const setMilestoneStatus = (milestoneId: string, status: string) =>
+    projectRpc("set_milestone_status", { p_milestone_id: milestoneId, p_status: status }, "Milestone updated", "Status saved");
+  const addDrawdown = (projectId: string, title: string, amount: string, status = "Requested") =>
+    projectRpc("add_project_drawdown", { p_project_id: projectId, p_title: title, p_amount_txt: amount, p_status: status }, "Drawdown added", `${title} · ${amount}`);
+  const setDrawdownStatus = (drawdownId: string, status: string) =>
+    projectRpc("set_drawdown_status", { p_drawdown_id: drawdownId, p_status: status }, "Drawdown updated", status);
+  const logFieldActivity = (projectId: string, kind: string, county: string, note: string) =>
+    projectRpc("log_field_activity", { p_project_id: projectId, p_kind: kind, p_county: county || null, p_note: note || null }, "Field activity logged", "Recorded against the project");
+  const setProjectState = (projectId: string, state: string) =>
+    projectRpc("set_project_state", { p_project_id: projectId, p_new_state: state }, "Project status updated", state);
+
   /* ---------- invite (Phase 5): least-privilege template + audit; auth account
      is provisioned by scripts/provision-invites.mjs which emails the link ---------- */
   async function sendInvite(name: string, email: string, role: string) {
@@ -319,6 +573,154 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setInviteOpen(false);
     await loadFromDb();
     toast("Invite sent to " + name, "Access set from the " + role + " template — they'll set a password and enrol in 2FA");
+  }
+
+  /* ---------- leave (Phase 2 HR): apply_leave holds the days as reserved,
+     writes the audit log and routes to HR for approval ---------- */
+  async function applyLeave(kind: string, from: string, to: string, reason: string, file?: File | null) {
+    const { data, error } = await supabase.rpc("apply_leave", {
+      p_kind: kind, p_from: from, p_to: to, p_reason: reason.trim() || null,
+    });
+    if (error) { toast("Request not submitted", error.message); return; }
+    setLeaveOpen(false);
+    // optional supporting document (e.g. a sick note) — lands in the personal file, tagged to this request
+    if (file) await uploadStaffDoc(file, "leave", `${kind} note`, data.id);
+    await Promise.all([loadHr(), loadLeaveQueue()]);
+    toast(`${data.id} submitted · ${data.days} ${data.days === 1 ? "day" : "days"} ${kind}`,
+      file ? "Days held, supporting document attached — routed to HR" : "Days held against your balance — routed to HR for approval");
+  }
+
+  // edit / withdraw your own pending request — the reserved-days hold moves or is released
+  async function updateLeave(ref: string, kind: string, from: string, to: string, reason: string) {
+    const { data, error } = await supabase.rpc("update_leave", {
+      p_ref: ref, p_kind: kind, p_from: from, p_to: to, p_reason: reason.trim() || null,
+    });
+    if (error) { toast("Couldn't update request", error.message); return; }
+    setLeaveOpen(false); setLeaveEdit(null);
+    await Promise.all([loadHr(), loadLeaveQueue()]);
+    toast(`${ref} updated · now ${data.days} ${data.days === 1 ? "day" : "days"} ${kind}`, "Still pending — HR sees the new dates");
+  }
+  async function deleteLeave(ref: string) {
+    const { error } = await supabase.rpc("delete_leave", { p_ref: ref });
+    if (error) { toast("Couldn't delete request", error.message); return; }
+    await Promise.all([loadHr(), loadLeaveQueue()]);
+    toast(ref + " deleted", "The held days are back in your balance");
+  }
+
+  // HR decision — decide_leave moves reserved days to used (approve) or releases them (reject)
+  async function decideLeave(ref: string, approve: boolean) {
+    const { error } = await supabase.rpc("decide_leave", { p_ref: ref, p_approve: approve, p_note: null });
+    if (error) { toast(approve ? "Approval failed" : "Rejection failed", error.message); return; }
+    await Promise.all([loadLeaveQueue(), loadHr()]);
+    toast(`${ref} ${approve ? "approved" : "rejected"}`,
+      approve ? "Days deducted from the balance — the employee can see it in their portal" : "Days released back to the balance");
+  }
+
+  /* ---------- HR module mutations: RPC → toast → reload the module read model ---------- */
+  async function addEmployee(v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string }) {
+    const { data, error } = await supabase.rpc("add_employee", {
+      p_name: v.name, p_email: v.email, p_role_title: v.roleTitle || null, p_contract_type: v.contractType,
+      p_start_date: v.startDate || null, p_gross_salary: v.grossSalary, p_kra: v.kra || null,
+      p_nssf: v.nssf || null, p_shif: v.shif || null, p_bank: v.bank || null,
+    });
+    if (error) { toast("Employee not added", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${v.name} added — ${data.staffNo}`, "Staff file created; they link to a login when they first sign in by email");
+  }
+  async function preparePayroll(period: string) {
+    const { data, error } = await supabase.rpc("prepare_payroll", { p_period: period });
+    if (error) { toast("Payroll not prepared", error.message); return; }
+    await loadHrModule();
+    toast(`Payroll ${period} prepared — ${data.id}`, `${data.staff} staff · gross ${kes(Number(data.gross))} · route to a second approver`);
+  }
+  async function approvePayroll(ref: string) {
+    const { error } = await supabase.rpc("approve_payroll", { p_ref: ref });
+    if (error) { toast("Approval failed", error.message); return; }
+    await loadHrModule();
+    toast(`${ref} approved`, "Ready to post — the journal hits Finance and generates the payment file");
+  }
+  async function postPayroll(ref: string) {
+    const { data, error } = await supabase.rpc("post_payroll", { p_ref: ref });
+    if (error) { toast("Posting failed", error.message); return; }
+    await loadHrModule();
+    toast(`${ref} posted — ${data.journal}`, "Payroll journal in the GL; payment file generated; payslips visible in the Staff Portal");
+  }
+  async function createRecruitmentReq(roleTitle: string, dept: string) {
+    const { data, error } = await supabase.rpc("create_recruitment_req", { p_role_title: roleTitle, p_dept: dept || null });
+    if (error) { toast("Requisition not created", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${data.id} opened`, `${roleTitle}${dept ? " · " + dept : ""} — add candidates to the pipeline`);
+  }
+  async function addCandidate(reqRef: string, name: string, email: string, stage: string) {
+    const { error } = await supabase.rpc("add_candidate", { p_req_ref: reqRef, p_name: name, p_email: email || null, p_stage: stage });
+    if (error) { toast("Candidate not added", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${name} added to ${reqRef}`, `In the pipeline at "${stage}"`);
+  }
+  async function advanceCandidate(id: string, stage: string) {
+    const { error } = await supabase.rpc("advance_candidate", { p_candidate_id: id, p_stage: stage });
+    if (error) { toast("Couldn't move candidate", error.message); return; }
+    await loadHrModule();
+    toast("Candidate moved", `Now at "${stage}"`);
+  }
+  async function createEnumerator(v: { name: string; county: string; idNo: string; dailyRate: number }) {
+    const { error } = await supabase.rpc("create_enumerator", { p_name: v.name, p_county: v.county || null, p_id_no: v.idNo || null, p_daily_rate: v.dailyRate });
+    if (error) { toast("Enumerator not added", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${v.name} registered`, v.county ? `Field roster · ${v.county}` : "Added to the field roster");
+  }
+  async function createFieldAssignment(v: { enumeratorId: string; project: string; period: string; days: number; perDiem: number; contractDoc: string }) {
+    const { error } = await supabase.rpc("create_field_assignment", {
+      p_enumerator_id: v.enumeratorId, p_project: v.project || null, p_period: v.period || null,
+      p_days: v.days, p_per_diem: v.perDiem, p_contract_doc: v.contractDoc || null,
+    });
+    if (error) { toast("Assignment not created", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast("Field assignment created", `Per-diem ${kes(v.perDiem)} — awaiting approval`);
+  }
+  async function setFieldAssignmentState(id: string, state: string) {
+    const { error } = await supabase.rpc("set_field_assignment_state", { p_id: id, p_state: state });
+    if (error) { toast("Couldn't update assignment", error.message); return; }
+    await loadHrModule();
+    toast(`Assignment ${state}`, state === "active" ? "Per-diem approved — flows to project accounting" : `Marked ${state}`);
+  }
+
+  /* ---------- Partnerships CRM: create-forms insert via SECURITY DEFINER RPCs
+     (audit-logged, access-gated), then reload so the tables re-render live ---------- */
+  async function createEngagement(name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string) {
+    // stage isn't collected on the form — the RPC starts new engagements at the top of the
+    // funnel; the note ("where we are on the discussion") seeds the engagement's update log
+    const { data, error } = await supabase.rpc("create_engagement", {
+      p_name: name, p_stage: null, p_owner_name: owner, p_pipeline: pipeline,
+      p_next_action: note.trim() || null, p_due_key: dueKey,
+    });
+    if (error) { toast("Engagement not created", error.message); return; }
+    setEngFormOpen(false);
+    await loadFromDb();
+    toast(`${data.id} created`, `${name} · ${owner}${note.trim() ? " · note logged" : ""}`);
+  }
+  async function createPartner(name: string, type: string, country: string, owner: string, status: string) {
+    const { error } = await supabase.rpc("create_partner", {
+      p_name: name, p_type: type, p_country: country, p_owner_name: owner, p_status: status,
+    });
+    if (error) { toast("Partner not added", error.message); return; }
+    setPartnerOpen(false);
+    await loadFromDb();
+    toast(name + " added to the registry", `${type} · ${country} · ${owner}`);
+  }
+  async function createOpportunity(name: string, type: string, deadline: string, linkedTo: string, status: string) {
+    const { error } = await supabase.rpc("create_opportunity", {
+      p_name: name, p_type: type, p_deadline: deadline, p_linked_to: linkedTo, p_status: status,
+    });
+    if (error) { toast("Opportunity not created", error.message); return; }
+    setOppOpen(false);
+    await loadFromDb();
+    toast(name + " added to the map", `${type} · ${status}`);
   }
 
   /* ---------- inventory (Phase 2): mutations hit the ledger, then reload ---------- */
@@ -353,6 +755,130 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadFromDb();
     toast(data.id + " dispatched to " + destination, project ? "Linked to " + project + " — stock issued from the central store" : "Stock issued from the central store");
   }
+  async function transferStock(sku: string, from: string, to: string, qty: number) {
+    const { error } = await supabase.rpc("transfer_stock", { p_sku: sku, p_from: from, p_to: to, p_qty: qty });
+    if (error) { toast("Transfer failed", error.message); return; }
+    setStockModal(null);
+    await loadFromDb();
+    toast(`${qty} × ${sku} transferred`, `${from} → ${to} — two movements posted to the ledger`);
+  }
+  async function adjustStock(sku: string, location: string, newQty: number, reason: string) {
+    const { data, error } = await supabase.rpc("adjust_stock", { p_sku: sku, p_location: location, p_new_qty: newQty, p_reason: reason || null });
+    if (error) { toast("Adjustment failed", error.message); return; }
+    setStockModal(null);
+    await loadFromDb();
+    toast(`${sku} adjusted to ${newQty} in ${location}`, data.delta === 0 ? "No change" : `${data.delta > 0 ? "+" : ""}${data.delta} correction posted to the ledger`);
+  }
+  async function setDispatchState(ref: string, state: "delivered" | "cancelled") {
+    const { error } = await supabase.rpc("set_dispatch_state", { p_ref: ref, p_state: state });
+    if (error) { toast("Couldn't update dispatch", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} ${state}`, state === "delivered" ? "Marked received at the destination" : "Dispatch cancelled");
+  }
+  // Upload a proof-of-delivery receipt for a dispatch → Storage, then record the path.
+  async function attachDispatchReceipt(ref: string, file: File) {
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${ref}/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("dispatch-receipts").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Upload failed", up.error.message); return; }
+    const { error } = await supabase.rpc("attach_dispatch_receipt", { p_ref: ref, p_path: path });
+    if (error) { toast("Couldn't save receipt", error.message); return; }
+    await loadFromDb();
+    toast(`Receipt saved for ${ref}`, "Proof of delivery attached to the dispatch");
+  }
+  // Public URL for a stored receipt path (bucket is public-read).
+  function receiptUrl(path: string) {
+    return supabase.storage.from("dispatch-receipts").getPublicUrl(path).data.publicUrl;
+  }
+
+  /* ---------- staff documents (Phase 2c): private bucket, owner + HR read ---------- */
+  // Upload a file to the caller's own staff file. Returns true on success.
+  async function uploadStaffDoc(file: File, category: string, name?: string, leaveRef?: string) {
+    // path prefix must be the caller's app_user id (enforced by storage RLS)
+    const authId = session?.user?.id;
+    if (!authId) { toast("Not signed in", "Sign in again to upload"); return false; }
+    const { data: me, error: meErr } = await supabase.from("app_users").select("id").eq("auth_id", authId).single();
+    if (meErr || !me) { toast("No staff record", "Your login isn't linked to a staff file"); return false; }
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${me.id}/${category}/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("staff-documents").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Upload failed", up.error.message); return false; }
+    const { error } = await supabase.rpc("add_staff_document", {
+      p_name: name?.trim() || file.name, p_path: up.data.path, p_category: category, p_leave_ref: leaveRef ?? null,
+    });
+    if (error) { toast("Couldn't save document", error.message); return false; }
+    return true;
+  }
+  // Add a document to my own personal file (from the Staff Portal).
+  async function addStaffDocument(file: File, name: string, category: string) {
+    if (await uploadStaffDoc(file, category, name)) {
+      await loadHr();
+      toast("Document added to your file", `${name.trim() || file.name} — visible to you and HR`);
+    }
+  }
+  // Remove a document from my own personal file (metadata + the storage object).
+  async function deleteStaffDocument(path: string, name: string) {
+    const { error } = await supabase.rpc("delete_staff_document", { p_path: path });
+    if (error) { toast("Couldn't delete document", error.message); return; }
+    // best-effort: drop the underlying object too (owner-scoped storage policy)
+    await supabase.storage.from("staff-documents").remove([path]);
+    await loadHr();
+    toast("Document removed", `${name || "The file"} was deleted from your file`);
+  }
+  // Signed URL for a private staff document (owner or HR only, via storage RLS).
+  async function staffDocUrl(path: string) {
+    const { data, error } = await supabase.storage.from("staff-documents").createSignedUrl(path, 120);
+    if (error) { toast("Couldn't open document", error.message); return null; }
+    return data.signedUrl;
+  }
+
+  /* ---------- stock item registry (create / edit) ---------- */
+  async function createStockItem(v: { name: string; category: string; unit: string; unitCost: number; reorderLevel: number; reorderQty: number; budgetCode: string }) {
+    // SKU is auto-generated server-side (the form no longer asks for one)
+    const { data, error } = await supabase.rpc("create_stock_item", {
+      p_name: v.name, p_category: v.category || null, p_unit: v.unit || "unit",
+      p_unit_cost: v.unitCost, p_reorder_level: v.reorderLevel, p_reorder_qty: v.reorderQty,
+      p_budget_code: v.budgetCode || null,
+    });
+    if (error) { toast("Item not created", error.message); return; }
+    setItemModal(null);
+    await loadFromDb();
+    toast(`${v.name} added to the registry`, `${data.sku} — receive stock to open its balance`);
+  }
+  async function updateStockItem(sku: string, reorderLevel: number, reorderQty: number, unitCost: number) {
+    const { error } = await supabase.rpc("update_stock_item", {
+      p_sku: sku, p_reorder_level: reorderLevel, p_reorder_qty: reorderQty, p_unit_cost: unitCost,
+    });
+    if (error) { toast("Item not updated", error.message); return; }
+    setItemModal(null);
+    await loadFromDb();
+    toast(sku + " updated", "Reorder policy and cost saved");
+  }
+
+  /* ---------- assets (register / dispose / depreciate) ---------- */
+  async function registerAsset(v: { name: string; category: string; cost: number; lifeMonths: number; acquired: string; salvage: number }) {
+    const { data, error } = await supabase.rpc("register_asset", {
+      p_name: v.name, p_category: v.category || null, p_cost: v.cost,
+      p_life_months: v.lifeMonths, p_acquired: v.acquired, p_salvage: v.salvage || 0,
+    });
+    if (error) { toast("Asset not registered", error.message); return; }
+    setAssetOpen(false);
+    await loadFromDb();
+    toast(data.id + " registered", `${v.name} — straight-line over ${v.lifeMonths} months`);
+  }
+  async function disposeAsset(ref: string, reason: string) {
+    const { error } = await supabase.rpc("dispose_asset", { p_ref: ref, p_reason: reason || null });
+    if (error) { toast("Couldn't dispose asset", error.message); return; }
+    await loadFromDb();
+    toast(ref + " disposed", "Removed from the active register");
+  }
+  async function runDepreciation(period: string) {
+    const { data, error } = await supabase.rpc("run_depreciation", { p_period: period });
+    if (error) { toast("Depreciation run failed", error.message); return; }
+    await loadFromDb();
+    toast(`Depreciation posted for ${period}`,
+      data.assets ? `${data.assets} asset${data.assets === 1 ? "" : "s"} · KES ${Number(data.total).toLocaleString()} to the GL` : "Nothing to post — already run or fully depreciated");
+  }
 
   const api: AppApi = {
     view, tabs, go, goTab, mainRef,
@@ -374,9 +900,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     invOpen, openInvoice: () => setInvOpen(true), closeInvoice: () => setInvOpen(false),
     submitInvoice, newInvoices,
     projectDetails, extraProjects, engToProject, projectToEng, createProjectFromEng,
+    addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
+    hrMe, leaveOpen, leaveEdit,
+    openLeave: () => { setLeaveEdit(null); setLeaveOpen(true); },
+    openLeaveEdit: (a) => { setLeaveEdit(a); setLeaveOpen(true); },
+    closeLeave: () => { setLeaveOpen(false); setLeaveEdit(null); },
+    applyLeave, updateLeave, deleteLeave, addStaffDocument, deleteStaffDocument, staffDocUrl,
+    hrLeaveQueue, hrBalances, decideLeave,
+    hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
+    addEmployee, preparePayroll, approvePayroll, postPayroll,
+    createRecruitmentReq, addCandidate, advanceCandidate, createEnumerator, createFieldAssignment, setFieldAssignmentState,
+    crm,
+    engFormOpen, openEngForm: () => setEngFormOpen(true), closeEngForm: () => setEngFormOpen(false), createEngagement,
+    partnerOpen, openPartnerForm: () => setPartnerOpen(true), closePartnerForm: () => setPartnerOpen(false), createPartner,
+    oppOpen, openOppForm: () => setOppOpen(true), closeOppForm: () => setOppOpen(false), createOpportunity,
     inventory, stockModal,
     openStockModal: (m) => setStockModal(m), closeStockModal: () => setStockModal(null),
-    receiveStock, issueStock, createDispatch,
+    receiveStock, issueStock, transferStock, adjustStock, createDispatch, setDispatchState, attachDispatchReceipt, receiptUrl,
+    itemModal, openItemModal: (m) => setItemModal(m), closeItemModal: () => setItemModal(null),
+    createStockItem, updateStockItem,
+    assetOpen, openAssetForm: () => setAssetOpen(true), closeAssetForm: () => setAssetOpen(false),
+    registerAsset, disposeAsset, runDepreciation,
   };
 
   if (!authReady) return null;

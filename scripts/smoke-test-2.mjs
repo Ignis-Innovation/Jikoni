@@ -51,6 +51,25 @@ try {
   const dep2 = await rpc(`public.run_depreciation('2026-07')`);
   console.log("— depreciation re-run (same period):", dep2.assets, "assets (idempotent)");
 
+  console.log("=== Phase 2a+: Inventory management (0013) ===");
+  const ni = await rpc(`public.create_stock_item('CKR-60', 'Institutional cooker — 60L', 'Cookstoves', 'unit', 72000, 8, 12, 'Deployment')`);
+  console.log("— new item:", ni.sku, "onHand:", ni.onHand, "(opens at zero)");
+  await expectFail("duplicate SKU", `public.create_stock_item('CKR-60', 'dupe', null, 'unit', 1, 0, 0, null)`);
+  const ui = await rpc(`public.update_stock_item('CKR-60', 15, 20, 75000)`);
+  console.log("— item updated → reorder", ui.reorderLevel, "cost", ui.unitCost);
+  const auto = await rpc(`public.create_stock_item(null, 'Unnamed spare part', 'Spares', 'unit', 500, 3, 6, null)`);
+  console.log("— item with no SKU → auto-assigned:", auto.sku);
+  await expectFail("item with no name", `public.create_stock_item(null, '', null, 'unit', 1, 0, 0, null)`);
+  const nib = await rpc(`public.bootstrap()`);
+  console.log("— new zero-stock item appears in bootstrap:", nib.inventory.items.some((i) => i.sku === 'CKR-60'));
+  const sds = await rpc(`public.set_dispatch_state('${dsp.id}', 'delivered')`);
+  console.log("— dispatch state advanced:", JSON.stringify(sds));
+  await expectFail("invalid dispatch transition (delivered→dispatched)", `public.set_dispatch_state('${dsp.id}', 'dispatched')`);
+  const da = await rpc(`public.dispose_asset('AST-098', 'end of life')`);
+  console.log("— asset disposed:", JSON.stringify(da), "| state now:",
+    (await q(`select state from assets where ref='AST-098'`))[0].state);
+  await expectFail("dispose already-disposed asset", `public.dispose_asset('AST-098', null)`);
+
   console.log("=== Phase 2b: HR / Payroll ===");
   console.log("— calc 300k gross:", JSON.stringify(await rpc(`public.calc_payroll_item(300000)`)));
   const prl = await rpc(`public.prepare_payroll('2026-07')`);

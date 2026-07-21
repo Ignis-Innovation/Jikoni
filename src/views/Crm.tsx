@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useApp } from "../store";
 import { crmData } from "../data";
-import { Pulse, Note } from "../components/ui";
+import { Pulse } from "../components/ui";
 import { Donut, ChartLegend, Bars } from "../components/charts";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
@@ -23,10 +23,17 @@ const mix = [
 ];
 
 export default function CrmView() {
-  const { tabs, toast, openEng } = useApp();
+  const { tabs, openEng, crm, openEngForm, openPartnerForm, openOppForm } = useApp();
   const tab = tabs.crm;
   const [pipeline, setPipeline] = useState<"up" | "down">("up");
   const d = crmData[pipeline];
+  const engRows = pipeline === "up" ? crm.engUp : crm.engDown;
+
+  // the primary action follows the active sub-tab so it never says "New engagement" on the Partners tab
+  const headerAction =
+    tab === "cr-partners" ? { label: "Add partner", onClick: openPartnerForm } :
+    tab === "cr-opps" ? { label: "New opportunity", onClick: openOppForm } :
+    { label: "New engagement", onClick: openEngForm };
 
   return (
     <>
@@ -36,7 +43,7 @@ export default function CrmView() {
           <p>One engagement engine, two views — upstream capital and downstream deployment in the same query.</p>
         </div>
         <div className="actions">
-          <button className="btn primary" onClick={() => toast("New engagement", "Create a partner engagement with owner, stage and next action")}><PlusI />New engagement</button>
+          <button className="btn primary" onClick={headerAction.onClick}><PlusI />{headerAction.label}</button>
         </div>
       </div>
       <Crumb view="crm" />
@@ -119,7 +126,10 @@ export default function CrmView() {
             <table className="tbl">
               <thead><tr><th>ID</th><th>Partner</th><th>Stage</th><th>Owner</th><th>Next action</th></tr></thead>
               <tbody>
-                {d.rows.map((r) => (
+                {engRows.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No {pipeline === "up" ? "upstream" : "downstream"} engagements yet — use “New engagement” above.</td></tr>
+                )}
+                {engRows.map((r) => (
                   <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => openEng(r.id)}>
                     <td className="mono" style={{ color: "var(--flame)", fontWeight: 600 }}>{r.id}</td>
                     <td><strong>{r.n}</strong></td>
@@ -146,57 +156,24 @@ export default function CrmView() {
           <div className="panel">
             <div className="panel-h">
               <h3>Partner registry</h3>
-              <span className="meta">
-                <a href="#" onClick={(e) => { e.preventDefault(); toast("New partner", "Add an organisation to the registry"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add partner</a>
-              </span>
+              <span className="meta">funders · investors · institutions · distributors</span>
             </div>
             <table className="tbl">
               <thead><tr><th>Organisation</th><th>Type</th><th>Country</th><th>Owner</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td>Charm Impact</td><td>Blended funder</td><td>UK / KE</td><td>Wilson</td><td><span className="pill week">Term sheet</span></td></tr>
-                <tr><td>EAIF</td><td>Concessional debt</td><td>UK</td><td>Wilson</td><td><span className="pill today">Negotiation</span></td></tr>
-                <tr><td>KIICO</td><td>Equity investor</td><td>KE</td><td>Wilson</td><td><span className="pill today">Materials</span></td></tr>
-                <tr><td>Signum Capital</td><td>Equity investor</td><td>SG</td><td>Wilson</td><td><span className="pill over">Holding</span></td></tr>
-                <tr><td>UNDP / WAIIS</td><td>Programme / TA</td><td>KE</td><td>Wilson</td><td><span className="pill week">Discovery</span></td></tr>
-                <tr><td>Stanbic Bank</td><td>Lender (Uganda)</td><td>UG</td><td>Wilson</td><td><span className="pill done">Ready to fund</span></td></tr>
-                <tr><td>Makueni County VTCs</td><td>Institution</td><td>KE</td><td>Elizabeth</td><td><span className="pill today">Contracting</span></td></tr>
-                <tr><td>Catholic Diocese — Machakos</td><td>Institution</td><td>KE</td><td>Elizabeth</td><td><span className="pill week">EOI</span></td></tr>
-                <tr><td>BURN Manufacturing</td><td>Manufacturer</td><td>KE</td><td>Elizabeth</td><td><span className="pill done">Active</span></td></tr>
-                <tr><td>CLASP</td><td>TA / convener</td><td>Global</td><td>Elizabeth</td><td><span className="pill week">Site visit</span></td></tr>
+                {crm.partners.length === 0 ? (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No partners yet — use “Add partner” above.</td></tr>
+                ) : crm.partners.map((p) => (
+                  <tr key={p.id}>
+                    <td><strong>{p.name}</strong></td>
+                    <td>{p.type}</td>
+                    <td>{p.country}</td>
+                    <td>{p.ownerName}</td>
+                    <td><span className={`pill ${p.statusCls}`}>{p.status}</span></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {tab === "cr-inst" && (
-        <div className="crm-panel active">
-          <div className="grid g-2">
-            <div className="panel">
-              <div className="panel-h"><h3>Institution pipeline</h3><span className="meta">downstream · tier &amp; EOI stage</span></div>
-              <table className="tbl">
-                <thead><tr><th>Institution</th><th>County</th><th>Tier</th><th>Stage</th></tr></thead>
-                <tbody>
-                  <tr><td>Makueni County VTCs</td><td>Makueni</td><td><span className="tag std">A</span></td><td><span className="pill today">Contracting</span></td></tr>
-                  <tr><td>Catholic Diocese</td><td>Machakos</td><td><span className="tag std">B</span></td><td><span className="pill week">EOI</span></td></tr>
-                  <tr><td>Kiambu cluster</td><td>Kiambu</td><td><span className="tag std">A</span></td><td><span className="pill week">Site visit</span></td></tr>
-                  <tr><td>Nakuru institutions</td><td>Nakuru</td><td><span className="tag view">C</span></td><td><span className="pill week">Identification</span></td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div className="panel">
-              <div className="panel-h"><h3>Pipeline by stage</h3><span className="meta">institutions</span></div>
-              <div className="pad">
-                <Bars rows={[
-                  { l: "Identification", n: "61", w: 100, c: "var(--flame)" },
-                  { l: "EOI", n: "38", w: 63, c: "var(--flame)" },
-                  { l: "Site visit", n: "19", w: 31, c: "var(--ember)" },
-                  { l: "Contracting", n: "11", w: 18, c: "var(--ember)" },
-                  { l: "Deployed", n: "7", w: 12, c: "var(--green)" },
-                ]} />
-              </div>
-              <Note>This pipeline draws on the institution readiness scoring. Open item: whether it lives here or in CleanCookIQ, or syncs between the two.</Note>
-            </div>
           </div>
         </div>
       )}
@@ -208,55 +185,23 @@ export default function CrmView() {
             <table className="tbl">
               <thead><tr><th>Opportunity</th><th>Type</th><th>Deadline</th><th>Linked to</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td>Africa Clean Cooking Summit</td><td>Convening</td><td className="mono">9–10 Jul</td><td>Multiple</td><td><span className="pill done">On track</span></td></tr>
-                <tr><td>Accelerate Africa cohort</td><td>Accelerator</td><td className="mono">Rolling</td><td>Concept note</td><td><span className="pill today">Applying</span></td></tr>
-                <tr><td>FCDO Uganda window</td><td>Grant / TA</td><td className="mono">Q3</td><td>ENG (FCDO)</td><td><span className="pill week">Discovery</span></td></tr>
-                <tr><td>Carbon finance window</td><td>Climate finance</td><td className="mono">Q4</td><td>MRV readiness</td><td><span className="pill week">Watching</span></td></tr>
-                <tr><td>County institutional RFP</td><td>Tender</td><td className="mono">Aug</td><td>Downstream</td><td><span className="pill week">Preparing</span></td></tr>
+                {crm.opportunities.length === 0 ? (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No opportunities yet — use “New opportunity” above.</td></tr>
+                ) : crm.opportunities.map((o) => (
+                  <tr key={o.id}>
+                    <td><strong>{o.name}</strong></td>
+                    <td>{o.type}</td>
+                    <td className="mono">{o.deadline}</td>
+                    <td>{o.linkedTo}</td>
+                    <td><span className={`pill ${o.statusCls}`}>{o.status}</span></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {tab === "cr-analytics" && (
-        <div className="crm-panel active">
-          <div className="panel" style={{ marginBottom: 18 }}>
-            <div className="panel-h"><h3>Upstream capital vs $3M target</h3><span className="meta">committed · USD</span></div>
-            <div className="raise">
-              <div className="top"><div className="big">$1.35M</div><div className="of">committed of $3.0M target</div></div>
-              <div className="meter">
-                <div className="seg" style={{ background: "var(--flame)", width: "18%" }}>Equity</div>
-                <div className="seg" style={{ background: "var(--ember)", width: "27%" }}>Concessional</div>
-              </div>
-              <div className="legend">
-                <span><i style={{ background: "var(--flame)" }} /> Equity · $0.55M</span>
-                <span><i style={{ background: "var(--ember)" }} /> Concessional · $0.80M</span>
-                <span><i style={{ background: "#F1EDE5" }} /> Remaining · $1.65M</span>
-              </div>
-            </div>
-          </div>
-          <div className="grid g-2">
-            <div className="panel">
-              <div className="panel-h"><h3>Activity by owner</h3><span className="meta">engagements owned</span></div>
-              <div className="pad">
-                <Bars rows={[
-                  { l: "Wilson", n: "14", w: 100, c: "var(--flame)" },
-                  { l: "Elizabeth", n: "11", w: 79, c: "var(--flame)" },
-                  { l: "Dennis", n: "4", w: 29, c: "var(--flame)" },
-                ]} />
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel-h"><h3>Conversion</h3><span className="meta">last quarter</span></div>
-              <div className="recon"><span>Upstream discovery → term sheet</span><span className="mono">22%</span></div>
-              <div className="recon"><span>Downstream EOI → contracting</span><span className="mono">29%</span></div>
-              <div className="recon"><span>Avg days in stage</span><span className="mono">31</span></div>
-              <div className="recon"><span>Stalled (no touch 14d+)</span><span className="pill today">5</span></div>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }

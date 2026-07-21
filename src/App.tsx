@@ -4,7 +4,7 @@ import { flagColors } from "./data";
 import { moduleLabels, subnavs } from "./nav";
 import {
   BrandMark, ChevDown, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
-  ReadyI, ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI, BoxI,
+  ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI, BoxI,
 } from "./components/icons";
 import { Toasts } from "./components/ui";
 import HomeView from "./views/Home";
@@ -22,7 +22,7 @@ import ComplianceView from "./views/Compliance";
 import UsersView from "./views/Users";
 import SettingsView from "./views/Settings";
 import { EngDrawer, VendorDrawer, ProjectDrawer, AccessDrawer } from "./components/drawers";
-import { InviteModal, TaskModal, ReqModal, POModal, InvoiceModal } from "./components/modals";
+import { InviteModal, TaskModal, ReqModal, POModal, InvoiceModal, LeaveModal, EngagementModal, PartnerModal, OpportunityModal } from "./components/modals";
 
 const views: Record<string, React.ComponentType> = {
   home: HomeView, deploy: DeployView, readiness: ReadinessView, raise: RaiseView,
@@ -119,7 +119,6 @@ function Sidebar() {
 
         <div className="nav-group">Deployment</div>
         <NavItem v="deploy" icon={<FlameI />} label="Deployment & Carbon" />
-        <NavItem v="readiness" icon={<ReadyI />} label="Institution Readiness" />
         <NavModule v="projects" icon={<ProjectsI />} collapsed={collapsed("projects")} setCollapsed={setCollapsed("projects")} />
 
         <div className="nav-group">Growth</div>
@@ -205,6 +204,10 @@ function Shell() {
       <ReqModal />
       <POModal />
       <InvoiceModal />
+      <LeaveModal />
+      <EngagementModal />
+      <PartnerModal />
+      <OpportunityModal />
       <Toasts />
     </>
   );

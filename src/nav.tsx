@@ -59,9 +59,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "cr-over", l: "Overview" },
     { t: "cr-eng", l: "Engagements" },
     { t: "cr-partners", l: "Partners" },
-    { t: "cr-inst", l: "Institution Pipeline" },
     { t: "cr-opps", l: "Opportunities" },
-    { t: "cr-analytics", l: "Analytics" },
   ],
   compliance: [
     { t: "c-policies", l: "Policies & Manuals" },

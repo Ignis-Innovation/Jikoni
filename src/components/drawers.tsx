@@ -219,10 +219,42 @@ export function VendorDrawer() {
 }
 
 /* ================= PROJECT ================= */
+const MS_OPTS: [string, string][] = [["done", "Complete"], ["now", "In progress"], ["todo", "Upcoming"]];
+const DD_OPTS = ["Requested", "Received", "On schedule", "Cancelled"];
+const STATE_NEXT: Record<string, { to: string; label: string }> = {
+  setup: { to: "active", label: "Activate project" },
+  active: { to: "reporting", label: "Move to reporting" },
+  reporting: { to: "closed", label: "Close project" },
+};
+const ACT_KINDS: [string, string][] = [["site_visit", "Site visit"], ["install", "Installation"], ["readiness_assessment", "Readiness assessment"]];
+const smallField = { padding: "4px 8px", fontSize: 11.5, width: "auto" } as const;
+
 export function ProjectDrawer() {
-  const { projectName, closeProject, toast, projectDetails, projectToEng, xEng, xTab } = useApp();
+  const {
+    projectName, closeProject, toast, projectDetails, projectToEng, xEng, xTab,
+    addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
+  } = useApp();
   const p = projectName ? projectDetails[projectName] : null;
   const ms: Record<string, [string, string]> = { done: ["done", "Complete"], now: ["today", "In progress"], todo: ["week", "Upcoming"] };
+
+  const [msTitle, setMsTitle] = useState("");
+  const [ddTitle, setDdTitle] = useState("");
+  const [ddAmt, setDdAmt] = useState("");
+  const [showAct, setShowAct] = useState(false);
+  const [actKind, setActKind] = useState("site_visit");
+  const [actCounty, setActCounty] = useState("");
+  const [actNote, setActNote] = useState("");
+  useEffect(() => {
+    setMsTitle(""); setDdTitle(""); setDdAmt("");
+    setShowAct(false); setActKind("site_visit"); setActCounty(""); setActNote("");
+  }, [projectName]);
+
+  const next = p?.state ? STATE_NEXT[p.state] : undefined;
+  const submitActivity = () => {
+    if (!p?.id) return;
+    logFieldActivity(p.id, actKind, actCounty, actNote);
+    setActNote(""); setActCounty(""); setShowAct(false);
+  };
 
   return (
     <DrawerShell
@@ -240,7 +272,7 @@ export function ProjectDrawer() {
       }
       footer={
         <>
-          <button className="btn" onClick={() => toast("Log activity", "Record a site visit or deliverable")}>Log activity</button>
+          <button className="btn" onClick={() => setShowAct((s) => !s)}>Log activity</button>
           <button className="btn primary" onClick={() => toast("Generate report", "Draft the funder report from live data")}>Generate report</button>
         </>
       }
@@ -252,6 +284,10 @@ export function ProjectDrawer() {
             <span className="acc-chip">Budget {p.budget}</span>
             <span className="acc-chip full">Spent {p.spent} · {p.pct}</span>
           </div>
+          {p.id && next && (
+            <button className="btn" style={{ padding: "5px 11px", fontSize: 12, marginTop: 4 }}
+              onClick={() => setProjectState(p.id!, next.to)}>{next.label} →</button>
+          )}
           <div className="eng-sec">Overview</div>
           <div>
             <div className="recon" style={{ padding: "8px 0" }}><span>Funder</span><span className="mono">{p.funder}</span></div>
@@ -259,27 +295,66 @@ export function ProjectDrawer() {
             <div className="recon" style={{ padding: "8px 0" }}><span>Reporting</span><span className="mono">{p.reporting}</span></div>
             <div className="recon" style={{ padding: "8px 0" }}><span>Field activity</span><span className="mono">{p.field}</span></div>
           </div>
+          {showAct && p.id && (
+            <div style={{ background: "#FCFAF6", borderRadius: 10, padding: 12, marginTop: 8 }}>
+              <div className="eng-sec" style={{ marginTop: 0 }}>Log field activity</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <select className="field" style={smallField} value={actKind} onChange={(e) => setActKind(e.target.value)}>
+                  {ACT_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+                <input className="field" style={{ ...smallField, flex: 1 }} placeholder="County (optional)" value={actCounty} onChange={(e) => setActCounty(e.target.value)} />
+              </div>
+              <input className="field" style={{ width: "100%", marginTop: 8 }} placeholder="Note (optional)" value={actNote} onChange={(e) => setActNote(e.target.value)} />
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setShowAct(false)}>Cancel</button>
+                <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={submitActivity}>Log activity</button>
+              </div>
+            </div>
+          )}
           <div className="eng-sec">Milestones</div>
           <div>
             {p.milestones.map((m, i) => (
-              <div className="recon" style={{ padding: "8px 0" }} key={i}>
+              <div className="recon" style={{ padding: "8px 0" }} key={m.id ?? i}>
                 <span>{m.t}</span>
-                <span className={`pill ${ms[m.s][0]}`}>{ms[m.s][1]}</span>
+                {m.id
+                  ? <select className="field" style={smallField} value={m.s} onChange={(e) => setMilestoneStatus(m.id!, e.target.value)}>
+                      {MS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  : <span className={`pill ${ms[m.s][0]}`}>{ms[m.s][1]}</span>}
               </div>
             ))}
+            {p.id && (
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} placeholder="New milestone…" value={msTitle} onChange={(e) => setMsTitle(e.target.value)} />
+                <button className="btn" style={{ padding: "5px 10px", fontSize: 11.5 }} disabled={!msTitle.trim()}
+                  onClick={() => { addMilestone(p.id!, msTitle.trim()); setMsTitle(""); }}><PlusI />Add</button>
+              </div>
+            )}
           </div>
           <div className="eng-sec">Drawdowns</div>
           <div>
             {p.drawdowns.map((d, i) => (
-              <div className="recon" style={{ padding: "8px 0" }} key={i}>
+              <div className="recon" style={{ padding: "8px 0" }} key={d.id ?? i}>
                 <span>
                   {d.t}
                   <br />
                   <small style={{ color: "var(--ink-soft)", fontFamily: "var(--mono)" }}>{d.v}</small>
                 </span>
-                <span className={`pill ${d.s === "Received" ? "done" : "today"}`}>{d.s}</span>
+                {d.id
+                  ? <select className="field" style={smallField} value={DD_OPTS.includes(d.s) ? d.s : "Requested"} onChange={(e) => setDrawdownStatus(d.id!, e.target.value)}>
+                      {DD_OPTS.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  : <span className={`pill ${d.s === "Received" ? "done" : "today"}`}>{d.s}</span>}
               </div>
             ))}
+            {p.id && (
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <input className="field" style={{ flex: 2, padding: "5px 9px", fontSize: 12 }} placeholder="Tranche…" value={ddTitle} onChange={(e) => setDdTitle(e.target.value)} />
+                <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} placeholder="Amount" value={ddAmt} onChange={(e) => setDdAmt(e.target.value)} />
+                <button className="btn" style={{ padding: "5px 10px", fontSize: 11.5 }} disabled={!ddTitle.trim() || !ddAmt.trim()}
+                  onClick={() => { addDrawdown(p.id!, ddTitle.trim(), ddAmt.trim()); setDdTitle(""); setDdAmt(""); }}><PlusI />Add</button>
+              </div>
+            )}
           </div>
           <div className="eng-sec">Documents</div>
           <div>

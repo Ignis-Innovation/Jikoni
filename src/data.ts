@@ -271,6 +271,8 @@ export const vendorDetails: Record<string, VendorDetail> = {
 
 /* ----- project records ----- */
 export interface ProjectDetail {
+  id?: string;
+  state?: string;
   funder: string;
   status: string;
   budget: string;
@@ -278,8 +280,8 @@ export interface ProjectDetail {
   pct: string;
   timeline: string;
   team: string;
-  milestones: { t: string; s: "done" | "now" | "todo" }[];
-  drawdowns: { t: string; v: string; s: string }[];
+  milestones: { id?: string; t: string; s: "done" | "now" | "todo" }[];
+  drawdowns: { id?: string; t: string; v: string; s: string }[];
   reporting: string;
   field: string;
   docs: string[];
@@ -458,6 +460,44 @@ export const budgetLines: Record<string, { b: number; u: number }> = {
 };
 
 export const kes = (n: number) => "KES " + Math.round(n).toLocaleString();
+
+// Fixed-asset categories for the register dropdown — the classes Jikoni actually holds.
+export const assetCategories = [
+  "Vehicles",
+  "ICT & computers",
+  "Furniture & fittings",
+  "Office equipment",
+  "Machinery & equipment",
+  "Tools & field equipment",
+  "Solar & power equipment",
+  "Buildings",
+  "Land",
+  "Leasehold improvements",
+];
+
+// HR dropdowns — mirror the DB check constraints so the form can't post an invalid value.
+export const contractTypes = [
+  { value: "permanent", label: "Permanent" },
+  { value: "fixed_term", label: "Fixed-term" },
+  { value: "casual", label: "Casual" },
+  { value: "consultant", label: "Consultant" },
+];
+export const hrDepartments = ["Operations", "Finance", "Partnerships", "Commercial / BD", "Tech", "Leadership", "Field"];
+export const candidateStages = ["applied", "screened", "interviewed", "offer", "hired", "rejected"];
+
+// Kenyan counties + a few common towns — powers the destination typeahead on dispatches.
+// Free-text is still allowed (e.g. "Makueni VTC cluster"); this just suggests real places.
+export const kenyaLocations = [
+  "Mombasa", "Kwale", "Kilifi", "Tana River", "Lamu", "Taita Taveta",
+  "Garissa", "Wajir", "Mandera", "Marsabit", "Isiolo", "Meru",
+  "Tharaka Nithi", "Embu", "Kitui", "Machakos", "Makueni", "Nyandarua",
+  "Nyeri", "Kirinyaga", "Murang'a", "Kiambu", "Turkana", "West Pokot",
+  "Samburu", "Trans Nzoia", "Uasin Gishu", "Elgeyo Marakwet", "Nandi",
+  "Baringo", "Laikipia", "Nakuru", "Narok", "Kajiado", "Kericho",
+  "Bomet", "Kakamega", "Vihiga", "Bungoma", "Busia", "Siaya",
+  "Kisumu", "Homa Bay", "Migori", "Kisii", "Nyamira", "Nairobi",
+  "Thika", "Naivasha", "Eldoret", "Nyahururu", "Malindi", "Kitale",
+];
 
 export function reqRouting(a: number) {
   if (!a) return null;

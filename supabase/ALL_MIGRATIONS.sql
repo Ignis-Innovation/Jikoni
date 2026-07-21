@@ -3221,3 +3221,1352 @@ end $$;
 -- been in every transition since Phase 0 — not a rebuild.
 update public.app_config set value = 'true'::jsonb, updated_at = now() where key = 'enforce_access';
 
+-- ============================================================
+-- 0009 · Leave self-service — edit / delete your own request
+-- The applicant can change or withdraw a request only while it
+-- is still pending (before HR decides). The reserved-days hold
+-- moves with the edit and is released on delete. Audited.
+-- ============================================================
+
+create or replace function public.update_leave(p_ref text, p_kind text, p_from date, p_to date, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  l record; bal record; v_days numeric;
+begin
+  if v_me is null then raise exception 'No staff record for this login'; end if;
+  select * into l from public.leave_applications where ref = p_ref;
+  if not found then raise exception 'Leave application % not found', p_ref; end if;
+  if l.app_user_id <> v_me then raise exception 'You can only edit your own leave request'; end if;
+  if l.state <> 'pending' then raise exception 'Only pending requests can be edited — % is already %', p_ref, l.state; end if;
+  if p_to < p_from then raise exception 'End date is before start date'; end if;
+  v_days := (p_to - p_from) + 1;
+
+  -- release the old hold, then take the new one (kind/year may have changed)
+  update public.leave_balances set reserved = reserved - l.days
+  where app_user_id = v_me and kind = l.kind and year = extract(year from l.from_date)::int;
+
+  select * into bal from public.leave_balances
+  where app_user_id = v_me and kind = p_kind and year = extract(year from p_from)::int;
+  if not found then raise exception 'No % leave balance for %', p_kind, extract(year from p_from)::int; end if;
+  if v_days > bal.entitled - bal.used - bal.reserved then
+    raise exception 'Insufficient balance: % days requested, % available', v_days, bal.entitled - bal.used - bal.reserved;
+  end if;
+  update public.leave_balances set reserved = reserved + v_days
+  where app_user_id = v_me and kind = p_kind and year = extract(year from p_from)::int;
+
+  update public.leave_applications
+  set kind = p_kind, from_date = p_from, to_date = p_to, days = v_days,
+      reason = coalesce(p_reason, reason), updated_at = now()
+  where id = l.id;
+
+  perform public.audit_write('leave.updated','leave', p_ref,
+    jsonb_build_object('kind', p_kind, 'from', p_from, 'to', p_to, 'days', v_days));
+  return jsonb_build_object('id', p_ref, 'days', v_days, 'state', 'pending');
+end $$;
+
+create or replace function public.delete_leave(p_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  l record;
+begin
+  if v_me is null then raise exception 'No staff record for this login'; end if;
+  select * into l from public.leave_applications where ref = p_ref;
+  if not found then raise exception 'Leave application % not found', p_ref; end if;
+  if l.app_user_id <> v_me then raise exception 'You can only delete your own leave request'; end if;
+  if l.state <> 'pending' then raise exception 'Only pending requests can be deleted — % is already %', p_ref, l.state; end if;
+
+  update public.leave_balances set reserved = reserved - l.days
+  where app_user_id = v_me and kind = l.kind and year = extract(year from l.from_date)::int;
+  delete from public.leave_applications where id = l.id;
+
+  perform public.audit_write('leave.deleted','leave', p_ref,
+    jsonb_build_object('kind', l.kind, 'from', l.from_date, 'to', l.to_date, 'days', l.days));
+  return jsonb_build_object('id', p_ref, 'state', 'deleted');
+end $$;
+
+do $$
+declare fn text;
+begin
+  foreach fn in array array['update_leave(text,text,date,date,text)','delete_leave(text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+-- ============================================================
+-- 0010 · Leave overlap guard
+-- A new or edited request may not overlap any of the applicant's
+-- own pending or approved leave — you can't be on leave twice.
+-- Rejected / cancelled requests don't block the dates.
+-- ============================================================
+
+create or replace function public.apply_leave(p_kind text, p_from date, p_to date, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_days numeric; v_ref text; bal record; clash record;
+  v_year int := extract(year from p_from)::int;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  if v_me is null then raise exception 'No staff record for this login'; end if;
+  if p_to < p_from then raise exception 'End date is before start date'; end if;
+  v_days := (p_to - p_from) + 1;
+
+  select ref, from_date, to_date, state into clash
+  from public.leave_applications
+  where app_user_id = v_me and state in ('pending','approved')
+    and from_date <= p_to and to_date >= p_from
+  limit 1;
+  if found then
+    if clash.state = 'approved' then
+      raise exception 'You are already booked on leave from % to %. Please choose dates outside that range.',
+        to_char(clash.from_date, 'DD Mon'), to_char(clash.to_date, 'DD Mon');
+    else
+      raise exception 'You already have a pending request covering % to %. Edit or delete it under My leave requests instead.',
+        to_char(clash.from_date, 'DD Mon'), to_char(clash.to_date, 'DD Mon');
+    end if;
+  end if;
+
+  select * into bal from public.leave_balances where app_user_id = v_me and kind = p_kind and year = v_year;
+  if not found then raise exception 'No % leave balance for %', p_kind, v_year; end if;
+  if v_days > bal.entitled - bal.used - bal.reserved then
+    raise exception 'Insufficient balance: % days requested, % available', v_days, bal.entitled - bal.used - bal.reserved;
+  end if;
+  v_ref := public.next_ref('LV');
+  insert into public.leave_applications(ref, entity_id, app_user_id, kind, from_date, to_date, days, reason)
+  values (v_ref, v_entity, v_me, p_kind, p_from, p_to, v_days, p_reason);
+  update public.leave_balances set reserved = reserved + v_days
+  where app_user_id = v_me and kind = p_kind and year = v_year;
+  perform public.audit_write('leave.applied','leave', v_ref,
+    jsonb_build_object('kind', p_kind, 'from', p_from, 'to', p_to, 'days', v_days));
+  return jsonb_build_object('id', v_ref, 'days', v_days, 'state', 'pending');
+end $$;
+
+create or replace function public.update_leave(p_ref text, p_kind text, p_from date, p_to date, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  l record; bal record; clash record; v_days numeric;
+begin
+  if v_me is null then raise exception 'No staff record for this login'; end if;
+  select * into l from public.leave_applications where ref = p_ref;
+  if not found then raise exception 'Leave application % not found', p_ref; end if;
+  if l.app_user_id <> v_me then raise exception 'You can only edit your own leave request'; end if;
+  if l.state <> 'pending' then raise exception 'Only pending requests can be edited — % is already %', p_ref, l.state; end if;
+  if p_to < p_from then raise exception 'End date is before start date'; end if;
+  v_days := (p_to - p_from) + 1;
+
+  select ref, from_date, to_date, state into clash
+  from public.leave_applications
+  where app_user_id = v_me and id <> l.id and state in ('pending','approved')
+    and from_date <= p_to and to_date >= p_from
+  limit 1;
+  if found then
+    if clash.state = 'approved' then
+      raise exception 'You are already booked on leave from % to %. Please choose dates outside that range.',
+        to_char(clash.from_date, 'DD Mon'), to_char(clash.to_date, 'DD Mon');
+    else
+      raise exception 'You already have a pending request covering % to %. Edit or delete it under My leave requests instead.',
+        to_char(clash.from_date, 'DD Mon'), to_char(clash.to_date, 'DD Mon');
+    end if;
+  end if;
+
+  -- release the old hold, then take the new one (kind/year may have changed)
+  update public.leave_balances set reserved = reserved - l.days
+  where app_user_id = v_me and kind = l.kind and year = extract(year from l.from_date)::int;
+
+  select * into bal from public.leave_balances
+  where app_user_id = v_me and kind = p_kind and year = extract(year from p_from)::int;
+  if not found then raise exception 'No % leave balance for %', p_kind, extract(year from p_from)::int; end if;
+  if v_days > bal.entitled - bal.used - bal.reserved then
+    raise exception 'Insufficient balance: % days requested, % available', v_days, bal.entitled - bal.used - bal.reserved;
+  end if;
+  update public.leave_balances set reserved = reserved + v_days
+  where app_user_id = v_me and kind = p_kind and year = extract(year from p_from)::int;
+
+  update public.leave_applications
+  set kind = p_kind, from_date = p_from, to_date = p_to, days = v_days,
+      reason = coalesce(p_reason, reason), updated_at = now()
+  where id = l.id;
+
+  perform public.audit_write('leave.updated','leave', p_ref,
+    jsonb_build_object('kind', p_kind, 'from', p_from, 'to', p_to, 'days', v_days));
+  return jsonb_build_object('id', p_ref, 'days', v_days, 'state', 'pending');
+end $$;
+
+
+-- ============================================================
+-- Jikoni — Phase CRM Forms: Partners, Opportunities, create-
+-- engagement/partner/opportunity RPCs, extensible dropdowns,
+-- and an updated bootstrap() that returns live CRM data.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- ref counters for ENG / DST (start after the highest seeded ref) ----------
+insert into public.ref_counters(kind, prefix, n) values
+  ('ENG', 'ENG-', 30),
+  ('DST', 'DST-', 19)
+on conflict (kind) do nothing;
+
+-- ---------- extensible dropdown options for CRM forms ----------
+create table if not exists public.crm_dropdown_options (
+  id         uuid primary key default gen_random_uuid(),
+  category   text not null,       -- 'eng_stage_up', 'eng_stage_down', 'partner_type', 'partner_status', 'opp_type', 'opp_status'
+  value      text not null,
+  sort       int not null default 0,
+  active     boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (category, value)
+);
+
+insert into public.crm_dropdown_options(category, value, sort) values
+  -- upstream engagement stages
+  ('eng_stage_up', 'Discovery',    1),
+  ('eng_stage_up', 'Materials',    2),
+  ('eng_stage_up', 'Negotiation',  3),
+  ('eng_stage_up', 'Term sheet',   4),
+  ('eng_stage_up', 'Close',        5),
+  -- downstream engagement stages
+  ('eng_stage_down', 'Identification', 1),
+  ('eng_stage_down', 'EOI',            2),
+  ('eng_stage_down', 'Site visit',     3),
+  ('eng_stage_down', 'Contracting',    4),
+  ('eng_stage_down', 'Deployed',       5),
+  -- partner types
+  ('partner_type', 'Blended funder',  1),
+  ('partner_type', 'Concessional debt', 2),
+  ('partner_type', 'Equity investor',  3),
+  ('partner_type', 'Institution',      4),
+  ('partner_type', 'Manufacturer',     5),
+  ('partner_type', 'Programme / TA',   6),
+  ('partner_type', 'TA / convener',    7),
+  ('partner_type', 'Lender',           8),
+  ('partner_type', 'Distributor / EPC',9),
+  ('partner_type', 'Government',       10),
+  -- partner statuses
+  ('partner_status', 'Discovery',      1),
+  ('partner_status', 'Materials',      2),
+  ('partner_status', 'Negotiation',    3),
+  ('partner_status', 'Term sheet',     4),
+  ('partner_status', 'EOI',            5),
+  ('partner_status', 'Site visit',     6),
+  ('partner_status', 'Contracting',    7),
+  ('partner_status', 'Ready to fund',  8),
+  ('partner_status', 'Active',         9),
+  ('partner_status', 'Holding',        10),
+  -- opportunity types
+  ('opp_type', 'Convening',       1),
+  ('opp_type', 'Accelerator',     2),
+  ('opp_type', 'Grant / TA',      3),
+  ('opp_type', 'Climate finance',  4),
+  ('opp_type', 'Tender',          5),
+  ('opp_type', 'RFP',             6),
+  -- opportunity statuses
+  ('opp_status', 'On track',      1),
+  ('opp_status', 'Applying',      2),
+  ('opp_status', 'Discovery',     3),
+  ('opp_status', 'Watching',      4),
+  ('opp_status', 'Preparing',     5),
+  ('opp_status', 'Won',           6),
+  ('opp_status', 'Closed',        7)
+on conflict (category, value) do nothing;
+
+-- ---------- partners table ----------
+create table if not exists public.partners (
+  id         uuid primary key default gen_random_uuid(),
+  entity_id  uuid references public.entities(id),
+  name       text not null,
+  type       text,
+  country    text default 'KE',
+  owner_name text,
+  status     text,
+  status_cls text default 'week',
+  state      text not null default 'active'
+             check (state in ('active','inactive','archived')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- opportunities table ----------
+create table if not exists public.opportunities (
+  id         uuid primary key default gen_random_uuid(),
+  entity_id  uuid references public.entities(id),
+  name       text not null,
+  type       text,
+  deadline   text,
+  linked_to  text,
+  status     text,
+  status_cls text default 'week',
+  state      text not null default 'active'
+             check (state in ('active','won','closed')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- triggers
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'touch_partners') then
+    create trigger touch_partners before update on public.partners
+      for each row execute function public.touch_updated_at();
+  end if;
+  if not exists (select 1 from pg_trigger where tgname = 'touch_opportunities') then
+    create trigger touch_opportunities before update on public.opportunities
+      for each row execute function public.touch_updated_at();
+  end if;
+end $$;
+
+-- ---------- state machines ----------
+insert into public.record_transitions(record_type, from_state, to_state) values
+  ('partner', 'active', 'inactive'),
+  ('partner', 'active', 'archived'),
+  ('partner', 'inactive', 'active'),
+  ('opportunity', 'active', 'won'),
+  ('opportunity', 'active', 'closed')
+on conflict do nothing;
+
+-- ---------- seed existing hardcoded partners ----------
+do $$
+declare v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  if not exists (select 1 from public.partners) then
+    insert into public.partners(entity_id, name, type, country, owner_name, status, status_cls) values
+      (v_entity, 'Charm Impact',             'Blended funder',   'UK / KE', 'Wilson',    'Term sheet',   'week'),
+      (v_entity, 'EAIF',                     'Concessional debt', 'UK',      'Wilson',    'Negotiation',  'today'),
+      (v_entity, 'KIICO',                    'Equity investor',   'KE',      'Wilson',    'Materials',    'today'),
+      (v_entity, 'Signum Capital',           'Equity investor',   'SG',      'Wilson',    'Holding',      'over'),
+      (v_entity, 'UNDP / WAIIS',            'Programme / TA',    'KE',      'Wilson',    'Discovery',    'week'),
+      (v_entity, 'Stanbic Bank',            'Lender',            'UG',      'Wilson',    'Ready to fund', 'done'),
+      (v_entity, 'Makueni County VTCs',     'Institution',       'KE',      'Elizabeth', 'Contracting',  'today'),
+      (v_entity, 'Catholic Diocese — Machakos', 'Institution',   'KE',      'Elizabeth', 'EOI',          'week'),
+      (v_entity, 'BURN Manufacturing',      'Manufacturer',      'KE',      'Elizabeth', 'Active',       'done'),
+      (v_entity, 'CLASP',                   'TA / convener',     'Global',  'Elizabeth', 'Site visit',   'week');
+  end if;
+end $$;
+
+-- ---------- seed existing hardcoded opportunities ----------
+do $$
+declare v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  if not exists (select 1 from public.opportunities) then
+    insert into public.opportunities(entity_id, name, type, deadline, linked_to, status, status_cls) values
+      (v_entity, 'Africa Clean Cooking Summit', 'Convening',      '9–10 Jul',  'Multiple',       'On track',  'done'),
+      (v_entity, 'Accelerate Africa cohort',    'Accelerator',    'Rolling',   'Concept note',   'Applying',  'today'),
+      (v_entity, 'FCDO Uganda window',          'Grant / TA',     'Q3',        'ENG (FCDO)',      'Discovery', 'week'),
+      (v_entity, 'Carbon finance window',       'Climate finance', 'Q4',        'MRV readiness',  'Watching',  'week'),
+      (v_entity, 'County institutional RFP',    'Tender',         'Aug',       'Downstream',     'Preparing', 'week');
+  end if;
+end $$;
+
+-- ---------- RPC: create engagement ----------
+create or replace function public.create_engagement(
+  p_name text, p_stage text, p_owner_name text, p_pipeline text,
+  p_next_action text default null, p_due_key text default 'week'
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_ref text; v_pill text; v_pill_txt text;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('crm', 2);
+  v_ref := public.next_ref(case when p_pipeline = 'down' then 'DST' else 'ENG' end);
+  select case p_due_key when 'today' then 'today' when 'over' then 'over' else 'week' end,
+         case p_due_key when 'today' then 'Today' when 'over' then 'Overdue' when 'nweek' then 'Next week' else 'This week' end
+    into v_pill, v_pill_txt;
+  insert into public.engagements(ref, entity_id, name, stage, owner_name, pill, pill_txt, pipeline)
+  values (v_ref, v_entity, p_name, p_stage, p_owner_name, v_pill, v_pill_txt, p_pipeline);
+  perform public.audit_write('engagement.created', 'engagement', v_ref,
+    jsonb_build_object('name', p_name, 'stage', p_stage, 'owner', p_owner_name, 'pipeline', p_pipeline));
+  return jsonb_build_object(
+    'id', v_ref, 'n', p_name, 'st', p_stage, 'o', p_owner_name,
+    'pl', v_pill, 'plt', v_pill_txt, 'pipeline', p_pipeline);
+end $$;
+
+-- ---------- RPC: create partner ----------
+create or replace function public.create_partner(
+  p_name text, p_type text, p_country text, p_owner_name text, p_status text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_cls text;
+  v_id uuid;
+begin
+  perform public.assert_access('crm', 2);
+  v_cls := case p_status
+    when 'Active'        then 'done'
+    when 'Ready to fund' then 'done'
+    when 'Holding'       then 'over'
+    when 'Negotiation'   then 'today'
+    when 'Materials'     then 'today'
+    when 'Contracting'   then 'today'
+    else 'week' end;
+  insert into public.partners(entity_id, name, type, country, owner_name, status, status_cls)
+  values (v_entity, p_name, p_type, p_country, p_owner_name, p_status, v_cls)
+  returning id into v_id;
+  perform public.audit_write('partner.created', 'partner', p_name,
+    jsonb_build_object('type', p_type, 'country', p_country, 'owner', p_owner_name, 'status', p_status));
+  return jsonb_build_object(
+    'id', v_id, 'name', p_name, 'type', p_type, 'country', p_country,
+    'ownerName', p_owner_name, 'status', p_status, 'statusCls', v_cls);
+end $$;
+
+-- ---------- RPC: create opportunity ----------
+create or replace function public.create_opportunity(
+  p_name text, p_type text, p_deadline text, p_linked_to text, p_status text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_cls text;
+  v_id uuid;
+begin
+  perform public.assert_access('crm', 2);
+  v_cls := case p_status
+    when 'On track' then 'done'
+    when 'Applying' then 'today'
+    when 'Won'      then 'done'
+    when 'Closed'   then 'over'
+    else 'week' end;
+  insert into public.opportunities(entity_id, name, type, deadline, linked_to, status, status_cls)
+  values (v_entity, p_name, p_type, p_deadline, p_linked_to, p_status, v_cls)
+  returning id into v_id;
+  perform public.audit_write('opportunity.created', 'opportunity', p_name,
+    jsonb_build_object('type', p_type, 'deadline', p_deadline, 'linked', p_linked_to, 'status', p_status));
+  return jsonb_build_object(
+    'id', v_id, 'name', p_name, 'type', p_type, 'deadline', p_deadline,
+    'linkedTo', p_linked_to, 'status', p_status, 'statusCls', v_cls);
+end $$;
+
+-- ---------- updated bootstrap() — adds engagements, partners, opportunities, team ----------
+create or replace function public.bootstrap()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_email text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', '');
+begin
+  return jsonb_build_object(
+    'me', (select jsonb_build_object('email', email, 'name', name, 'roleTitle', role_title)
+           from public.app_users where email = v_email),
+    'tasks', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 't', title, 's', sub, 'o', owner_name, 'p', due_pill, 'pl', due_label)
+        order by created_at desc)
+      from public.tasks where state = 'open'), '[]'::jsonb),
+    'reqs', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'item', item, 'amt', amount, 'code', budget_code,
+        'chip', budget_chip, 'chipTxt', budget_chip_txt,
+        'status', case state when 'approved' then 'approved' when 'md_review' then 'md'
+                             when 'converted' then 'po' else 'await' end)
+        order by created_at desc)
+      from public.requisitions where state <> 'rejected'), '[]'::jsonb),
+    'pos', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'vendor', vendor_name, 'amt', amount, 'delivery', delivery)
+        order by created_at desc)
+      from public.purchase_orders), '[]'::jsonb),
+    'salesInvoices', coalesce((select jsonb_agg(jsonb_build_object(
+        'cust', customer, 'id', ref, 'tot', total, 'pillCls', due_pill_cls, 'pillTxt', due_pill_txt)
+        order by created_at desc)
+      from public.sales_invoices), '[]'::jsonb),
+    'perms', coalesce((select jsonb_object_agg(email, mods) from (
+        select email, jsonb_object_agg(module, level) as mods
+        from public.user_permissions group by email) q), '{}'::jsonb),
+    'projects', coalesce((select jsonb_object_agg(name, public.project_detail_json(id))
+      from public.projects), '{}'::jsonb),
+    'extraProjects', coalesce((select jsonb_agg(jsonb_build_object('name', name, 'funder', funder)
+        order by created_at)
+      from public.projects where is_extra), '[]'::jsonb),
+    'engToProject', coalesce((select jsonb_object_agg(eng_ref, project_name)
+      from public.eng_project_links), '{}'::jsonb),
+    'projectToEng', coalesce((select jsonb_object_agg(project_name, eng_ref)
+      from public.eng_project_links where is_primary), '{}'::jsonb),
+    'budgetLines', coalesce((select jsonb_object_agg(code, jsonb_build_object(
+        'b', budget, 'u', committed + actual))
+      from public.budget_lines), '{}'::jsonb),
+    'inventory', jsonb_build_object(
+      'items', coalesce((select jsonb_agg(jsonb_build_object(
+          'sku', i.sku, 'name', i.name, 'category', i.category, 'unit', i.unit,
+          'unitCost', i.unit_cost, 'reorderLevel', i.reorder_level,
+          'onHand', coalesce((select sum(qty) from public.stock_levels where item_id = i.id), 0),
+          'autoReq', i.auto_req_ref) order by i.sku)
+        from public.stock_items i where i.state = 'active'), '[]'::jsonb),
+      'locations', coalesce((select jsonb_agg(name order by name) from public.stock_locations where state='active'), '[]'::jsonb),
+      'movements', coalesce((select jsonb_agg(jsonb_build_object(
+          'when', to_char(m.created_at, 'DD Mon HH24:MI'), 'sku', i.sku, 'type', m.movement_type,
+          'qty', m.qty, 'from', fl.name, 'to', tl.name, 'source', m.source_ref, 'note', m.note) order by m.created_at desc)
+        from (select * from public.stock_movements order by created_at desc limit 40) m
+        join public.stock_items i on i.id = m.item_id
+        left join public.stock_locations fl on fl.id = m.from_location
+        left join public.stock_locations tl on tl.id = m.to_location), '[]'::jsonb),
+      'dispatches', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'project', project_name, 'destination', destination, 'lines', lines, 'state', state)
+          order by created_at desc)
+        from public.dispatches), '[]'::jsonb),
+      'assets', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'name', name, 'category', category, 'cost', cost, 'accumDep', accum_dep,
+          'nbv', cost - accum_dep, 'acquired', to_char(acquired_on, 'Mon YYYY'), 'state', state)
+          order by ref)
+        from public.assets), '[]'::jsonb)),
+    -- ---- CRM forms data (new) ----
+    'engagements', jsonb_build_object(
+      'up', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'n', name, 'st', stage, 'o', owner_name, 'pl', pill, 'plt', pill_txt)
+          order by created_at desc)
+        from public.engagements where pipeline = 'up' and state = 'active'), '[]'::jsonb),
+      'down', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'n', name, 'st', stage, 'o', owner_name, 'pl', pill, 'plt', pill_txt)
+          order by created_at desc)
+        from public.engagements where pipeline = 'down' and state = 'active'), '[]'::jsonb)),
+    'partners', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id, 'name', name, 'type', type, 'country', country,
+        'ownerName', owner_name, 'status', status, 'statusCls', status_cls)
+        order by created_at desc)
+      from public.partners where state = 'active'), '[]'::jsonb),
+    'opportunities', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id, 'name', name, 'type', type, 'deadline', deadline,
+        'linkedTo', linked_to, 'status', status, 'statusCls', status_cls)
+        order by created_at desc)
+      from public.opportunities where state = 'active'), '[]'::jsonb),
+    'crmDropdowns', coalesce((select jsonb_object_agg(cat, vals) from (
+        select category as cat, jsonb_agg(value order by sort) as vals
+        from public.crm_dropdown_options where active group by category) q), '{}'::jsonb),
+    'teamNames', coalesce((select jsonb_agg(name order by name) from public.app_users where state = 'active'), '[]'::jsonb)
+  );
+end $$;
+
+-- ---------- RLS + grants ----------
+do $$
+declare t text;
+begin
+  foreach t in array array['partners', 'opportunities', 'crm_dropdown_options']
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists "read for authenticated" on public.%I', t);
+    execute format('create policy "read for authenticated" on public.%I for select to authenticated using (true)', t);
+  end loop;
+end $$;
+
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'create_engagement(text,text,text,text,text,text)',
+    'create_partner(text,text,text,text,text)',
+    'create_opportunity(text,text,text,text,text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ============================================================
+-- Jikoni — CRM: the New Engagement form drops the Stage picker and
+-- gains a free-text "where we are on the discussion" note.
+--   * stage is no longer collected — new engagements enter at the top
+--     of the funnel (Discovery upstream / Identification downstream)
+--   * the note (p_next_action) is stored as the engagement's first
+--     entry in engagement_updates, so it shows in the updates log
+-- Same 6-arg signature as 0011, so existing grants stay valid.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+create or replace function public.create_engagement(
+  p_name text, p_stage text, p_owner_name text, p_pipeline text,
+  p_next_action text default null, p_due_key text default 'week'
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_ref text; v_pill text; v_pill_txt text; v_stage text; v_id uuid; v_who text;
+  v_note text := nullif(trim(coalesce(p_next_action, '')), '');
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('crm', 2);
+  v_ref := public.next_ref(case when p_pipeline = 'down' then 'DST' else 'ENG' end);
+  -- stage is no longer asked on the form; start at the top of the funnel
+  v_stage := coalesce(nullif(trim(coalesce(p_stage, '')), ''),
+                      case when p_pipeline = 'down' then 'Identification' else 'Discovery' end);
+  select case p_due_key when 'today' then 'today' when 'over' then 'over' else 'week' end,
+         case p_due_key when 'today' then 'Today' when 'over' then 'Overdue' when 'nweek' then 'Next week' else 'This week' end
+    into v_pill, v_pill_txt;
+  insert into public.engagements(ref, entity_id, name, stage, owner_name, pill, pill_txt, pipeline)
+  values (v_ref, v_entity, p_name, v_stage, p_owner_name, v_pill, v_pill_txt, p_pipeline)
+  returning id into v_id;
+  -- "where we are on the discussion" seeds the engagement's update log
+  if v_note is not null then
+    v_who := coalesce((select name from public.app_users where auth_id = auth.uid()), p_owner_name);
+    insert into public.engagement_updates(engagement_id, channel, who, note, happened)
+    values (v_id, 'Note', v_who, v_note, 'Today');
+  end if;
+  perform public.audit_write('engagement.created', 'engagement', v_ref,
+    jsonb_build_object('name', p_name, 'stage', v_stage, 'owner', p_owner_name, 'pipeline', p_pipeline, 'note', v_note));
+  return jsonb_build_object(
+    'id', v_ref, 'n', p_name, 'st', v_stage, 'o', p_owner_name,
+    'pl', v_pill, 'plt', v_pill_txt, 'pipeline', p_pipeline);
+end $$;
+
+revoke execute on function public.create_engagement(text,text,text,text,text,text) from public, anon;
+grant execute on function public.create_engagement(text,text,text,text,text,text) to authenticated;
+
+
+-- ============================================================
+-- Jikoni Master PRD — Phase 2a follow-up: Inventory management RPCs
+-- Fills the gaps that left the Inventory & Assets screens read-only:
+--   * create_stock_item   — register a new SKU (levels stay empty until a receipt)
+--   * update_stock_item    — edit reorder level / reorder qty / unit cost
+--   * set_dispatch_state   — advance a dispatch (dispatched → delivered, → cancelled)
+--   * dispose_asset        — retire an asset (active → disposed)
+-- Movement posting, transfers, adjustments, asset registration and depreciation
+-- already exist in 0004; these four are the only net-new server functions.
+-- The dispatch/asset/stock_item state machines (0004:117-136) validate the
+-- transitions, so the state RPCs just update the column.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- SKU counter — used when the caller doesn't supply a code (the form no longer asks for one)
+insert into public.ref_counters(kind, prefix, n) values ('SKU', 'SKU-', 100)
+on conflict (kind) do nothing;
+
+-- ---------- new SKU (code auto-generated when not supplied) ----------
+create or replace function public.create_stock_item(
+  p_sku text default null, p_name text default null, p_category text default null, p_unit text default 'unit',
+  p_unit_cost numeric default 0, p_reorder_level numeric default 0,
+  p_reorder_qty numeric default 0, p_budget_code text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_code text := nullif(trim(coalesce(p_budget_code, '')), '');
+  v_sku  text := nullif(trim(coalesce(p_sku, '')), '');
+begin
+  perform public.assert_access('inventory', 2);
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'A stock item needs a name'; end if;
+  if v_sku is null then v_sku := public.next_ref('SKU'); end if;   -- auto-generate a code
+  if exists (select 1 from public.stock_items where sku = v_sku) then
+    raise exception 'A stock item with SKU % already exists', v_sku;
+  end if;
+  if v_code is not null and not exists (select 1 from public.budget_lines where code = v_code) then
+    raise exception 'Unknown budget code: %', v_code;
+  end if;
+  insert into public.stock_items(entity_id, sku, name, category, unit, unit_cost, reorder_level, reorder_qty, budget_code)
+  values (v_entity, v_sku, p_name, nullif(trim(coalesce(p_category,'')),''), coalesce(nullif(trim(p_unit),''),'unit'),
+          coalesce(p_unit_cost,0), coalesce(p_reorder_level,0), coalesce(p_reorder_qty,0), v_code);
+  perform public.audit_write('inventory.item_created', 'stock_item', v_sku,
+    jsonb_build_object('name', p_name, 'category', p_category, 'unitCost', p_unit_cost,
+                       'reorderLevel', p_reorder_level, 'budgetCode', v_code));
+  -- shape matches bootstrap().inventory.items so the caller can reload
+  return jsonb_build_object('sku', v_sku, 'name', p_name, 'category', p_category, 'unit', p_unit,
+    'unitCost', coalesce(p_unit_cost,0), 'reorderLevel', coalesce(p_reorder_level,0), 'onHand', 0, 'autoReq', null);
+end $$;
+
+-- ---------- edit reorder policy / cost ----------
+create or replace function public.update_stock_item(
+  p_sku text, p_reorder_level numeric, p_reorder_qty numeric, p_unit_cost numeric
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare it record;
+begin
+  perform public.assert_access('inventory', 2);
+  select * into it from public.stock_items where sku = p_sku;
+  if not found then raise exception 'Unknown stock item: %', p_sku; end if;
+  update public.stock_items
+     set reorder_level = coalesce(p_reorder_level, reorder_level),
+         reorder_qty   = coalesce(p_reorder_qty, reorder_qty),
+         unit_cost     = coalesce(p_unit_cost, unit_cost),
+         updated_at    = now()
+   where sku = p_sku;
+  perform public.audit_write('inventory.item_updated', 'stock_item', p_sku,
+    jsonb_build_object(
+      'reorderLevel', jsonb_build_object('from', it.reorder_level, 'to', coalesce(p_reorder_level, it.reorder_level)),
+      'reorderQty',   jsonb_build_object('from', it.reorder_qty,   'to', coalesce(p_reorder_qty, it.reorder_qty)),
+      'unitCost',     jsonb_build_object('from', it.unit_cost,     'to', coalesce(p_unit_cost, it.unit_cost))));
+  return jsonb_build_object('sku', p_sku,
+    'reorderLevel', coalesce(p_reorder_level, it.reorder_level),
+    'unitCost', coalesce(p_unit_cost, it.unit_cost));
+end $$;
+
+-- ---------- advance a dispatch (state machine enforces the transition) ----------
+create or replace function public.set_dispatch_state(p_ref text, p_state text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare d record;
+begin
+  perform public.assert_access('inventory', 2);
+  select * into d from public.dispatches where ref = p_ref;
+  if not found then raise exception 'Unknown dispatch: %', p_ref; end if;
+  update public.dispatches set state = p_state, updated_at = now() where ref = p_ref;
+  perform public.audit_write('dispatch.state_changed', 'dispatch', p_ref,
+    jsonb_build_object('from', d.state, 'to', p_state));
+  return jsonb_build_object('id', p_ref, 'state', p_state);
+end $$;
+
+-- ---------- retire an asset (active → disposed) ----------
+create or replace function public.dispose_asset(p_ref text, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare a record;
+begin
+  perform public.assert_access('inventory', 2);
+  select * into a from public.assets where ref = p_ref;
+  if not found then raise exception 'Unknown asset: %', p_ref; end if;
+  if a.state = 'disposed' then raise exception 'Asset % is already disposed', p_ref; end if;
+  update public.assets set state = 'disposed', updated_at = now() where ref = p_ref;
+  perform public.audit_write('asset.disposed', 'asset', p_ref,
+    jsonb_build_object('name', a.name, 'nbv', a.cost - a.accum_dep, 'reason', nullif(trim(coalesce(p_reason,'')),'')));
+  return jsonb_build_object('id', p_ref, 'state', 'disposed');
+end $$;
+
+-- ---------- grants: authenticated only, never public/anon ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'create_stock_item(text,text,text,text,numeric,numeric,numeric,text)',
+    'update_stock_item(text,numeric,numeric,numeric)',
+    'set_dispatch_state(text,text)',
+    'dispose_asset(text,text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ============================================================
+-- Jikoni Master PRD — Phase 2b: delivery receipts on dispatches
+-- Once a dispatch is marked "delivered" the field team attaches a proof-of-
+-- delivery receipt (photo / signed note / PDF). The file lives in Supabase
+-- Storage; the dispatch row just keeps the object path.
+--   * dispatches.receipt_path   — storage path of the uploaded receipt
+--   * attach_dispatch_receipt() — records the path (inventory edit access)
+--   * storage bucket 'dispatch-receipts' (public read, authenticated write)
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- column ----------
+alter table public.dispatches add column if not exists receipt_path text;
+
+-- ---------- storage bucket + policies (wrapped so a locked-down role can't abort the migration) ----------
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('dispatch-receipts', 'dispatch-receipts', true)
+  on conflict (id) do nothing;
+
+  drop policy if exists "dispatch receipts read"   on storage.objects;
+  drop policy if exists "dispatch receipts insert" on storage.objects;
+  drop policy if exists "dispatch receipts update" on storage.objects;
+
+  create policy "dispatch receipts read" on storage.objects
+    for select to public using (bucket_id = 'dispatch-receipts');
+  create policy "dispatch receipts insert" on storage.objects
+    for insert to authenticated with check (bucket_id = 'dispatch-receipts');
+  create policy "dispatch receipts update" on storage.objects
+    for update to authenticated using (bucket_id = 'dispatch-receipts');
+exception when others then
+  raise notice 'storage bucket/policy setup skipped: %', sqlerrm;
+end $$;
+
+-- ---------- attach a receipt to a dispatch ----------
+create or replace function public.attach_dispatch_receipt(p_ref text, p_path text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare d record;
+begin
+  perform public.assert_access('inventory', 2);
+  if nullif(trim(coalesce(p_path, '')), '') is null then
+    raise exception 'A receipt file is required';
+  end if;
+  select * into d from public.dispatches where ref = p_ref;
+  if not found then raise exception 'Unknown dispatch: %', p_ref; end if;
+  update public.dispatches set receipt_path = p_path, updated_at = now() where ref = p_ref;
+  perform public.audit_write('dispatch.receipt_attached', 'dispatch', p_ref,
+    jsonb_build_object('path', p_path));
+  return jsonb_build_object('id', p_ref, 'receipt', p_path);
+end $$;
+
+-- ---------- grant: authenticated only, never public/anon ----------
+do $$
+begin
+  revoke execute on function public.attach_dispatch_receipt(text, text) from public, anon;
+  grant  execute on function public.attach_dispatch_receipt(text, text) to authenticated;
+end $$;
+
+
+-- ============================================================
+-- Jikoni Master PRD — Phase 2c: HR module write path (full CRUD) + demo seeds
+-- The HR backend (0005) shipped read models + the payroll/leave state machines
+-- but no create RPCs, so the Hr.tsx screens were read-only mock-ups. This adds:
+--   * add_employee            — new app_user (login-less) + staff_file + leave balances
+--   * create_recruitment_req  — open a vacancy
+--   * add_candidate / advance_candidate — applicant pipeline
+--   * create_enumerator       — register a field worker
+--   * create_field_assignment / set_field_assignment_state — per-diems & casual work
+-- Plus demo rows for candidates / field_assignments and one posted payroll run so
+-- the Recruitment, Field and Payroll screens render populated.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- staff-number counter (seeds used IGN-00x by hand; new hires get STF-1xx)
+insert into public.ref_counters(kind, prefix, n) values ('STF', 'STF-', 100)
+on conflict (kind) do nothing;
+
+-- 0005 seeded RCR-101/102 with hardcoded refs but left the counter at 100, so the
+-- first next_ref('RCR') would collide. Bump it past the highest existing ref (idempotent).
+update public.ref_counters c
+   set n = greatest(c.n, coalesce((select max(split_part(ref, '-', 2)::int) from public.recruitment_reqs), 0))
+ where c.kind = 'RCR';
+
+-- ---------- add employee: user + staff file + opening leave balances ----------
+create or replace function public.add_employee(
+  p_name text, p_email text, p_role_title text default null,
+  p_contract_type text default 'permanent', p_start_date date default current_date,
+  p_gross_salary numeric default 0, p_kra text default null, p_nssf text default null,
+  p_shif text default null, p_bank text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_email text := lower(nullif(trim(coalesce(p_email, '')), ''));
+  v_user uuid; v_staff text;
+  v_year int := extract(year from coalesce(p_start_date, current_date))::int;
+begin
+  perform public.assert_access('hr', 3);
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'An employee needs a name'; end if;
+  if v_email is null then raise exception 'An employee needs an email'; end if;
+  if p_contract_type not in ('permanent','fixed_term','casual','consultant') then
+    raise exception 'Unknown contract type: %', p_contract_type;
+  end if;
+  if exists (select 1 from public.app_users where email = v_email) then
+    raise exception 'A user with email % already exists', v_email;
+  end if;
+  -- login-less user; it links to a real auth account by email when they first sign in
+  insert into public.app_users(entity_id, name, email, role_title, role_key)
+  values (v_entity, trim(p_name), v_email, nullif(trim(coalesce(p_role_title,'')),''), 'std')
+  returning id into v_user;
+  v_staff := public.next_ref('STF');
+  insert into public.staff_files(entity_id, app_user_id, staff_no, kra_pin, nssf_no, shif_no,
+    contract_type, start_date, gross_salary, bank, docs)
+  values (v_entity, v_user, v_staff,
+    nullif(trim(coalesce(p_kra,'')),''), nullif(trim(coalesce(p_nssf,'')),''), nullif(trim(coalesce(p_shif,'')),''),
+    p_contract_type, p_start_date, coalesce(p_gross_salary,0), nullif(trim(coalesce(p_bank,'')),''),
+    jsonb_build_array(jsonb_build_object('name','Employment contract','version',1,'uploaded',to_char(coalesce(p_start_date,current_date),'YYYY-MM-DD'))));
+  -- opening leave balances for the joining year, from policy
+  insert into public.leave_balances(app_user_id, kind, year, entitled, used)
+  select v_user, kind, v_year, days_per_year, 0 from public.leave_policies
+  on conflict (app_user_id, kind, year) do nothing;
+  perform public.audit_write('hr.employee_added','staff', v_staff,
+    jsonb_build_object('name', p_name, 'email', v_email, 'contract', p_contract_type, 'gross', p_gross_salary));
+  return jsonb_build_object('staffNo', v_staff, 'name', p_name, 'email', v_email);
+end $$;
+
+-- ---------- recruitment: open a vacancy ----------
+create or replace function public.create_recruitment_req(p_role_title text, p_dept text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_ref text; v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('hr', 2);
+  if nullif(trim(coalesce(p_role_title,'')),'') is null then raise exception 'A requisition needs a role title'; end if;
+  v_ref := public.next_ref('RCR');
+  insert into public.recruitment_reqs(ref, entity_id, role_title, dept, state)
+  values (v_ref, v_entity, trim(p_role_title), nullif(trim(coalesce(p_dept,'')),''), 'open');
+  perform public.audit_write('hr.requisition_created','recruitment', v_ref,
+    jsonb_build_object('role', p_role_title, 'dept', p_dept));
+  return jsonb_build_object('id', v_ref, 'role', p_role_title, 'dept', p_dept, 'state', 'open');
+end $$;
+
+-- ---------- recruitment: add a candidate to the pipeline ----------
+create or replace function public.add_candidate(p_req_ref text, p_name text, p_email text default null, p_stage text default 'applied')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_req uuid; v_id uuid;
+begin
+  perform public.assert_access('hr', 2);
+  select id into v_req from public.recruitment_reqs where ref = p_req_ref;
+  if v_req is null then raise exception 'Unknown requisition: %', p_req_ref; end if;
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'A candidate needs a name'; end if;
+  insert into public.candidates(recruitment_id, name, email, stage)
+  values (v_req, trim(p_name), nullif(trim(coalesce(p_email,'')),''), coalesce(nullif(trim(p_stage),''),'applied'))
+  returning id into v_id;
+  perform public.audit_write('hr.candidate_added','recruitment', p_req_ref,
+    jsonb_build_object('name', p_name, 'stage', p_stage));
+  return jsonb_build_object('id', v_id, 'name', p_name, 'stage', p_stage);
+end $$;
+
+create or replace function public.advance_candidate(p_candidate_id uuid, p_stage text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare c record;
+begin
+  perform public.assert_access('hr', 2);
+  select * into c from public.candidates where id = p_candidate_id;
+  if not found then raise exception 'Candidate not found'; end if;
+  update public.candidates set stage = p_stage, updated_at = now() where id = p_candidate_id;
+  perform public.audit_write('hr.candidate_advanced','recruitment', c.recruitment_id::text,
+    jsonb_build_object('candidate', c.name, 'from', c.stage, 'to', p_stage));
+  return jsonb_build_object('id', p_candidate_id, 'stage', p_stage);
+end $$;
+
+-- ---------- field workforce: register an enumerator ----------
+create or replace function public.create_enumerator(p_name text, p_county text default null, p_id_no text default null, p_daily_rate numeric default 0)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('hr', 2);
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'An enumerator needs a name'; end if;
+  insert into public.enumerators(entity_id, name, county, id_no, daily_rate)
+  values (v_entity, trim(p_name), nullif(trim(coalesce(p_county,'')),''), nullif(trim(coalesce(p_id_no,'')),''), coalesce(p_daily_rate,0))
+  returning id into v_id;
+  perform public.audit_write('hr.enumerator_created','enumerator', v_id::text,
+    jsonb_build_object('name', p_name, 'county', p_county, 'dailyRate', p_daily_rate));
+  return jsonb_build_object('id', v_id, 'name', p_name, 'county', p_county);
+end $$;
+
+-- ---------- field workforce: per-diem / casual assignment ----------
+create or replace function public.create_field_assignment(
+  p_enumerator_id uuid, p_project text default null, p_period text default null,
+  p_days numeric default 0, p_per_diem numeric default 0, p_contract_doc text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('hr', 2);
+  if not exists (select 1 from public.enumerators where id = p_enumerator_id) then
+    raise exception 'Unknown enumerator';
+  end if;
+  if p_project is not null and not exists (select 1 from public.projects where name = p_project) then
+    raise exception 'Unknown project: %', p_project;
+  end if;
+  insert into public.field_assignments(entity_id, enumerator_id, project_name, period, days, per_diem, contract_doc, state)
+  values (v_entity, p_enumerator_id, p_project, nullif(trim(coalesce(p_period,'')),''), coalesce(p_days,0),
+          coalesce(p_per_diem,0), nullif(trim(coalesce(p_contract_doc,'')),''), 'planned')
+  returning id into v_id;
+  perform public.audit_write('hr.field_assignment_created','field_assignment', v_id::text,
+    jsonb_build_object('project', p_project, 'period', p_period, 'days', p_days, 'perDiem', p_per_diem));
+  return jsonb_build_object('id', v_id, 'project', p_project, 'perDiem', p_per_diem, 'state', 'planned');
+end $$;
+
+create or replace function public.set_field_assignment_state(p_id uuid, p_state text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare a record;
+begin
+  perform public.assert_access('hr', 2);
+  select * into a from public.field_assignments where id = p_id;
+  if not found then raise exception 'Field assignment not found'; end if;
+  if p_state not in ('planned','active','complete','cancelled') then raise exception 'Unknown state: %', p_state; end if;
+  update public.field_assignments set state = p_state, updated_at = now() where id = p_id;
+  perform public.audit_write('hr.field_assignment_state','field_assignment', p_id::text,
+    jsonb_build_object('from', a.state, 'to', p_state));
+  return jsonb_build_object('id', p_id, 'state', p_state);
+end $$;
+
+-- ---------- grants: authenticated only ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'add_employee(text,text,text,text,date,numeric,text,text,text,text)',
+    'create_recruitment_req(text,text)',
+    'add_candidate(text,text,text,text)',
+    'advance_candidate(uuid,text)',
+    'create_enumerator(text,text,text,numeric)',
+    'create_field_assignment(uuid,text,text,numeric,numeric,text)',
+    'set_field_assignment_state(uuid,text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+-- ============================================================
+-- Demo seeds (idempotent — only when the tables are empty)
+-- ============================================================
+
+-- applicant pipeline for the two seeded requisitions
+insert into public.candidates(recruitment_id, name, email, stage)
+select r.id, v.name, v.email, v.stage
+from public.recruitment_reqs r
+join (values
+  ('RCR-101', 'Mercy Achieng',  'mercy.achieng@example.co.ke',  'offer'),
+  ('RCR-101', 'John Mwangi',    'john.mwangi@example.co.ke',    'interviewed'),
+  ('RCR-101', 'Faith Chelangat','faith.chelangat@example.co.ke','screened'),
+  ('RCR-101', 'Kevin Odhiambo', 'kevin.odhiambo@example.co.ke', 'applied'),
+  ('RCR-102', 'Brenda Nyaboke', 'brenda.nyaboke@example.co.ke', 'screened'),
+  ('RCR-102', 'Daniel Kiptoo',  'daniel.kiptoo@example.co.ke',  'applied')
+) as v(ref, name, email, stage) on v.ref = r.ref
+where not exists (select 1 from public.candidates);
+
+-- field assignments / per-diems for the seeded enumerators
+insert into public.field_assignments(entity_id, enumerator_id, project_name, period, days, per_diem, contract_doc, state)
+select (select id from public.entities where code='KE'), e.id, v.project, v.period, v.days, v.per_diem, v.doc, v.state
+from public.enumerators e
+join (values
+  ('Peter Otieno',   '5-County data collection', '2026-07', 8, 14400, 'CAS-2026-011', 'active'),
+  ('Grace Wambui',   '5-County data collection', '2026-07', 6, 10800, 'CAS-2026-012', 'active'),
+  ('Samuel Kilonzo', 'Makueni VTC rollout',      '2026-07', 4,  7200, 'CAS-2026-013', 'planned'),
+  ('Aisha Noor',     '5-County data collection', '2026-07', 5, 10000, 'CAS-2026-014', 'complete')
+) as v(name, project, period, days, per_diem, doc, state) on v.name = e.name
+where not exists (select 1 from public.field_assignments);
+
+-- one posted payroll run for the prior period, so Payroll history + portal payslips populate.
+-- system_action bypasses assert_access; SoD is off and null actors no-op it.
+do $$
+declare v_ref text;
+begin
+  if not exists (select 1 from public.payroll_runs where period = '2026-06') then
+    perform set_config('jikoni.system_action', 'true', false);
+    v_ref := (public.prepare_payroll('2026-06'))->>'id';
+    perform public.approve_payroll(v_ref);
+    perform public.post_payroll(v_ref);
+    perform set_config('jikoni.system_action', '', false);
+  end if;
+exception when others then
+  raise notice 'demo payroll seed skipped: %', sqlerrm;
+end $$;
+
+
+-- ============================================================
+-- Jikoni Master PRD — Phase 2c: staff self-service documents
+-- Staff upload documents to their own personal file (from the Staff Portal),
+-- and can attach a supporting document (e.g. a sick note) when they apply for
+-- leave. Files live in a PRIVATE Supabase Storage bucket; the metadata is
+-- appended to staff_files.docs so HR sees it on the staff file, and a leave
+-- attachment also stamps leave_applications.doc_path so it shows in the queue.
+--   * bucket 'staff-documents'  — private; owner + HR read, owner writes own prefix
+--   * leave_applications.doc_path — optional attachment on a leave request
+--   * add_staff_document()      — append a doc to the caller's own file
+-- Path convention: <app_user_id>/<category>/<timestamp>-<filename>
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- attachment column on a leave request ----------
+alter table public.leave_applications add column if not exists doc_path text;
+
+-- ---------- private storage bucket + policies ----------
+-- (wrapped so a locked-down role can't abort the migration)
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('staff-documents', 'staff-documents', false)
+  on conflict (id) do nothing;
+
+  drop policy if exists "staff docs read"   on storage.objects;
+  drop policy if exists "staff docs insert" on storage.objects;
+  drop policy if exists "staff docs update" on storage.objects;
+
+  -- Read: the owner (their own <app_user_id>/ prefix) or anyone with HR access.
+  create policy "staff docs read" on storage.objects
+    for select to authenticated using (
+      bucket_id = 'staff-documents' and (
+        split_part(name, '/', 1) = (select id::text from public.app_users where auth_id = auth.uid())
+        or exists (
+          select 1 from public.user_permissions up
+          join public.app_users u on u.email = up.email
+          where u.auth_id = auth.uid() and up.module = 'hr' and up.level >= 1)
+      ));
+  -- Write: only into your own <app_user_id>/ prefix.
+  create policy "staff docs insert" on storage.objects
+    for insert to authenticated with check (
+      bucket_id = 'staff-documents'
+      and split_part(name, '/', 1) = (select id::text from public.app_users where auth_id = auth.uid()));
+  create policy "staff docs update" on storage.objects
+    for update to authenticated using (
+      bucket_id = 'staff-documents'
+      and split_part(name, '/', 1) = (select id::text from public.app_users where auth_id = auth.uid()));
+exception when others then
+  raise notice 'staff-documents bucket/policy setup skipped: %', sqlerrm;
+end $$;
+
+-- ---------- append a document to the caller's own staff file ----------
+create or replace function public.add_staff_document(
+  p_name text, p_path text, p_category text default 'other', p_leave_ref text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_ver int;
+  v_entry jsonb;
+begin
+  if v_me is null then raise exception 'No staff record for this login'; end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'A document name is required'; end if;
+  if nullif(trim(coalesce(p_path, '')), '') is null then raise exception 'A file is required'; end if;
+  if not exists (select 1 from public.staff_files where app_user_id = v_me) then
+    raise exception 'No staff file for this login';
+  end if;
+
+  -- next version for a document of the same name
+  v_ver := coalesce((
+    select max((d->>'version')::int)
+    from public.staff_files sf, jsonb_array_elements(sf.docs) d
+    where sf.app_user_id = v_me and d->>'name' = p_name), 0) + 1;
+
+  v_entry := jsonb_build_object(
+    'name', p_name, 'version', v_ver, 'uploaded', to_char(now(), 'YYYY-MM-DD'),
+    'path', p_path, 'category', coalesce(nullif(p_category, ''), 'other'), 'leaveRef', p_leave_ref);
+
+  update public.staff_files set docs = docs || v_entry, updated_at = now() where app_user_id = v_me;
+
+  -- a leave attachment also stamps the request so HR sees it in the approvals queue
+  if p_leave_ref is not null then
+    update public.leave_applications set doc_path = p_path, updated_at = now()
+    where ref = p_leave_ref and app_user_id = v_me;
+  end if;
+
+  perform public.audit_write('staff.document_added', 'staff_file', v_me::text,
+    jsonb_build_object('name', p_name, 'version', v_ver, 'category', p_category, 'leaveRef', p_leave_ref));
+  return v_entry;
+end $$;
+
+-- ---------- surface doc_path in the self-service summary ----------
+create or replace function public.my_hr_summary()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  if v_me is null then return '{}'::jsonb; end if;
+  return jsonb_build_object(
+    'leave', coalesce((select jsonb_agg(jsonb_build_object(
+        'kind', kind, 'year', year, 'entitled', entitled, 'used', used, 'reserved', reserved))
+      from public.leave_balances where app_user_id = v_me), '[]'::jsonb),
+    'applications', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'kind', kind, 'from', from_date, 'to', to_date, 'days', days, 'state', state, 'docPath', doc_path)
+        order by created_at desc)
+      from public.leave_applications where app_user_id = v_me), '[]'::jsonb),
+    'payslips', coalesce((select jsonb_agg(jsonb_build_object(
+        'period', pr.period, 'gross', i.gross, 'paye', i.paye, 'nssf', i.nssf,
+        'shif', i.shif, 'housing', i.housing, 'net', i.net) order by pr.period desc)
+      from public.payroll_items i join public.payroll_runs pr on pr.id = i.run_id
+      where i.app_user_id = v_me and pr.state = 'posted'), '[]'::jsonb),
+    'docs', coalesce((select docs from public.staff_files where app_user_id = v_me), '[]'::jsonb));
+end $$;
+
+-- ---------- grant: authenticated only, never public/anon ----------
+do $$
+begin
+  revoke execute on function public.add_staff_document(text, text, text, text) from public, anon;
+  grant  execute on function public.add_staff_document(text, text, text, text) to authenticated;
+end $$;
+
+
+-- ============================================================
+-- Jikoni Master PRD — Phase 2c: delete a staff self-service document
+-- Staff can remove a document they uploaded to their own personal file
+-- (from the Staff Portal). Removes the metadata entry from staff_files.docs
+-- and, if the doc was a leave attachment, clears leave_applications.doc_path.
+-- The underlying object is deleted from the private 'staff-documents' bucket
+-- by the client (owner-scoped storage delete policy added below).
+--   * delete_staff_document() — remove a doc from the caller's own file by path
+--   * "staff docs delete"     — owner may delete objects under their own prefix
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- storage delete policy: owner may delete their own objects ----------
+do $$
+begin
+  drop policy if exists "staff docs delete" on storage.objects;
+  create policy "staff docs delete" on storage.objects
+    for delete to authenticated using (
+      bucket_id = 'staff-documents'
+      and split_part(name, '/', 1) = (select id::text from public.app_users where auth_id = auth.uid()));
+exception when others then
+  raise notice 'staff-documents delete policy setup skipped: %', sqlerrm;
+end $$;
+
+-- ---------- remove a document from the caller's own staff file ----------
+create or replace function public.delete_staff_document(p_path text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_entry jsonb;
+begin
+  if v_me is null then raise exception 'No staff record for this login'; end if;
+  if nullif(trim(coalesce(p_path, '')), '') is null then raise exception 'A document path is required'; end if;
+
+  -- locate the entry so we can audit it and honour any leave link
+  select d into v_entry
+  from public.staff_files sf, jsonb_array_elements(sf.docs) d
+  where sf.app_user_id = v_me and d->>'path' = p_path
+  limit 1;
+  if v_entry is null then raise exception 'That document is not on your file'; end if;
+
+  -- drop the matching entry from the docs array
+  update public.staff_files
+    set docs = coalesce((
+        select jsonb_agg(d)
+        from jsonb_array_elements(docs) d
+        where d->>'path' <> p_path), '[]'::jsonb),
+        updated_at = now()
+  where app_user_id = v_me;
+
+  -- if it was a leave attachment, unstamp the request
+  if v_entry->>'leaveRef' is not null then
+    update public.leave_applications set doc_path = null, updated_at = now()
+    where ref = v_entry->>'leaveRef' and app_user_id = v_me and doc_path = p_path;
+  end if;
+
+  perform public.audit_write('staff.document_deleted', 'staff_file', v_me::text,
+    jsonb_build_object('name', v_entry->>'name', 'version', v_entry->>'version',
+      'category', v_entry->>'category', 'leaveRef', v_entry->>'leaveRef'));
+  return v_entry;
+end $$;
+
+-- ---------- grant: authenticated only, never public/anon ----------
+do $$
+begin
+  revoke execute on function public.delete_staff_document(text) from public, anon;
+  grant  execute on function public.delete_staff_document(text) to authenticated;
+end $$;
+
+
+-- ============================================================
+-- Jikoni Master PRD — Phase 3: interactive Projects & Programmes
+-- The projects module was read-only. This adds the write RPCs the project
+-- drawer needs to manage a project end-to-end: milestones, drawdowns, field
+-- activity and status. Each RPC checks projects-edit access, audits, and
+-- returns the refreshed single-project detail so the UI can upsert without a
+-- full reload. project_detail_json is extended to expose row ids + state.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- expose ids + state so the UI can target rows ----------
+create or replace function public.project_detail_json(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', p.id, 'state', p.state,
+    'funder', p.funder, 'status', p.status, 'budget', p.budget_txt, 'spent', p.spent_txt,
+    'pct', p.pct, 'timeline', p.timeline, 'team', p.team, 'reporting', p.reporting, 'field', p.field,
+    'docs', p.docs,
+    'milestones', coalesce((select jsonb_agg(jsonb_build_object('id', id, 't', title, 's', status) order by sort)
+                            from public.project_milestones where project_id = p.id), '[]'::jsonb),
+    'drawdowns',  coalesce((select jsonb_agg(jsonb_build_object('id', id, 't', title, 'v', amount_txt, 's', status) order by sort)
+                            from public.project_drawdowns where project_id = p.id), '[]'::jsonb))
+  from public.projects p where p.id = p_id
+$$;
+
+-- helper: { name, detail } payload for a project by id
+create or replace function public.project_payload(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('name', name, 'detail', public.project_detail_json(id))
+  from public.projects where id = p_id
+$$;
+
+-- ---------- milestones ----------
+create or replace function public.add_project_milestone(
+  p_project_id uuid, p_title text, p_status text default 'todo')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_sort int;
+begin
+  perform public.assert_access('projects', 2);
+  if nullif(trim(coalesce(p_title, '')), '') is null then raise exception 'A milestone title is required'; end if;
+  if p_status not in ('done','now','todo') then raise exception 'Invalid milestone status %', p_status; end if;
+  if not exists (select 1 from public.projects where id = p_project_id) then raise exception 'Project not found'; end if;
+  select coalesce(max(sort), 0) + 1 into v_sort from public.project_milestones where project_id = p_project_id;
+  insert into public.project_milestones(project_id, title, status, sort)
+  values (p_project_id, trim(p_title), p_status, v_sort);
+  perform public.audit_write('project.milestone_added','project', p_project_id::text,
+    jsonb_build_object('title', p_title, 'status', p_status));
+  return public.project_payload(p_project_id);
+end $$;
+
+create or replace function public.set_milestone_status(p_milestone_id uuid, p_status text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  perform public.assert_access('projects', 2);
+  if p_status not in ('done','now','todo') then raise exception 'Invalid milestone status %', p_status; end if;
+  update public.project_milestones set status = p_status where id = p_milestone_id returning project_id into v_project;
+  if v_project is null then raise exception 'Milestone not found'; end if;
+  perform public.audit_write('project.milestone_status','project', v_project::text,
+    jsonb_build_object('milestone', p_milestone_id, 'status', p_status));
+  return public.project_payload(v_project);
+end $$;
+
+-- ---------- drawdowns ----------
+create or replace function public.add_project_drawdown(
+  p_project_id uuid, p_title text, p_amount_txt text, p_status text default 'Requested')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_sort int;
+begin
+  perform public.assert_access('projects', 2);
+  if nullif(trim(coalesce(p_title, '')), '') is null then raise exception 'A drawdown title is required'; end if;
+  if nullif(trim(coalesce(p_amount_txt, '')), '') is null then raise exception 'An amount is required'; end if;
+  if p_status not in ('Requested','Received','On schedule','Cancelled') then raise exception 'Invalid drawdown status %', p_status; end if;
+  if not exists (select 1 from public.projects where id = p_project_id) then raise exception 'Project not found'; end if;
+  select coalesce(max(sort), 0) + 1 into v_sort from public.project_drawdowns where project_id = p_project_id;
+  insert into public.project_drawdowns(project_id, title, amount_txt, status, sort)
+  values (p_project_id, trim(p_title), trim(p_amount_txt), p_status, v_sort);
+  perform public.audit_write('project.drawdown_added','project', p_project_id::text,
+    jsonb_build_object('title', p_title, 'amount', p_amount_txt, 'status', p_status));
+  return public.project_payload(p_project_id);
+end $$;
+
+create or replace function public.set_drawdown_status(p_drawdown_id uuid, p_status text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  perform public.assert_access('projects', 2);
+  if p_status not in ('Requested','Received','On schedule','Cancelled') then raise exception 'Invalid drawdown status %', p_status; end if;
+  update public.project_drawdowns set status = p_status where id = p_drawdown_id returning project_id into v_project;
+  if v_project is null then raise exception 'Drawdown not found'; end if;
+  perform public.audit_write('project.drawdown_status','project', v_project::text,
+    jsonb_build_object('drawdown', p_drawdown_id, 'status', p_status));
+  return public.project_payload(v_project);
+end $$;
+
+-- ---------- field activity (also refreshes the project's field summary string) ----------
+create or replace function public.log_field_activity(
+  p_project_id uuid, p_kind text, p_county text default null, p_note text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_visits int; v_installs int; v_assess int; v_parts text[]; v_summary text;
+begin
+  perform public.assert_access('projects', 2);
+  if p_kind not in ('site_visit','install','readiness_assessment') then raise exception 'Invalid activity kind %', p_kind; end if;
+  if not exists (select 1 from public.projects where id = p_project_id) then raise exception 'Project not found'; end if;
+
+  insert into public.field_activities(project_id, kind, county, note)
+  values (p_project_id, p_kind, nullif(trim(coalesce(p_county,'')), ''), nullif(trim(coalesce(p_note,'')), ''));
+
+  -- recompute the display summary on projects.field
+  select count(*) filter (where kind = 'site_visit'),
+         count(*) filter (where kind = 'install'),
+         count(*) filter (where kind = 'readiness_assessment')
+    into v_visits, v_installs, v_assess
+  from public.field_activities where project_id = p_project_id;
+
+  v_parts := array[]::text[];
+  if v_visits  > 0 then v_parts := v_parts || (v_visits  || ' site visit'  || case when v_visits  = 1 then '' else 's' end); end if;
+  if v_installs> 0 then v_parts := v_parts || (v_installs|| ' install'     || case when v_installs= 1 then '' else 's' end); end if;
+  if v_assess  > 0 then v_parts := v_parts || (v_assess  || ' assessment'  || case when v_assess  = 1 then '' else 's' end); end if;
+  v_summary := array_to_string(v_parts, ' · ') || ' logged';
+
+  update public.projects set field = v_summary, updated_at = now() where id = p_project_id;
+  perform public.audit_write('project.field_activity','project', p_project_id::text,
+    jsonb_build_object('kind', p_kind, 'county', p_county));
+  return public.project_payload(p_project_id);
+end $$;
+
+-- ---------- project status / state ----------
+create or replace function public.set_project_state(p_project_id uuid, p_new_state text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_old text; v_status text;
+begin
+  perform public.assert_access('projects', 2);
+  select state into v_old from public.projects where id = p_project_id;
+  if v_old is null then raise exception 'Project not found'; end if;
+  perform public.assert_transition('project', v_old, p_new_state);
+  v_status := case p_new_state
+    when 'active' then 'Active' when 'reporting' then 'Reporting'
+    when 'closed' then 'Closed' else 'Setup' end;
+  update public.projects set state = p_new_state, status = v_status, updated_at = now() where id = p_project_id;
+  perform public.audit_write('project.state','project', p_project_id::text,
+    jsonb_build_object('from', v_old, 'to', p_new_state));
+  return public.project_payload(p_project_id);
+end $$;
+
+-- ---------- grants: authenticated only, never public/anon ----------
+do $$
+begin
+  revoke execute on function
+    public.add_project_milestone(uuid, text, text),
+    public.set_milestone_status(uuid, text),
+    public.add_project_drawdown(uuid, text, text, text),
+    public.set_drawdown_status(uuid, text),
+    public.log_field_activity(uuid, text, text, text),
+    public.set_project_state(uuid, text)
+  from public, anon;
+  grant execute on function
+    public.add_project_milestone(uuid, text, text),
+    public.set_milestone_status(uuid, text),
+    public.add_project_drawdown(uuid, text, text, text),
+    public.set_drawdown_status(uuid, text),
+    public.log_field_activity(uuid, text, text, text),
+    public.set_project_state(uuid, text)
+  to authenticated;
+end $$;
