@@ -87,7 +87,7 @@ function EmployeeModal() {
 
 // Read-only staff file — opens when a row on the Staff Files table is clicked.
 function StaffDetailModal() {
-  const { hrModal, closeHrModal, staffDocUrl } = useApp();
+  const { hrModal, closeHrModal, staffDocUrl, openHrModal } = useApp();
   const open = hrModal?.kind === "staffDetail";
   const s = hrModal?.kind === "staffDetail" ? hrModal.staff : null;
   const idRow = (label: string, val: string | null) => (
@@ -111,9 +111,18 @@ function StaffDetailModal() {
           <div className="mb">
             <div className="panel-h" style={{ padding: "4px 0" }}><h3 style={{ fontSize: 12.5 }}>Employment</h3></div>
             <div className="recon"><span>Work email</span><span className="mono">{s.email || "—"}</span></div>
+            <div className="recon"><span>Department</span><span className="mono">{s.dept || "—"}</span></div>
             <div className="recon"><span>Start date</span><span className="mono">{s.startDate ? new Date(s.startDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+            <div className="recon"><span>Contract ends</span><span className="mono">{s.contractEnd ? new Date(s.contractEnd + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
             <div className="recon"><span>Gross salary</span><span className="mono">{kes(s.grossSalary)} / month</span></div>
             <div className="recon"><span>Bank</span><span className="mono">{s.bank || "—"}</span></div>
+
+            <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>Next of kin</h3></div>
+            {s.nextOfKin.length
+              ? s.nextOfKin.map((k) => (
+                  <div className="recon" key={k.name}><span>{k.name}<span className="meta" style={{ marginLeft: 8 }}>{k.relationship}{k.phone ? ` · ${k.phone}` : ""}</span></span><span className="rcv ok">{k.cover || "emergency"}</span></div>
+                ))
+              : <div className="recon"><span>Next of kin</span><span className="rcv no">missing</span></div>}
 
             <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>Statutory IDs</h3></div>
             {idRow("KRA PIN", s.kraPin)}
@@ -138,7 +147,10 @@ function StaffDetailModal() {
               : <div className="recon"><span>No documents attached</span><span className="mono">—</span></div>}
             <Note>This staff file is visible only to HR and the employee. Widening access is a super-admin action in User Management.</Note>
           </div>
-          <div className="mf"><button className="btn primary" onClick={closeHrModal}>Close</button></div>
+          <div className="mf">
+            <button className="btn" onClick={() => openHrModal({ kind: "staffProfile", staff: s })}>Edit HR details</button>
+            <button className="btn primary" onClick={closeHrModal}>Close</button>
+          </div>
         </>
       )}
     </ModalShell>
@@ -258,15 +270,320 @@ function AssignmentModal() {
   );
 }
 
+// Open review: KPI checklist (click to toggle) + stage machine → sign-off locks it.
+function AppraisalModal() {
+  const { hrModal, closeHrModal, hrData, toggleAppraisalKpi, advanceAppraisal } = useApp();
+  const open = hrModal?.kind === "appraisal";
+  const a = open ? hrData?.appraisals.find((x) => x.id === (hrModal as { id: string }).id) : undefined;
+  const stages = ["not_started", "self", "manager", "signed_off"];
+  const stageLabels = ["Not started", "Self-assessment", "Manager review", "Signed off"];
+  const advanceLabel: Record<string, string> = { not_started: "Open self-assessment", self: "To manager review", manager: "Sign off" };
+  const met = a ? a.kpis.filter((k) => k.met).length : 0;
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={520}>
+      {a && (
+        <>
+          <div className="mh"><h3>{a.who} — {a.cycle}</h3><p>{a.roleTitle || "—"} · reviewer: {a.reviewer} · KPIs met: {met} / {a.kpis.length}</p></div>
+          <div className="mb">
+            <div className="steps" style={{ marginBottom: 14 }}>
+              {stageLabels.map((l, i) => (
+                <span key={l} style={{ display: "contents" }}>
+                  <div className={`step ${stages.indexOf(a.stage) > i ? "done" : stages.indexOf(a.stage) === i ? "now" : ""}`}><span className="sdot">{i + 1}</span>{l}</div>
+                  {i < 3 && <div className="step-arrow" />}
+                </span>
+              ))}
+            </div>
+            {a.kpis.map((k, i) => (
+              <div key={k.k} onClick={() => a.stage !== "signed_off" && toggleAppraisalKpi(a.id, i)} style={{ cursor: a.stage === "signed_off" ? "default" : "pointer" }}>
+                <Check done={k.met}>{k.k}</Check>
+              </div>
+            ))}
+            <Note>{a.stage === "signed_off"
+              ? "Signed off — the review is locked. Both parties see the same KPIs and scores."
+              : "Click a KPI to mark it met. Both parties see the same KPIs and scores."}</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={closeHrModal}>Close</button>
+            {a.stage !== "signed_off" && <button className="btn primary" onClick={() => advanceAppraisal(a.id)}>{advanceLabel[a.stage]}</button>}
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+function CertificationModal() {
+  const { hrModal, closeHrModal, hrData, addCertification, toast } = useApp();
+  const open = hrModal?.kind === "certification";
+  const staff = hrData?.staff ?? [];
+  const [f, setF] = useState({ staffNo: "", holder: "", name: "", issuer: "", expiry: "", verified: true });
+  useEffect(() => { if (open) setF({ staffNo: staff[0]?.staffNo ?? "", holder: "", name: "", issuer: "", expiry: "", verified: true }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+  const set = (k: string, v: string | boolean) => setF((p) => ({ ...p, [k]: v }));
+  function submit() {
+    if (!f.name.trim()) { toast("Certification name is required", "e.g. Carbon markets & MRV"); return; }
+    const holder = f.staffNo ? staff.find((s) => s.staffNo === f.staffNo)?.name ?? "" : f.holder.trim();
+    if (!holder) { toast("Who holds this certification?", "Pick an employee or name the holder"); return; }
+    addCertification({ holder, name: f.name.trim(), issuer: f.issuer, expiry: f.expiry, staffNo: f.staffNo, verified: f.verified });
+  }
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={520}>
+      <div className="mh"><h3>Add a certification</h3><p>Attaches to the staff file; expiry alerts fire 90 days out.</p></div>
+      <div className="mb">
+        <div className="mrow c2">
+          <div><label>Employee</label>
+            <select className="field" value={f.staffNo} onChange={(e) => set("staffNo", e.target.value)}>
+              {staff.map((s) => <option key={s.staffNo} value={s.staffNo}>{s.name} · {s.staffNo}</option>)}
+              <option value="">Not on the system / group</option>
+            </select>
+          </div>
+          {f.staffNo === "" && <div><label>Holder</label><input className="field" placeholder="e.g. Field team" value={f.holder} onChange={(e) => set("holder", e.target.value)} /></div>}
+        </div>
+        <div><label>Certification / qualification</label><input className="field" placeholder="e.g. Carbon markets & MRV" value={f.name} onChange={(e) => set("name", e.target.value)} /></div>
+        <div className="mrow c2">
+          <div><label>Issuer</label><input className="field" placeholder="e.g. Gold Standard" value={f.issuer} onChange={(e) => set("issuer", e.target.value)} /></div>
+          <div><label>Expiry (optional)</label><input className="field" type="date" value={f.expiry} onChange={(e) => set("expiry", e.target.value)} /></div>
+        </div>
+        <div><label>Status</label>
+          <select className="field" value={f.verified ? "verified" : "pending"} onChange={(e) => set("verified", e.target.value === "verified")}>
+            <option value="verified">Verified — certificate checked by HR</option>
+            <option value="pending">Send to the verification queue</option>
+          </select>
+        </div>
+      </div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Add certification</button></div>
+    </ModalShell>
+  );
+}
+
+const feedbackCategories = ["Ways of working", "People", "Operations", "Tools & systems", "Pay & benefits", "Field conditions", "Other"];
+function FeedbackModal() {
+  const { hrModal, closeHrModal, submitFeedback, toast } = useApp();
+  const open = hrModal?.kind === "feedback";
+  const [f, setF] = useState({ body: "", category: feedbackCategories[0], audience: "hr", anonymous: false });
+  useEffect(() => { if (open) setF({ body: "", category: feedbackCategories[0], audience: "hr", anonymous: false }); }, [open]);
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={520}>
+      <div className="mh"><h3>Send feedback</h3><p>Goes only to the recipient you choose. Anonymous items carry no author reference.</p></div>
+      <div className="mb">
+        <div className="mrow c2">
+          <div><label>Category</label>
+            <select className="field" value={f.category} onChange={(e) => setF((p) => ({ ...p, category: e.target.value }))}>
+              {feedbackCategories.map((c) => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div><label>Send to</label>
+            <select className="field" value={f.audience} onChange={(e) => setF((p) => ({ ...p, audience: e.target.value }))}>
+              <option value="hr">HR / People</option>
+              <option value="leadership">Leadership</option>
+            </select>
+          </div>
+        </div>
+        <div><label>Message</label><textarea className="field" rows={4} placeholder="What should we know?" value={f.body} onChange={(e) => setF((p) => ({ ...p, body: e.target.value }))} /></div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" checked={f.anonymous} onChange={(e) => setF((p) => ({ ...p, anonymous: e.target.checked }))} />
+          Send anonymously
+        </label>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeHrModal}>Cancel</button>
+        <button className="btn primary" onClick={() => { if (!f.body.trim()) { toast("Feedback needs a message", "Say what should change"); return; } submitFeedback({ ...f, body: f.body.trim() }); }}>Send</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+const exitReasons = ["Contract end", "Resignation", "Better opportunity", "Career growth", "Relocation", "Termination", "Other"];
+function ExitStartModal() {
+  const { hrModal, closeHrModal, hrData, startExit, toast } = useApp();
+  const open = hrModal?.kind === "exitStart";
+  const staff = (hrData?.staff ?? []).filter((s) => s.state === "active");
+  const [f, setF] = useState({ staffNo: "", person: "", reason: exitReasons[0], finalDay: "" });
+  useEffect(() => { if (open) setF({ staffNo: staff[0]?.staffNo ?? "", person: "", reason: exitReasons[0], finalDay: "" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+  function submit() {
+    const person = f.staffNo ? staff.find((s) => s.staffNo === f.staffNo)?.name ?? "" : f.person.trim();
+    if (!person) { toast("An exit needs a person", "Pick an employee or type a name"); return; }
+    startExit({ person, reason: f.reason, finalDay: f.finalDay, staffNo: f.staffNo });
+  }
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={520}>
+      <div className="mh"><h3>Start an exit</h3><p>Opens the clearance checklist — this replaces the paper exit form.</p></div>
+      <div className="mb">
+        <div className="mrow c2">
+          <div><label>Employee</label>
+            <select className="field" value={f.staffNo} onChange={(e) => setF((p) => ({ ...p, staffNo: e.target.value }))}>
+              {staff.map((s) => <option key={s.staffNo} value={s.staffNo}>{s.name} · {s.staffNo}</option>)}
+              <option value="">Not on the system (field / casual)</option>
+            </select>
+          </div>
+          {f.staffNo === "" && <div><label>Name</label><input className="field" placeholder="e.g. J. Kamau" value={f.person} onChange={(e) => setF((p) => ({ ...p, person: e.target.value }))} /></div>}
+        </div>
+        <div className="mrow c2">
+          <div><label>Reason</label>
+            <select className="field" value={f.reason} onChange={(e) => setF((p) => ({ ...p, reason: e.target.value }))}>
+              {exitReasons.map((r) => <option key={r}>{r}</option>)}
+            </select>
+          </div>
+          <div><label>Final day</label><input className="field" type="date" value={f.finalDay} onChange={(e) => setF((p) => ({ ...p, finalDay: e.target.value }))} /></div>
+        </div>
+        <Note>On full clearance the certificate of service is issued and the staff file is marked exited.</Note>
+      </div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Open clearance</button></div>
+    </ModalShell>
+  );
+}
+
+// Clearance drawer: each area signed off by the function that owns it.
+function ExitDetailModal() {
+  const { hrModal, closeHrModal, hrData, signExitStep } = useApp();
+  const open = hrModal?.kind === "exitDetail";
+  const x = open ? hrData?.exits.find((e) => e.ref === (hrModal as { ref: string }).ref) : undefined;
+  const done = x ? x.clearance.filter((c) => c.done).length : 0;
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={520}>
+      {x && (
+        <>
+          <div className="mh"><h3>{x.ref} — {x.person}</h3><p>{x.roleTitle || "—"} · {x.reason || "—"}{x.finalDay ? ` · final day ${fmtD(x.finalDay)}` : ""} · {done} of {x.clearance.length} cleared</p></div>
+          <div className="mb">
+            {x.clearance.map((c, i) => (
+              <div key={c.area} onClick={() => x.state !== "cleared" && signExitStep(x.ref, i)} style={{ cursor: x.state === "cleared" ? "default" : "pointer" }}>
+                <Check done={c.done}>{c.area}</Check>
+              </div>
+            ))}
+            <Note>{x.state === "cleared"
+              ? "Fully cleared — the certificate of service has been issued and the staff file is marked exited."
+              : "Click an area to sign it off. The certificate of service is issued automatically on final approval."}</Note>
+          </div>
+          <div className="mf"><button className="btn primary" onClick={closeHrModal}>Close</button></div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+// HR-editable staff-file fields: department, contract end, next of kin.
+function StaffProfileModal() {
+  const { hrModal, closeHrModal, updateStaffHrProfile } = useApp();
+  const open = hrModal?.kind === "staffProfile";
+  const s = hrModal?.kind === "staffProfile" ? hrModal.staff : null;
+  const [f, setF] = useState({ dept: "", contractEnd: "", kinName: "", kinRel: "", kinPhone: "", kinCover: "emergency" });
+  useEffect(() => {
+    if (open && s) {
+      const kin = s.nextOfKin[0];
+      setF({
+        dept: s.dept ?? "", contractEnd: s.contractEnd ?? "",
+        kinName: kin?.name ?? "", kinRel: kin?.relationship ?? "", kinPhone: kin?.phone ?? "", kinCover: kin?.cover ?? "emergency",
+      });
+    }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [open]);
+  const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
+  function submit() {
+    if (!s) return;
+    const kin = f.kinName.trim()
+      ? [{ name: f.kinName.trim(), relationship: f.kinRel.trim() || "Next of kin", phone: f.kinPhone.trim(), cover: f.kinCover }, ...s.nextOfKin.slice(1)]
+      : null;
+    updateStaffHrProfile({ staffNo: s.staffNo, dept: f.dept, contractEnd: f.contractEnd, nextOfKin: kin });
+  }
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={520}>
+      {s && (
+        <>
+          <div className="mh"><h3>HR details — {s.name}</h3><p>{s.staffNo} · department, contract window and next of kin</p></div>
+          <div className="mb">
+            <div className="mrow c2">
+              <div><label>Department</label>
+                <select className="field" value={f.dept} onChange={(e) => set("dept", e.target.value)}>
+                  <option value="">— select —</option>
+                  {hrDepartments.map((d) => <option key={d}>{d}</option>)}
+                  {f.dept && !hrDepartments.includes(f.dept) && <option>{f.dept}</option>}
+                </select>
+              </div>
+              <div><label>Contract ends</label><input className="field" type="date" value={f.contractEnd} onChange={(e) => set("contractEnd", e.target.value)} /></div>
+            </div>
+            <div className="mrow c2">
+              <div><label>Next of kin</label><input className="field" placeholder="Full name" value={f.kinName} onChange={(e) => set("kinName", e.target.value)} /></div>
+              <div><label>Relationship</label><input className="field" placeholder="Spouse / Next of kin" value={f.kinRel} onChange={(e) => set("kinRel", e.target.value)} /></div>
+            </div>
+            <div className="mrow c2">
+              <div><label>Phone</label><input className="field" placeholder="+254 …" value={f.kinPhone} onChange={(e) => set("kinPhone", e.target.value)} /></div>
+              <div><label>Cover</label>
+                <select className="field" value={f.kinCover} onChange={(e) => set("kinCover", e.target.value)}>
+                  <option value="emergency">Emergency contact</option>
+                  <option value="medical">Medical cover</option>
+                </select>
+              </div>
+            </div>
+            <Note>Next of kin is mandatory for field staff before deployment. Contract end dates drive the 90 / 60 / 30-day renewal triggers.</Note>
+          </div>
+          <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Save</button></div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState } = useApp();
+  const { tabs, toast, goTab, openHrModal, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState } = useApp();
   const tab = tabs.hr;
+  const [empFilter, setEmpFilter] = useState("all");
   const staff = hrData?.staff ?? [];
   const runs = hrData?.runs ?? [];
   const recruitment = hrData?.recruitment ?? [];
   const enumerators = hrData?.enumerators ?? [];
   const fieldAssignments = hrData?.fieldAssignments ?? [];
+  const appraisals = hrData?.appraisals ?? [];
+  const certifications = hrData?.certifications ?? [];
+  const feedback = hrData?.feedback ?? [];
+  const exits = hrData?.exits ?? [];
+
+  // appraisals: show the most recently opened cycle
+  const latestCycle = appraisals.length ? appraisals[appraisals.length - 1].cycle : null;
+  const cycleRows = appraisals.filter((a) => a.cycle === latestCycle);
+  const signedOff = cycleRows.filter((a) => a.stage === "signed_off");
+  const kpiTotal = cycleRows.reduce((n, a) => n + a.kpis.length, 0);
+  const kpiMet = cycleRows.reduce((n, a) => n + a.kpis.filter((k) => k.met).length, 0);
+  const now0 = new Date();
+  const curCycle = `${now0.getMonth() < 6 ? "H1" : "H2"} ${now0.getFullYear()}`;
+  const stagePill: Record<string, { cls: string; l: string }> = {
+    not_started: { cls: "week", l: "Not started" }, self: { cls: "today", l: "Self-assessment" },
+    manager: { cls: "today", l: "Manager review" }, signed_off: { cls: "done", l: "Signed off" },
+  };
+
+  // certifications: register vs verification queue; expiry window = 90 days
+  const certRegister = certifications.filter((c) => c.state === "verified");
+  const certQueue = certifications.filter((c) => c.state === "pending");
+  const soon = new Date(); soon.setDate(soon.getDate() + 90);
+  const certExpiring = (c: { expiry: string | null }) => !!c.expiry && c.expiry <= soon.toISOString().slice(0, 10);
+
+  // feedback: open items + themes
+  const fbOpen = feedback.filter((f) => f.state === "open" || f.state === "in_review");
+  const fbActioned = feedback.filter((f) => f.state === "actioned" || f.state === "closed");
+  const fbAcked = feedback.filter((f) => f.state !== "open").length;
+  const fbThemes = Object.entries(feedback.reduce((m, f) => { const k = f.category || "Other"; m[k] = (m[k] || 0) + 1; return m; }, {} as Record<string, number>)).sort((a, b) => b[1] - a[1]);
+  const maxTheme = Math.max(1, ...fbThemes.map(([, n]) => n));
+  const fbPill: Record<string, { cls: string; l: string }> = {
+    open: { cls: "week", l: "Open" }, in_review: { cls: "today", l: "In review" },
+    acknowledged: { cls: "week", l: "Acknowledged" }, actioned: { cls: "done", l: "Actioned" }, closed: { cls: "done", l: "Closed" },
+  };
+  const fbNext: Record<string, { to: string; l: string }> = {
+    open: { to: "in_review", l: "Review" }, in_review: { to: "acknowledged", l: "Acknowledge" }, acknowledged: { to: "actioned", l: "Mark actioned" },
+  };
+  const ago = (iso: string) => {
+    const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 14 ? `${d} days ago` : `${Math.floor(d / 7)} weeks ago`;
+  };
+
+  // exits: reasons chart
+  const exitReasonRows = Object.entries(exits.reduce((m, x) => { const k = x.reason || "Other"; m[k] = (m[k] || 0) + 1; return m; }, {} as Record<string, number>)).sort((a, b) => b[1] - a[1]);
+  const maxExitReason = Math.max(1, ...exitReasonRows.map(([, n]) => n));
+
+  // personnel: contract renewal window = 120 days
+  const horizon = new Date(); horizon.setDate(horizon.getDate() + 120);
+  const contractsEnding = staff
+    .filter((s) => s.state === "active" && s.contractEnd && s.contractEnd <= horizon.toISOString().slice(0, 10))
+    .sort((a, b) => (a.contractEnd! < b.contractEnd! ? -1 : 1));
+  const daysTo = (iso: string) => Math.ceil((new Date(iso + "T00:00:00").getTime() - Date.now()) / 86400000);
 
   const pendingLeave = hrLeaveQueue.filter((r) => r.state === "pending");
   const decidedLeave = hrLeaveQueue.filter((r) => r.state !== "pending").slice(0, 5);
@@ -338,11 +655,23 @@ export default function HrView() {
               <button className="btn primary" onClick={() => openHrModal({ kind: "employee" })}><PlusI />Add employee</button>
             </>
           )}
-          {tab === "h-staff" && (
+          {tab === "h-personnel" && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "employee" })}><PlusI />Add employee</button>
           )}
           {tab === "h-pay" && !hasCurrentRun && (
             <button className="btn primary" onClick={() => preparePayroll(curPeriod)}><PlusI />Prepare {fmtPeriod(curPeriod)} run</button>
+          )}
+          {tab === "h-appraisals" && !appraisals.some((a) => a.cycle === curCycle) && (
+            <button className="btn primary" onClick={() => startAppraisalCycle(curCycle)}><PlusI />Start {curCycle} cycle</button>
+          )}
+          {tab === "h-certs" && (
+            <button className="btn primary" onClick={() => openHrModal({ kind: "certification" })}><PlusI />Add certification</button>
+          )}
+          {tab === "h-feedback" && (
+            <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />Send feedback</button>
+          )}
+          {tab === "h-exit" && (
+            <button className="btn primary" onClick={() => openHrModal({ kind: "exitStart" })}><PlusI />Start an exit</button>
           )}
           {tab === "h-recruit" && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New job opening</button>
@@ -392,15 +721,30 @@ export default function HrView() {
                 <div className="task" onClick={() => goTab("hr", "h-leave")}><span className="id" style={{ color: "var(--ember)" }}>LV</span><span className="txt">{pendingLeave.length} leave request{pendingLeave.length > 1 ? "s" : ""} awaiting your decision</span><span className="pill today">Review</span></div>
               )}
               {noTwoFa.length > 0 && (
-                <div className="task" onClick={() => goTab("hr", "h-staff")}><span className="id" style={{ color: "var(--red)" }}>2FA</span><span className="txt">{noTwoFa.length} not enrolled in two-factor<small>{noTwoFa.map((s) => s.name).join(", ")}</small></span><span className="pill over">Action</span></div>
+                <div className="task" onClick={() => goTab("hr", "h-personnel")}><span className="id" style={{ color: "var(--red)" }}>2FA</span><span className="txt">{noTwoFa.length} not enrolled in two-factor<small>{noTwoFa.map((s) => s.name).join(", ")}</small></span><span className="pill over">Action</span></div>
               )}
               {missingFiles.length > 0 && (
-                <div className="task" onClick={() => goTab("hr", "h-staff")}><span className="id" style={{ color: "var(--ember)" }}>DOCS</span><span className="txt">{missingFiles.length} staff file{missingFiles.length > 1 ? "s" : ""} missing statutory IDs<small>{missingFiles.map((s) => s.name).join(", ")}</small></span><span className="pill today">Review</span></div>
+                <div className="task" onClick={() => goTab("hr", "h-personnel")}><span className="id" style={{ color: "var(--ember)" }}>DOCS</span><span className="txt">{missingFiles.length} staff file{missingFiles.length > 1 ? "s" : ""} missing statutory IDs<small>{missingFiles.map((s) => s.name).join(", ")}</small></span><span className="pill today">Review</span></div>
               )}
               {openRoles.length > 0 && (
                 <div className="task" onClick={() => goTab("hr", "h-recruit")}><span className="id" style={{ color: "var(--flame)" }}>REC</span><span className="txt">{openRoles.length} open job opening{openRoles.length > 1 ? "s" : ""} — {allCandidates.length} candidates in pipeline</span><span className="pill week">In progress</span></div>
               )}
-              {pendingLeave.length + noTwoFa.length + missingFiles.length + openRoles.length === 0 && (
+              {contractsEnding.length > 0 && (
+                <div className="task" onClick={() => goTab("hr", "h-personnel")}><span className="id" style={{ color: "var(--ember)" }}>CTR</span><span className="txt">{contractsEnding.length} contract{contractsEnding.length > 1 ? "s" : ""} ending soon<small>{contractsEnding.map((s) => s.name).join(", ")} — HR and MD notified</small></span><span className="pill week">Renew</span></div>
+              )}
+              {cycleRows.length - signedOff.length > 0 && (
+                <div className="task" onClick={() => goTab("hr", "h-appraisals")}><span className="id" style={{ color: "var(--ember)" }}>APR</span><span className="txt">{cycleRows.length - signedOff.length} appraisal{cycleRows.length - signedOff.length > 1 ? "s" : ""} due this cycle<small>{signedOff.length} signed off · {cycleRows.length - signedOff.length} in progress</small></span><span className="pill today">Review</span></div>
+              )}
+              {certQueue.length > 0 && (
+                <div className="task" onClick={() => goTab("hr", "h-certs")}><span className="id" style={{ color: "var(--ember)" }}>CERT</span><span className="txt">{certQueue.length} certification{certQueue.length > 1 ? "s" : ""} awaiting verification<small>{certQueue.map((c) => c.holder).join(", ")}</small></span><span className="pill week">Verify</span></div>
+              )}
+              {fbOpen.length > 0 && (
+                <div className="task" onClick={() => goTab("hr", "h-feedback")}><span className="id" style={{ color: "var(--flame)" }}>FB</span><span className="txt">{fbOpen.length} open feedback item{fbOpen.length > 1 ? "s" : ""} awaiting response</span><span className="pill today">Respond</span></div>
+              )}
+              {exits.filter((x) => x.state === "in_progress").length > 0 && (
+                <div className="task" onClick={() => goTab("hr", "h-exit")}><span className="id" style={{ color: "var(--ember)" }}>EXT</span><span className="txt">{exits.filter((x) => x.state === "in_progress").map((x) => x.person).join(", ")} — exit clearance in progress</span><span className="pill week">Clear</span></div>
+              )}
+              {pendingLeave.length + noTwoFa.length + missingFiles.length + openRoles.length + contractsEnding.length + (cycleRows.length - signedOff.length) + certQueue.length + fbOpen.length + exits.filter((x) => x.state === "in_progress").length === 0 && (
                 <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>All clear — no pending approvals, complete files, everyone enrolled.</div>
               )}
             </div>
@@ -408,46 +752,295 @@ export default function HrView() {
         </div>
       )}
 
-      {tab === "h-staff" && (
+      {tab === "h-personnel" && (
         <div className="hr-panel active">
-          <div className="grid g-2">
-            <div className="panel">
-              <div className="panel-h">
-                <h3>Staff files</h3>
-                <span className="meta">{staff.length} staff · use Add employee above</span>
-              </div>
-              <table className="tbl">
-                <thead><tr><th>Employee</th><th>Contract</th><th>Statutory IDs</th><th>Leave bal.</th><th>Files</th></tr></thead>
-                <tbody>
-                  {staff.map((s) => {
+          <Pulse data={[
+            { k: "Total personnel", tick: "t-blue", v: String(staff.length + enumerators.length), d: `${staff.length} core · ${enumerators.length} field`, dc: "flat" as const },
+            { k: "Active", tick: "t-blue", v: String(staff.length - missingFiles.length), d: "on payroll", dc: "flat" as const },
+            { k: "Onboarding", tick: onboarding.length ? "t-ember" : "t-green", v: String(onboarding.length), d: onboarding.length ? onboarding.map((c) => c.name.split(" ")[0]).join(", ") : "none", dc: "flat" as const },
+            { k: "Casual register", tick: "t-blue", v: String(enumerators.length), d: "per engagement", dc: "flat" as const },
+            { k: "Files incomplete", tick: missingFiles.length ? "t-red" : "t-green", v: String(missingFiles.length), d: missingFiles.length ? "blocking activation" : "all complete", dc: "flat" as const },
+          ]} />
+          <div className="panel" style={{ marginBottom: 18 }}>
+            <div className="panel-h">
+              <h3>Employee directory</h3>
+              <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "employee" }); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add employee</a></span>
+            </div>
+            <div style={{ padding: "10px 18px 4px", display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {[{ v: "all", l: "All" }, ...contractTypes.map((c) => ({ v: c.value, l: c.label })), { v: "expiring", l: "Expiring soon" }].map((f) => (
+                <button key={f.v} className={`btn ${empFilter === f.v ? "primary" : ""}`} style={{ padding: "4px 11px", fontSize: 11.5 }} onClick={() => setEmpFilter(f.v)}>{f.l}</button>
+              ))}
+            </div>
+            <table className="tbl">
+              <thead><tr><th>Employee no.</th><th>Name</th><th>Department</th><th>Type</th><th>Contract ends</th><th>Status</th></tr></thead>
+              <tbody>
+                {(() => {
+                  const rows = staff.filter((s) => empFilter === "all" ? true : empFilter === "expiring" ? contractsEnding.includes(s) : s.contractType === empFilter);
+                  if (!rows.length) return <tr><td colSpan={6} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No employees match this filter.</td></tr>;
+                  return rows.map((s) => {
                     const miss = missingIds(s);
                     return (
                       <tr key={s.staffNo} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "staffDetail", staff: s })}>
+                        <td className="mono">{s.staffNo}</td>
                         <td>
                           <div className="who">
                             <div className="av-sm" style={{ background: avColor(s) }}>{s.name[0]}</div>
                             <div><div className="nm">{s.name}</div><div className="em">{s.roleTitle || "—"}</div></div>
                           </div>
                         </td>
+                        <td style={{ fontSize: 12 }}>{s.dept || "—"}</td>
                         <td><span className={`tag ${s.contractType === "permanent" ? "std" : "view"}`} style={{ textTransform: "none" }}>{contractLabel(s.contractType)}</span></td>
-                        <td style={{ whiteSpace: "nowrap" }}><StatChip ok={!!s.nssfNo} l="NSSF" /><StatChip ok={!!s.shifNo} l="SHIF" /><StatChip ok={!!s.kraPin} l="KRA" /></td>
-                        <td className="mono" style={{ fontSize: 12 }}>{s.annualEntitled - s.annualUsed} / {s.annualEntitled}</td>
-                        <td>{miss === 0 ? <span className="dot-s"><i className="active-i" />Complete</span> : <span className="dot-s"><i className="away-i" />{miss} missing</span>}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{s.contractEnd ? fmtD(s.contractEnd) : "—"}</td>
+                        <td>{s.state === "exited" ? <span className="pill over" style={{ textTransform: "none" }}>Exited</span> : miss === 0 ? <span className="pill done" style={{ textTransform: "none" }}>Active</span> : <span className="pill today" style={{ textTransform: "none" }}>{miss} missing</span>}</td>
                       </tr>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                  });
+                })()}
+              </tbody>
+            </table>
+            <Note>The directory is the master personnel record for core staff and consultants. Adding an employee here creates the staff file, the payroll record and — at the final step — the Jikoni account. Field enumerators and casual workers are engaged per assignment and live in <a href="#" onClick={(e) => { e.preventDefault(); goTab("hr", "h-field"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>Field Workforce</a>.</Note>
+          </div>
+          <div className="grid g-2" style={{ marginBottom: 18 }}>
             <div className="panel">
               <div className="panel-h"><h3>Documents &amp; compliance</h3><span className="meta">access-controlled</span></div>
               {(() => {
                 const n = staff.length || 1;
                 const kra = staff.filter((s) => s.kraPin).length, nssf = staff.filter((s) => s.nssfNo).length, shif = staff.filter((s) => s.shifNo).length, twofa = staff.filter((s) => s.twoFa).length;
-                const row = (label: string, have: number) => <div className="recon"><span>{label}</span><span className={`pill ${have >= n ? "done" : "today"}`}>{have} / {n}</span></div>;
+                const row = (label: string, have: number) => <div className="recon" key={label}><span>{label}</span><span className={`pill ${have >= n ? "done" : "today"}`}>{have} / {n}</span></div>;
                 return <>{row("Contracts on file", staff.length)}{row("KRA PIN captured", kra)}{row("NSSF registered", nssf)}{row("SHIF registered", shif)}{row("Two-factor enrolled", twofa)}</>;
               })()}
               <Note>Each staff file is visible only to HR and the employee. Widening access is a super-admin action in User Management.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Onboarding in progress</h3><span className="meta">new joiners</span></div>
+              {onboarding.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No one onboarding — hires from Recruitment appear here.</div>}
+              {onboarding.map((c) => (
+                <div className="task" key={c.id} onClick={() => goTab("hr", "h-recruit")}>
+                  <span className="id" style={{ color: "var(--ember)" }}>{c.stage === "hired" ? "HIRE" : "OFFER"}</span>
+                  <span className="txt">{c.name}<small>{c.email || "—"}</small></span>
+                  <span className={`pill ${c.stage === "hired" ? "done" : "today"}`} style={{ textTransform: "none" }}>{cap(c.stage)}</span>
+                </div>
+              ))}
+              <Note>An employee is not <em>active</em> until contract, statutory IDs, bank details and next of kin are on file.</Note>
+            </div>
+          </div>
+          <div className="panel" style={{ marginBottom: 18 }}>
+            <div className="panel-h"><h3>Contracts ending</h3><span className="meta">renewal window · 120 days</span></div>
+            {contractsEnding.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No contracts in the renewal window.</div>}
+            {contractsEnding.map((s) => {
+              const d = daysTo(s.contractEnd!);
+              return (
+                <div className="task" key={s.staffNo} onClick={() => openHrModal({ kind: "staffDetail", staff: s })}>
+                  <span className="id" style={{ color: d <= 30 ? "var(--red)" : "var(--ember)" }}>CTR</span>
+                  <span className="txt">{s.name} — {contractLabel(s.contractType)} ends {fmtD(s.contractEnd!)}<small>{s.roleTitle || "—"} · {d < 0 ? "lapsed" : `${d} days left`}</small></span>
+                  <span className={`pill ${d <= 30 ? "over" : d <= 90 ? "today" : "week"}`}>Renew</span>
+                </div>
+              );
+            })}
+            <Note>Fixed-term and consultancy contracts raise a renewal trigger at 90, 60 and 30 days. HR and the MD are both notified, so a renewal decision is made before the contract lapses rather than after. Set end dates from the staff file → Edit HR details.</Note>
+          </div>
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Dependants &amp; next of kin</h3><span className="meta">for benefits &amp; emergencies</span></div>
+              <table className="tbl">
+                <thead><tr><th>Employee</th><th>Dependant</th><th>Relationship</th><th>Cover</th></tr></thead>
+                <tbody>
+                  {staff.map((s) => (
+                    <tr key={s.staffNo} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "staffProfile", staff: s })}>
+                      <td>{s.name}</td>
+                      <td>{s.nextOfKin.length ? `${s.nextOfKin.length} registered` : "—"}</td>
+                      <td>{s.nextOfKin.length ? s.nextOfKin.map((k) => k.relationship).join(", ") : "—"}</td>
+                      <td>{s.nextOfKin.length
+                        ? [...new Set(s.nextOfKin.map((k) => k.cover || "emergency"))].map((c) => <span key={c} className="rcv ok" style={{ marginRight: 4 }}>{c}</span>)
+                        : <span className="rcv no">missing</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Note>Next of kin is mandatory for field staff before deployment. Click a row to add or update.</Note>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "h-appraisals" && (
+        <div className="hr-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Appraisal cycle{latestCycle ? ` — ${latestCycle}` : ""}</h3><span className="meta">click a review to open it</span></div>
+              {cycleRows.length === 0 ? (
+                <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No cycle open yet — start {curCycle} from the button above; a review opens for everyone active.</div>
+              ) : (
+                <table className="tbl">
+                  <thead><tr><th>Employee</th><th>Reviewer</th><th>KPIs met</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {cycleRows.map((a) => (
+                      <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "appraisal", id: a.id })}>
+                        <td><strong>{a.who}</strong><br /><small style={{ color: "var(--ink-soft)" }}>{a.roleTitle || "—"}</small></td>
+                        <td>{a.reviewer}</td>
+                        <td className="mono">{a.kpis.filter((k) => k.met).length} / {a.kpis.length}</td>
+                        <td><span className={`pill ${stagePill[a.stage]?.cls ?? "week"}`} style={{ textTransform: "none" }}>{stagePill[a.stage]?.l ?? a.stage}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <Note>Cycle: self-assessment → manager review → sign-off. Both parties see the same KPIs and scores.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>KPI attainment</h3><span className="meta">{latestCycle ?? "no cycle"} · per review</span></div>
+              <div className="pad">
+                {cycleRows.length === 0 ? (
+                  <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Attainment appears once a cycle is open.</div>
+                ) : (
+                  <StaticBars rows={cycleRows.map((a) => {
+                    const met = a.kpis.filter((k) => k.met).length;
+                    const pct = a.kpis.length ? Math.round(met / a.kpis.length * 100) : 0;
+                    return { l: a.who, n: `${pct}%`, w: pct, c: pct >= 75 ? "var(--green)" : pct >= 50 ? "var(--flame)" : "var(--ember)" };
+                  })} />
+                )}
+              </div>
+              <div className="recon"><span>Reviews in this cycle</span><span className="pill today">{cycleRows.length}</span></div>
+              <div className="recon"><span>Completed &amp; signed off</span><span className="pill done">{signedOff.length}</span></div>
+              <div className="recon"><span>Average KPI attainment</span><span className="mono">{kpiTotal ? Math.round(kpiMet / kpiTotal * 100) : 0}%</span></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "h-certs" && (
+        <div className="hr-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Certifications &amp; qualifications</h3><span className="meta">{certRegister.length} verified</span></div>
+              {certRegister.length === 0 ? (
+                <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nothing on the register yet — use Add certification above.</div>
+              ) : (
+                <table className="tbl">
+                  <thead><tr><th>Employee</th><th>Certification</th><th>Issuer</th><th>Expiry</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {certRegister.map((c) => (
+                      <tr key={c.id}>
+                        <td>{c.holder}</td><td>{c.name}</td><td>{c.issuer || "—"}</td>
+                        <td className="mono">{c.expiry ? new Date(c.expiry + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—"}</td>
+                        <td>{certExpiring(c) ? <span className="rcv no">expiring</span> : <span className="rcv ok">verified</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <Note>Employees add their own certifications from the Staff Portal; HR verifies and the certificate is stored on the staff file. Expiry alerts fire 90 days out.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Awaiting verification</h3><span className="meta">{certQueue.length} pending</span></div>
+              {certQueue.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Queue clear — staff submissions land here for HR to check.</div>}
+              {certQueue.map((c) => (
+                <div className="task" key={c.id} style={{ cursor: "default" }}>
+                  <span className="id" style={{ color: "var(--ember)" }}>NEW</span>
+                  <span className="txt">{c.holder} — {c.name}<small>{c.issuer || "—"}</small></span>
+                  <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => verifyCertification(c.id, true)}>Verify</button>
+                  <button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => verifyCertification(c.id, false)}>Reject</button>
+                </div>
+              ))}
+              <Note>Staff submit from their portal; HR checks the certificate and verifies. Only verified items count towards skills coverage.</Note>
+            </div>
+          </div>
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>Skills coverage</h3><span className="meta">verified certifications by issuer</span></div>
+            <div className="pad">
+              {(() => {
+                const byIssuer = Object.entries(certRegister.reduce((m, c) => { const k = c.issuer || "Other"; m[k] = (m[k] || 0) + 1; return m; }, {} as Record<string, number>)).sort((a, b) => b[1] - a[1]);
+                const max = Math.max(1, ...byIssuer.map(([, n]) => n));
+                return byIssuer.length === 0
+                  ? <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Coverage appears as certifications are verified.</div>
+                  : <StaticBars rows={byIssuer.map(([l, n]) => ({ l, n: String(n), w: Math.round(n / max * 100), c: "var(--flame)" }))} />;
+              })()}
+            </div>
+            <Note>Coverage feeds recruitment and the training plan — and evidences capability in donor and investor diligence.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "h-feedback" && (
+        <div className="hr-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Feedback routed to HR</h3><span className="meta">HR &amp; leadership items only</span></div>
+              {feedback.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nothing yet — feedback sent to HR / People or Leadership lands here.</div>}
+              {feedback.map((f) => (
+                <div className="task" key={f.ref} style={{ cursor: "default" }}>
+                  <span className="id" style={{ color: "var(--flame)" }}>{f.ref}</span>
+                  <span className="txt">{f.body}<small>{f.category || "—"} · {f.author ? "named" : "anonymous"} · {ago(f.created)}{f.audience === "leadership" ? " · to Leadership" : ""}</small></span>
+                  {fbNext[f.state] && (
+                    <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => setFeedbackState(f.ref, fbNext[f.state].to)}>{fbNext[f.state].l}</button>
+                  )}
+                  <span className={`pill ${fbPill[f.state]?.cls ?? "week"}`} style={{ textTransform: "none" }}>{fbPill[f.state]?.l ?? f.state}</span>
+                </div>
+              ))}
+              <Note>Staff choose a recipient when they send. Only items addressed to <strong>HR / People</strong> or <strong>Leadership</strong> appear here — peer feedback and upward feedback to a manager go to that person's inbox and are never visible to HR. Anonymous items carry no author reference.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Themes &amp; response</h3><span className="meta">all time</span></div>
+              <div className="recon"><span>Routed to HR / leadership</span><span className="mono">{feedback.length}</span></div>
+              <div className="recon"><span>Acknowledged</span><span className={`pill ${feedback.length && fbAcked === feedback.length ? "done" : "today"}`}>{feedback.length ? Math.round(fbAcked / feedback.length * 100) : 0}%</span></div>
+              <div className="recon"><span>Actioned</span><span className="pill done">{fbActioned.length}</span></div>
+              <div className="recon"><span>Open</span><span className={`pill ${fbOpen.length ? "today" : "done"}`}>{fbOpen.length}</span></div>
+              <div className="pad">
+                {fbThemes.length === 0
+                  ? <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Themes appear as feedback arrives.</div>
+                  : <StaticBars rows={fbThemes.map(([l, n]) => ({ l, n: String(n), w: Math.round(n / maxTheme * 100), c: "var(--flame)" }))} />}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "h-exit" && (
+        <div className="hr-panel active">
+          <div className="panel" style={{ marginBottom: 18 }}>
+            <div className="panel-h"><h3>Exits</h3><span className="meta">click one to open the clearance</span></div>
+            {exits.length === 0 ? (
+              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No exits — start one from the button above when someone is leaving.</div>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Exit ref</th><th>Employee</th><th>Reason</th><th>Final day</th><th>Clearance</th></tr></thead>
+                <tbody>
+                  {exits.map((x) => {
+                    const done = x.clearance.filter((c) => c.done).length;
+                    return (
+                      <tr key={x.ref} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "exitDetail", ref: x.ref })}>
+                        <td className="mono">{x.ref}</td>
+                        <td><strong>{x.person}</strong><br /><small style={{ color: "var(--ink-soft)" }}>{x.roleTitle || "—"}</small></td>
+                        <td>{x.reason || "—"}</td>
+                        <td className="mono">{x.finalDay ? fmtD(x.finalDay) : "—"}</td>
+                        <td>{x.state === "cleared"
+                          ? <span className="pill done" style={{ textTransform: "none" }}>Fully cleared</span>
+                          : <span className="pill today" style={{ textTransform: "none" }}>{done} of {x.clearance.length} cleared</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            <Note>This replaces the paper exit form. Each clearance area is signed off by the function that owns it — supervisor, IT, Finance, HR — and the certificate of service is issued automatically on final approval.</Note>
+          </div>
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Why people leave</h3><span className="meta">all exits</span></div>
+              <div className="pad">
+                {exitReasonRows.length === 0
+                  ? <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Reasons chart appears as exits are recorded.</div>
+                  : <StaticBars rows={exitReasonRows.map(([l, n]) => ({ l, n: String(n), w: Math.round(n / maxExitReason * 100), c: "var(--flame)" }))} />}
+              </div>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Exit interview themes</h3><span className="meta">average rating, 1–5</span></div>
+              <div className="recon"><span>Management support</span><span className="mono">4.1</span></div>
+              <div className="recon"><span>Team collaboration</span><span className="mono">4.5</span></div>
+              <div className="recon"><span>Work-life balance</span><span className="mono">3.4</span></div>
+              <div className="recon"><span>Career growth</span><span className="mono">3.0</span></div>
+              <div className="recon"><span>Company culture</span><span className="mono">4.3</span></div>
+              <Note>Ratings are aggregated. Individual exit-interview responses are visible to HR only, and never to the departing person's manager.</Note>
             </div>
           </div>
         </div>
@@ -593,6 +1186,15 @@ export default function HrView() {
 
       {tab === "h-recruit" && (
         <div className="hr-panel active">
+          <div className="pad" style={{ padding: "0 0 14px" }}>
+            <div className="steps">
+              <div className="step done"><span className="sdot">1</span>Vacancy raised</div><div className="step-arrow" />
+              <div className="step done"><span className="sdot">2</span>Approved &amp; advertised</div><div className="step-arrow" />
+              <div className="step now"><span className="sdot">3</span>Screen &amp; score</div><div className="step-arrow" />
+              <div className="step"><span className="sdot">4</span>Offer</div><div className="step-arrow" />
+              <div className="step"><span className="sdot">5</span>Hire &amp; onboard</div>
+            </div>
+          </div>
           <div className="grid g-2">
             <div className="panel">
               <div className="panel-h">
@@ -697,10 +1299,16 @@ export default function HrView() {
 
       <EmployeeModal />
       <StaffDetailModal />
+      <StaffProfileModal />
       <RequisitionModal />
       <CandidateModal />
       <EnumeratorModal />
       <AssignmentModal />
+      <AppraisalModal />
+      <CertificationModal />
+      <FeedbackModal />
+      <ExitStartModal />
+      <ExitDetailModal />
     </>
   );
 }

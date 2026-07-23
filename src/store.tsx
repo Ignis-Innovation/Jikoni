@@ -38,10 +38,12 @@ export interface HrLeaveReq { id: string; who: string; kind: string; from: strin
 export interface HrBalanceRow { who: string; entitled: number; used: number; reserved: number }
 
 /* ---------- HR module read model (staff / payroll / recruitment / field) ---------- */
+export interface KinRow { name: string; relationship: string; phone?: string; cover?: string }
 export interface StaffRow {
   appUserId: string; name: string; email: string; roleTitle: string | null; color: string | null; twoFa: boolean;
   staffNo: string; contractType: string; startDate: string | null; grossSalary: number; bank: string | null;
   kraPin: string | null; nssfNo: string | null; shifNo: string | null; state: string;
+  dept: string | null; contractEnd: string | null; nextOfKin: KinRow[];
   annualEntitled: number; annualUsed: number; docs: StaffDoc[];
 }
 export interface PayrollItemRow { name: string; gross: number; paye: number; nssf: number; shif: number; housing: number; net: number }
@@ -50,20 +52,36 @@ export interface CandidateRow { id: string; name: string; email: string | null; 
 export interface RecruitmentReq { ref: string; roleTitle: string; dept: string | null; state: string; candidates: CandidateRow[] }
 export interface EnumeratorRow { id: string; name: string; county: string | null; idNo: string | null; dailyRate: number; state: string }
 export interface FieldAssignmentRow { id: string; enumerator: string; county: string | null; project: string | null; period: string | null; days: number; perDiem: number; contractDoc: string | null; state: string }
+export interface AppraisalKpi { k: string; met: boolean }
+export interface AppraisalRow { id: string; who: string; roleTitle: string | null; reviewer: string; cycle: string; stage: string; kpis: AppraisalKpi[]; created: string }
+export interface CertificationRow { id: string; holder: string; name: string; issuer: string | null; expiry: string | null; state: string }
+export interface FeedbackRow { ref: string; author: string | null; category: string | null; body: string; audience: string; state: string; created: string }
+export interface ExitStep { area: string; done: boolean }
+export interface ExitRow { ref: string; person: string; roleTitle: string | null; reason: string | null; finalDay: string | null; clearance: ExitStep[]; state: string }
 export interface HrData {
   staff: StaffRow[];
   runs: PayrollRun[];
   recruitment: RecruitmentReq[];
   enumerators: EnumeratorRow[];
   fieldAssignments: FieldAssignmentRow[];
+  appraisals: AppraisalRow[];
+  certifications: CertificationRow[];
+  feedback: FeedbackRow[];
+  exits: ExitRow[];
 }
 export type HrModalMode =
   | { kind: "employee" }
   | { kind: "staffDetail"; staff: StaffRow }
+  | { kind: "staffProfile"; staff: StaffRow }
   | { kind: "requisition" }
   | { kind: "candidate"; reqRef: string }
   | { kind: "enumerator" }
   | { kind: "assignment" }
+  | { kind: "appraisal"; id: string }
+  | { kind: "certification" }
+  | { kind: "feedback" }
+  | { kind: "exitStart" }
+  | { kind: "exitDetail"; ref: string }
   | null;
 
 /* ---------- Partnerships CRM (engagements / partners / opportunities) ---------- */
@@ -203,6 +221,16 @@ interface AppApi {
   createEnumerator: (v: { name: string; county: string; idNo: string }) => void;
   createFieldAssignment: (v: { enumeratorId: string; project: string; period: string; days: number }) => void;
   setFieldAssignmentState: (id: string, state: string) => void;
+  updateStaffHrProfile: (v: { staffNo: string; dept: string; contractEnd: string; nextOfKin: KinRow[] | null }) => void;
+  startAppraisalCycle: (cycle: string) => void;
+  toggleAppraisalKpi: (id: string, idx: number) => void;
+  advanceAppraisal: (id: string) => void;
+  addCertification: (v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean }) => void;
+  verifyCertification: (id: string, ok: boolean) => void;
+  submitFeedback: (v: { body: string; category: string; audience: string; anonymous: boolean }) => void;
+  setFeedbackState: (ref: string, state: string) => void;
+  startExit: (v: { person: string; reason: string; finalDay: string; staffNo: string }) => void;
+  signExitStep: (ref: string, idx: number) => void;
 
   crm: CrmData;
   engFormOpen: boolean;
@@ -458,15 +486,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // module-wide HR read model — direct table queries (same pattern as loadLeaveQueue)
   async function loadHrModule() {
     const year = new Date().getFullYear();
-    const [sf, lb, pr, rc, en, fa] = await Promise.all([
-      supabase.from("staff_files").select("app_user_id, staff_no, kra_pin, nssf_no, shif_no, contract_type, start_date, gross_salary, bank, docs, state, app_users(name, email, role_title, color, two_fa)"),
+    const [sf, lb, pr, rc, en, fa, ap, ct, fb, ex] = await Promise.all([
+      supabase.from("staff_files").select("app_user_id, staff_no, kra_pin, nssf_no, shif_no, contract_type, start_date, gross_salary, bank, docs, state, dept, contract_end, next_of_kin, app_users!staff_files_app_user_id_fkey(name, email, role_title, color, two_fa)"),
       supabase.from("leave_balances").select("app_user_id, entitled, used").eq("kind", "annual").eq("year", year),
       supabase.from("payroll_runs").select("ref, period, state, totals, payroll_items(gross, paye, nssf, shif, housing, net, app_users(name))").order("period", { ascending: false }),
       supabase.from("recruitment_reqs").select("ref, role_title, dept, state, candidates(id, name, email, stage)").order("created_at"),
       supabase.from("enumerators").select("id, name, county, id_no, daily_rate, state").order("name"),
       supabase.from("field_assignments").select("id, project_name, period, days, per_diem, contract_doc, state, enumerators(name, county)").order("created_at", { ascending: false }),
+      supabase.from("appraisals").select("id, cycle, stage, kpis, created_at, subject:app_users!appraisals_app_user_id_fkey(name, role_title), reviewer:app_users!appraisals_reviewer_id_fkey(name)").order("created_at"),
+      supabase.from("certifications").select("id, holder, name, issuer, expiry, state").order("created_at"),
+      supabase.from("staff_feedback").select("ref, category, body, audience, state, created_at, author:app_users!staff_feedback_author_id_fkey(name)").order("created_at", { ascending: false }),
+      supabase.from("staff_exits").select("ref, person, role_title, reason, final_day, clearance, state").order("ref", { ascending: false }),
     ]);
-    const err = sf.error || lb.error || pr.error || rc.error || en.error || fa.error;
+    const err = sf.error || lb.error || pr.error || rc.error || en.error || fa.error || ap.error || ct.error || fb.error || ex.error;
     if (err) { toast("Couldn't load HR records", err.message); return; }
     const balByUser = new Map((lb.data as any[]).map((b) => [b.app_user_id, b]));
     setHrData({
@@ -477,6 +509,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           roleTitle: s.app_users?.role_title ?? null, color: s.app_users?.color ?? null, twoFa: !!s.app_users?.two_fa,
           staffNo: s.staff_no, contractType: s.contract_type, startDate: s.start_date, grossSalary: Number(s.gross_salary),
           bank: s.bank, kraPin: s.kra_pin, nssfNo: s.nssf_no, shifNo: s.shif_no, state: s.state,
+          dept: s.dept, contractEnd: s.contract_end, nextOfKin: (s.next_of_kin ?? []) as KinRow[],
           annualEntitled: b ? Number(b.entitled) : 0, annualUsed: b ? Number(b.used) : 0,
           docs: (s.docs ?? []) as StaffDoc[],
         };
@@ -496,6 +529,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       fieldAssignments: (fa.data as any[]).map((a) => ({
         id: a.id, enumerator: a.enumerators?.name ?? "—", county: a.enumerators?.county ?? null, project: a.project_name,
         period: a.period, days: Number(a.days), perDiem: Number(a.per_diem), contractDoc: a.contract_doc, state: a.state,
+      })),
+      appraisals: (ap.data as any[]).map((a) => ({
+        id: a.id, who: a.subject?.name ?? "—", roleTitle: a.subject?.role_title ?? null, reviewer: a.reviewer?.name ?? "—",
+        cycle: a.cycle, stage: a.stage, kpis: (a.kpis ?? []) as AppraisalKpi[], created: a.created_at,
+      })),
+      certifications: (ct.data as any[]).map((c) => ({ id: c.id, holder: c.holder, name: c.name, issuer: c.issuer, expiry: c.expiry, state: c.state })),
+      feedback: (fb.data as any[]).map((f) => ({
+        ref: f.ref, author: f.author?.name ?? null, category: f.category, body: f.body,
+        audience: f.audience, state: f.state, created: f.created_at,
+      })),
+      exits: (ex.data as any[]).map((x) => ({
+        ref: x.ref, person: x.person, roleTitle: x.role_title, reason: x.reason, finalDay: x.final_day,
+        clearance: (x.clearance ?? []) as ExitStep[], state: x.state,
       })),
     });
   }
@@ -827,6 +873,90 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     toast(`Assignment ${state}`, state === "active" ? "Per-diem approved — flows to project accounting" : `Marked ${state}`);
   }
 
+  /* ---------- HR personnel suite: appraisals / certifications / feedback / exits ---------- */
+  async function updateStaffHrProfile(v: { staffNo: string; dept: string; contractEnd: string; nextOfKin: KinRow[] | null }) {
+    const { error } = await supabase.rpc("update_staff_hr_profile", {
+      p_staff_no: v.staffNo, p_dept: v.dept || null, p_contract_end: v.contractEnd || null,
+      p_next_of_kin: v.nextOfKin,
+    });
+    if (error) { toast("Profile not updated", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${v.staffNo} updated`, "HR details saved on the staff file");
+  }
+  async function startAppraisalCycle(cycle: string) {
+    const { data, error } = await supabase.rpc("start_appraisal_cycle", { p_cycle: cycle });
+    if (error) { toast("Cycle not started", error.message); return; }
+    await loadHrModule();
+    toast(`${cycle} cycle opened`, `${data.opened} review${data.opened === 1 ? "" : "s"} created — self-assessment → manager review → sign-off`);
+  }
+  async function toggleAppraisalKpi(id: string, idx: number) {
+    const { error } = await supabase.rpc("toggle_appraisal_kpi", { p_id: id, p_idx: idx });
+    if (error) { toast("KPI not updated", error.message); return; }
+    await loadHrModule();
+  }
+  async function advanceAppraisal(id: string) {
+    const { data, error } = await supabase.rpc("advance_appraisal", { p_id: id });
+    if (error) { toast("Couldn't advance review", error.message); return; }
+    await loadHrModule();
+    const msg: Record<string, string> = {
+      self: "Self-assessment open — the employee scores their own KPIs first",
+      manager: "With the manager for review",
+      signed_off: "Signed off — both parties see the same KPIs and scores; the review is locked",
+    };
+    toast(`Review ${data.stage === "signed_off" ? "signed off" : "advanced"}`, msg[data.stage as string] ?? "");
+  }
+  async function addCertification(v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean }) {
+    const { error } = await supabase.rpc("add_certification", {
+      p_holder: v.holder, p_name: v.name, p_issuer: v.issuer || null, p_expiry: v.expiry || null,
+      p_staff_no: v.staffNo || null, p_verified: v.verified,
+    });
+    if (error) { toast("Certification not added", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${v.name} added`, v.verified ? `On ${v.holder}'s file — expiry alerts fire 90 days out` : "In the verification queue for HR to check");
+  }
+  async function verifyCertification(id: string, ok: boolean) {
+    const { error } = await supabase.rpc("verify_certification", { p_id: id, p_ok: ok });
+    if (error) { toast("Verification failed", error.message); return; }
+    await loadHrModule();
+    toast(ok ? "Certification verified" : "Certification rejected", ok ? "Stored on the staff file — counts towards skills coverage" : "Removed from the register");
+  }
+  async function submitFeedback(v: { body: string; category: string; audience: string; anonymous: boolean }) {
+    const { data, error } = await supabase.rpc("submit_feedback", {
+      p_body: v.body, p_category: v.category || null, p_audience: v.audience, p_anonymous: v.anonymous,
+    });
+    if (error) { toast("Feedback not sent", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${data.id} sent to ${v.audience === "hr" ? "HR / People" : "Leadership"}`, v.anonymous ? "Sent anonymously — no author reference is stored" : "Sent with your name");
+  }
+  async function setFeedbackState(ref: string, state: string) {
+    const { error } = await supabase.rpc("set_feedback_state", { p_ref: ref, p_state: state });
+    if (error) { toast("Couldn't update feedback", error.message); return; }
+    await loadHrModule();
+    const msg: Record<string, string> = {
+      in_review: "In review with HR", acknowledged: "Acknowledged — the sender can see it landed",
+      actioned: "Actioned and closed out", closed: "Closed",
+    };
+    toast(`${ref} ${state.replace("_", " ")}`, msg[state] ?? "");
+  }
+  async function startExit(v: { person: string; reason: string; finalDay: string; staffNo: string }) {
+    const { data, error } = await supabase.rpc("start_exit", {
+      p_person: v.person, p_reason: v.reason || null, p_final_day: v.finalDay || null, p_staff_no: v.staffNo || null,
+    });
+    if (error) { toast("Exit not started", error.message); return; }
+    await loadHrModule();
+    setHrModal({ kind: "exitDetail", ref: data.id });
+    toast(`${data.id} opened for ${v.person}`, "Work through the clearance — each area is signed off by the function that owns it");
+  }
+  async function signExitStep(ref: string, idx: number) {
+    const { data, error } = await supabase.rpc("sign_exit_step", { p_ref: ref, p_idx: idx });
+    if (error) { toast("Couldn't sign off", error.message); return; }
+    await loadHrModule();
+    if (data.state === "cleared") toast(`${ref} fully cleared`, "Certificate of service issued; the staff file is marked exited");
+  }
+
   /* ---------- Partnerships CRM: create-forms insert via SECURITY DEFINER RPCs
      (audit-logged, access-gated), then reload so the tables re-render live ---------- */
   // Upload a document to Storage and record it against an engagement. Returns true on success.
@@ -1145,6 +1275,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
     addEmployee, preparePayroll, approvePayroll, postPayroll,
     createRecruitmentReq, addCandidate, advanceCandidate, createEnumerator, createFieldAssignment, setFieldAssignmentState,
+    updateStaffHrProfile, startAppraisalCycle, toggleAppraisalKpi, advanceAppraisal,
+    addCertification, verifyCertification, submitFeedback, setFeedbackState, startExit, signExitStep,
     crm,
     engFormOpen, openEngForm: () => setEngFormOpen(true), closeEngForm: () => setEngFormOpen(false), createEngagement,
     engUpdateOpen, openEngUpdate: () => setEngUpdateOpen(true), closeEngUpdate: () => setEngUpdateOpen(false),

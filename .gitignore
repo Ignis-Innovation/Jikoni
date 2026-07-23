@@ -24,3 +24,4 @@ yarn-debug.log*
 
 # vercel
 .vercel
+.env*

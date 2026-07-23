@@ -41,10 +41,14 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
   ],
   hr: [
     { t: "h-over", l: "Overview" },
-    { t: "h-staff", l: "Staff Files" },
+    { t: "h-personnel", l: "Personnel Management" },
     { t: "h-leave", l: "Leave" },
     { t: "h-pay", l: "Payroll" },
+    { t: "h-appraisals", l: "Appraisals & KPIs" },
+    { t: "h-certs", l: "Certifications" },
+    { t: "h-feedback", l: "Employee Feedback" },
     { t: "h-recruit", l: "Recruitment" },
+    { t: "h-exit", l: "Offboarding & Exit" },
     { t: "h-field", l: "Field Workforce" },
   ],
   projects: [
