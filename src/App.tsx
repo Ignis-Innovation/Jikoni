@@ -115,7 +115,7 @@ function Sidebar() {
 
         <div className="nav-group">People</div>
         <NavModule v="hr" icon={<HrI />} badge="3" badgeCls="blue" collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />
-        <NavItem v="staffportal" icon={<PortalI />} label="Staff Portal" />
+        <NavModule v="staffportal" icon={<PortalI />} collapsed={collapsed("staffportal")} setCollapsed={setCollapsed("staffportal")} />
 
         <div className="nav-group">Deployment</div>
         <NavItem v="deploy" icon={<FlameI />} label="Deployment & Carbon" />

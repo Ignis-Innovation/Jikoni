@@ -7,6 +7,7 @@ export const moduleLabels: Record<string, string> = {
   procurement: "Procurement",
   inventory: "Inventory & Assets",
   hr: "Human Resources",
+  staffportal: "Staff Portal",
   projects: "Projects & Programmes",
   crm: "Partnerships CRM",
   compliance: "Compliance & Governance",
@@ -50,6 +51,14 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "h-recruit", l: "Recruitment" },
     { t: "h-exit", l: "Offboarding & Exit" },
     { t: "h-field", l: "Field Workforce" },
+  ],
+  staffportal: [
+    { t: "sp-me", l: "This Month" },
+    { t: "sp-leave", l: "My Leave" },
+    { t: "sp-perf", l: "My Performance" },
+    { t: "sp-files", l: "My Files" },
+    { t: "sp-fb", l: "Give Feedback" },
+    { t: "sp-exit", l: "My Exit" },
   ],
   projects: [
     { t: "pr-over", l: "Overview" },

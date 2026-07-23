@@ -1,14 +1,24 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { Note } from "../components/ui";
-import { PlusI } from "../components/icons";
-import { kes } from "../data";
+import { PlusI, CheckBoldI } from "../components/icons";
+import { ModalShell } from "../components/modals";
+import { kes, contractTypes } from "../data";
+import { Crumb } from "../nav";
+import { FeedbackModal } from "./Hr";
 
 const docCategories = [
   { value: "id", label: "ID / KRA / statutory" },
   { value: "contract", label: "Contract / letter" },
   { value: "certificate", label: "Certificate" },
   { value: "other", label: "Other" },
+];
+const fileFilters = [
+  { v: "all", l: "All" },
+  { v: "id", l: "Statutory / ID" },
+  { v: "certificate", l: "Certifications" },
+  { v: "contract", l: "Contract" },
+  { v: "other", l: "Other" },
 ];
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -20,11 +30,56 @@ const statePill: Record<string, { cls: string; txt: string }> = {
   rejected: { cls: "over", txt: "Rejected" },
   cancelled: { cls: "done", txt: "Cancelled" },
 };
+const fbPill: Record<string, { cls: string; l: string }> = {
+  open: { cls: "week", l: "Delivered" }, in_review: { cls: "today", l: "In review" },
+  acknowledged: { cls: "today", l: "Acknowledged" }, actioned: { cls: "done", l: "Actioned" }, closed: { cls: "done", l: "Closed" },
+};
+
+function Check({ done, children }: { done: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 0", borderBottom: "1px solid var(--hairline)", fontSize: 13.5, color: done ? undefined : "var(--ink-soft)" }}>
+      <span style={{
+        width: 20, height: 20, borderRadius: "50%", display: "grid", placeItems: "center", flexShrink: 0,
+        ...(done ? { background: "var(--green-soft)", color: "var(--green)" } : { background: "#F1EDE5", border: "1px solid var(--hairline-2)" }),
+      }}>
+        {done && <CheckBoldI />}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+// Submit a certification from the portal — lands in HR's verification queue.
+function MyCertModal() {
+  const { hrModal, closeHrModal, submitMyCertification, toast } = useApp();
+  const open = hrModal?.kind === "myCert";
+  const [f, setF] = useState({ name: "", issuer: "", expiry: "" });
+  useEffect(() => { if (open) setF({ name: "", issuer: "", expiry: "" }); }, [open]);
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={480}>
+      <div className="mh"><h3>Add a certification</h3><p>Goes to HR for verification, then attaches to your file</p></div>
+      <div className="mb">
+        <div><label>Certification / qualification</label><input className="field" placeholder="e.g. Prince2 Practitioner" value={f.name} onChange={(e) => setF((p) => ({ ...p, name: e.target.value }))} /></div>
+        <div className="mrow c2">
+          <div><label>Issuer</label><input className="field" placeholder="e.g. Axelos" value={f.issuer} onChange={(e) => setF((p) => ({ ...p, issuer: e.target.value }))} /></div>
+          <div><label>Expiry (optional)</label><input className="field" type="date" value={f.expiry} onChange={(e) => setF((p) => ({ ...p, expiry: e.target.value }))} /></div>
+        </div>
+        <Note>HR checks the certificate and verifies. Only verified items count towards skills coverage.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeHrModal}>Cancel</button>
+        <button className="btn primary" onClick={() => { if (!f.name.trim()) { toast("Certification name is required", "e.g. Prince2 Practitioner"); return; } submitMyCertification({ ...f, name: f.name.trim() }); }}>Submit</button>
+      </div>
+    </ModalShell>
+  );
+}
 
 export default function StaffPortalView() {
-  const { toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl } = useApp();
+  const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment } = useApp();
+  const tab = tabs.staffportal;
   const fileRef = useRef<HTMLInputElement>(null);
   const [docCat, setDocCat] = useState("other");
+  const [fileFilter, setFileFilter] = useState("all");
   const [busy, setBusy] = useState(false);
 
   async function openDoc(path: string) {
@@ -47,106 +102,330 @@ export default function StaffPortalView() {
   const annual = balances.find((b) => b.kind === "annual");
   const annualLeft = annual ? annual.entitled - annual.used - annual.reserved : null;
   const latestSlip = payslips[0];
+  const pendingApps = apps.filter((a) => a.state === "pending");
+
+  // me, from the module read model (matched by login email)
+  const me = (hrData?.staff ?? []).find((s) => s.email.toLowerCase() === (meEmail ?? "").toLowerCase());
+  const myAppraisals = (hrData?.appraisals ?? []).filter((a) => a.appUserId === me?.appUserId);
+  const myAppraisal = myAppraisals[myAppraisals.length - 1];
+  const prevAppraisals = myAppraisals.slice(0, -1).reverse();
+  const selfOpen = !!myAppraisal && (myAppraisal.stage === "not_started" || myAppraisal.stage === "self");
+  const myCerts = (hrData?.certifications ?? []).filter((c) => c.appUserId === me?.appUserId);
+  const mySentFb = (hrData?.feedback ?? []).filter((f) => !!me && f.author === me.name);
+  const myExit = (hrData?.exits ?? []).filter((x) => x.appUserId === me?.appUserId).sort((a, b) => (a.state === "in_progress" ? -1 : 1) - (b.state === "in_progress" ? -1 : 1))[0];
+  const exitDone = myExit ? myExit.clearance.filter((c) => c.done).length : 0;
+
+  const stageMeta: Record<string, string> = {
+    not_started: "self-assessment open", self: "self-assessment open",
+    manager: "with your manager", signed_off: "signed off",
+  };
+
+  const filteredDocs = docs.filter((d) => fileFilter === "all" || (d.category ?? "other") === fileFilter);
+  const catLabel = (c?: string) => docCategories.find((x) => x.value === (c ?? "other"))?.label ?? cap(c ?? "other");
+  const routeNote: Record<string, string> = {
+    id: "unblocks payroll & statutory filings",
+    contract: "joins your employment record",
+    certificate: "goes to HR for verification",
+    other: "stored on your file",
+  };
 
   return (
     <>
       <div className="vhead">
         <div>
           <h1>Staff Portal</h1>
-          <p>Your self-service — payslips, leave, documents and the tasks assigned to you. This is the view every employee sees of themselves.</p>
+          <p>Your own view of yourself — pay, leave, performance, certifications and documents. Nobody else sees this page.</p>
         </div>
         <div className="actions">
-          <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>
+          {(tab === "sp-me" || tab === "sp-leave") && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
+          {tab === "sp-perf" && selfOpen && <button className="btn primary" onClick={() => submitSelfAssessment(myAppraisal.id)}>Submit self-assessment</button>}
+          {tab === "sp-files" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
+          {tab === "sp-fb" && <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />New feedback</button>}
         </div>
       </div>
-      <div className="grid g-2">
-        <div className="panel sm">
-          <div className="panel-h"><h3>This month</h3><span className="meta">Wanjiku · Chief of Staff</span></div>
-          <div className="recon"><span>Latest payslip</span><span className="mono">{latestSlip ? fmtPeriod(latestSlip.period) : "—"}</span></div>
-          <div className="recon"><span>Net pay</span><span className="mono">{latestSlip ? kes(latestSlip.net) : "—"}</span></div>
-          <div className="recon"><span>Annual leave balance</span><span className="mono">{annual ? `${annualLeft} / ${annual.entitled} days` : "—"}</span></div>
-          <div className="recon"><span>Tasks assigned to me</span><span className="pill today">6 open</span></div>
-        </div>
-        <div className="panel sm">
-          <div className="panel-h"><h3>My leave balances</h3><span className="meta">days left this year</span></div>
-          {balances.length
-            ? balances.map((b) => (
-                <div className="recon" key={b.kind}><span>{cap(b.kind)}</span>
-                  <span className="mono">{b.entitled - b.used - b.reserved} of {b.entitled}{b.reserved > 0 ? ` · ${b.reserved} pending` : ""}</span>
-                </div>
-              ))
-            : <div className="recon"><span>Balances</span><span className="mono">loading…</span></div>}
-        </div>
-      </div>
-      <div className="grid g-2" style={{ marginTop: 14 }}>
-        <div className="panel sm">
-          <div className="panel-h"><h3>My payslips</h3><span className="meta">posted runs</span></div>
-          {payslips.length
-            ? payslips.map((p) => (
-                <div className="recon" key={p.period}><span>{fmtPeriod(p.period)}<span className="meta" style={{ marginLeft: 8 }}>net {kes(p.net)}</span></span>
-                  <button className="btn" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => toast(`Payslip · ${fmtPeriod(p.period)}`, `Gross ${kes(p.gross)} · PAYE ${kes(p.paye)} · NSSF ${kes(p.nssf)} · SHIF ${kes(p.shif)} · Housing ${kes(p.housing)} · Net ${kes(p.net)}`)}>View</button>
-                </div>
-              ))
-            : <div className="recon"><span>No payslips yet</span><span className="pill today">awaiting first run</span></div>}
-        </div>
-        <div className="panel sm">
-          <div className="panel-h"><h3>My documents</h3><span className="meta">personal file</span></div>
-          {docs.length
-            ? docs.map((d) => (
-                <div className="recon" key={d.name + d.version}>
-                  <span>{d.name}<span className="meta" style={{ marginLeft: 8 }}>v{d.version}{d.category ? ` · ${d.category}` : ""}</span></span>
-                  {d.path
-                    ? <span style={{ display: "flex", gap: 8 }}>
-                        <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(d.path!)}>View</button>
-                        <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteStaffDocument(d.path!, d.name)}>Delete</button>
-                      </span>
-                    : <span className="rcv ok">on file</span>}
-                </div>
-              ))
-            : <div className="recon"><span>No documents yet</span><span className="mono">—</span></div>}
-          <input ref={fileRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" style={{ display: "none" }} onChange={onPick} />
-          <div className="recon"><span>Add a document</span>
-            <span style={{ display: "flex", gap: 8 }}>
-              <select className="field" style={{ padding: "4px 8px", fontSize: 11.5, width: "auto" }} value={docCat} onChange={(e) => setDocCat(e.target.value)}>
-                {docCategories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-              <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? "Uploading…" : "Upload"}</button>
-            </span>
+      <Crumb view="staffportal" />
+
+      {tab === "sp-me" && (
+        <div className="hr-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>This month</h3><span className="meta">{me ? `${me.name} · ${me.roleTitle || "—"}` : "…"}</span></div>
+              <div className="recon"><span>Next payday</span><span className="mono">28 {new Date().toLocaleDateString("en-GB", { month: "long" })}</span></div>
+              <div className="recon"><span>Net pay (latest)</span><span className="mono">{latestSlip ? kes(latestSlip.net) : "—"}</span></div>
+              <div className="recon"><span>Annual leave balance</span><span className="mono">{annual ? `${annualLeft} / ${annual.entitled} days` : "—"}</span></div>
+              <div className="recon"><span>Tasks assigned to me</span><span className="pill today">{myWeek.length} open</span></div>
+              <div className="recon"><span>Employment type</span><span>{me ? contractTypes.find((c) => c.value === me.contractType)?.label ?? me.contractType : "—"}</span></div>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Waiting on me</h3><span className="meta">my actions</span></div>
+              {selfOpen && (
+                <div className="task" onClick={() => goTab("staffportal", "sp-perf")}><span className="id" style={{ color: "var(--ember)" }}>APR</span><span className="txt">Self-assessment open — {myAppraisal.cycle}<small>rate yourself against each KPI</small></span><span className="pill today">Complete</span></div>
+              )}
+              {pendingApps.length > 0 && (
+                <div className="task" onClick={() => goTab("staffportal", "sp-leave")}><span className="id" style={{ color: "var(--ember)" }}>LV</span><span className="txt">{pendingApps.length} leave request{pendingApps.length > 1 ? "s" : ""} with HR<small>you can edit or withdraw while pending</small></span><span className="pill week">Pending</span></div>
+              )}
+              {myExit && myExit.state === "in_progress" && (
+                <div className="task" onClick={() => goTab("staffportal", "sp-exit")}><span className="id" style={{ color: "var(--ember)" }}>EXT</span><span className="txt">Exit clearance in progress<small>{exitDone} of {myExit.clearance.length} areas cleared</small></span><span className="pill today">Continue</span></div>
+              )}
+              <div className="task" onClick={() => goTab("staffportal", "sp-files")}><span className="id" style={{ color: "var(--flame)" }}>CERT</span><span className="txt">Upload any new certifications or documents<small>the file type decides where it goes</small></span><span className="pill week">Optional</span></div>
+              <div className="task" onClick={() => toast("Payslip", latestSlip ? `Latest: ${fmtPeriod(latestSlip.period)} — net ${kes(latestSlip.net)}` : "Your payslip appears after the first posted run")}><span className="id" style={{ color: "var(--flame)" }}>PAY</span><span className="txt">{latestSlip ? `${fmtPeriod(latestSlip.period)} payslip available` : "First payslip after the next run"}</span><span className="pill week">{latestSlip ? "Ready" : "Upcoming"}</span></div>
+            </div>
           </div>
-          <Note>You can see and upload to your own file. HR can view it; no one else can unless a super admin grants access.</Note>
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>My payslips</h3><span className="meta">view &amp; breakdown</span></div>
+            {payslips.length ? (
+              <table className="tbl">
+                <thead><tr><th>Period</th><th>Gross</th><th>Deductions</th><th>Net</th><th></th></tr></thead>
+                <tbody>
+                  {payslips.map((p) => (
+                    <tr key={p.period}>
+                      <td>{fmtPeriod(p.period)}</td>
+                      <td className="mono">{kes(p.gross)}</td>
+                      <td className="mono">{kes(p.gross - p.net)}</td>
+                      <td className="mono">{kes(p.net)}</td>
+                      <td><button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => toast(`Payslip · ${fmtPeriod(p.period)}`, `Gross ${kes(p.gross)} · PAYE ${kes(p.paye)} · NSSF ${kes(p.nssf)} · SHIF ${kes(p.shif)} · Housing ${kes(p.housing)} · Net ${kes(p.net)}`)}>Open</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No payslips yet — they appear here when payroll posts a run.</Note>
+            )}
+          </div>
         </div>
-      </div>
-      <div className="panel" style={{ marginTop: 14 }}>
-        <div className="panel-h"><h3>My leave requests</h3><span className="meta">HR decision on each</span></div>
-        {apps.length ? (
-          <table className="tbl">
-            <thead><tr><th>Ref</th><th>Type</th><th>Dates</th><th>Days</th><th>HR decision</th><th></th></tr></thead>
-            <tbody>
-              {apps.map((a) => (
-                <tr key={a.id}>
-                  <td className="mono">{a.id}</td>
-                  <td>{cap(a.kind)}</td>
-                  <td>{fmtD(a.from)} – {fmtD(a.to)}</td>
-                  <td className="mono">{a.days}</td>
-                  <td><span className={`pill ${statePill[a.state]?.cls || "today"}`} style={{ textTransform: "none" }}>{statePill[a.state]?.txt || a.state}</span></td>
-                  <td>
-                    {a.state === "pending" ? (
-                      <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                        <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openLeaveEdit(a)}>Edit</button>
-                        <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteLeave(a.id)}>Delete</button>
-                      </span>
-                    ) : (
-                      <span className="meta" style={{ display: "block", textAlign: "right" }}>locked</span>
-                    )}
-                  </td>
-                </tr>
+      )}
+
+      {tab === "sp-leave" && (
+        <div className="hr-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>My leave applications</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openLeave(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Apply for leave</a></span></div>
+              {apps.length ? (
+                <table className="tbl">
+                  <thead><tr><th>Ref</th><th>Type</th><th>Dates</th><th>Days</th><th>Status</th><th></th></tr></thead>
+                  <tbody>
+                    {apps.map((a) => (
+                      <tr key={a.id}>
+                        <td className="mono">{a.id}</td>
+                        <td>{cap(a.kind)}</td>
+                        <td>{fmtD(a.from)} – {fmtD(a.to)}</td>
+                        <td className="mono">{a.days}</td>
+                        <td><span className={`pill ${statePill[a.state]?.cls || "today"}`} style={{ textTransform: "none" }}>{statePill[a.state]?.txt || a.state}</span></td>
+                        <td>
+                          {a.state === "pending" ? (
+                            <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                              <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openLeaveEdit(a)}>Edit</button>
+                              <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteLeave(a.id)}>Delete</button>
+                            </span>
+                          ) : (
+                            <span className="meta" style={{ display: "block", textAlign: "right" }}>locked</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <Note noBorder>No leave requests yet — use “Apply for leave” and it routes to HR.</Note>
+              )}
+              <Note>Applications route to your approver. Balances update on approval, not on application.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>My balances</h3><span className="meta">days remaining</span></div>
+              {balances.length
+                ? balances.map((b) => (
+                    <div className="recon" key={b.kind}><span>{cap(b.kind)}</span>
+                      <span className="mono">{b.entitled - b.used - b.reserved} of {b.entitled}{b.reserved > 0 ? ` · ${b.reserved} pending` : ""}</span>
+                    </div>
+                  ))
+                : <div className="recon"><span>Balances</span><span className="mono">loading…</span></div>}
+              <Note>Weekends and public holidays are excluded from the day count.</Note>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-perf" && (
+        <div className="hr-panel active">
+          {myAppraisal ? (
+            <div className="panel" style={{ marginBottom: 18 }}>
+              <div className="panel-h"><h3>{myAppraisal.cycle} appraisal</h3><span className="meta">reviewer: {myAppraisal.reviewer} · {stageMeta[myAppraisal.stage] ?? myAppraisal.stage}</span></div>
+              <div className="pad">
+                <div className="steps">
+                  <div className="step done"><span className="sdot">✓</span>KPIs agreed</div><div className="step-arrow" />
+                  <div className={`step ${selfOpen ? "now" : "done"}`}><span className="sdot">2</span>Your self-assessment</div><div className="step-arrow" />
+                  <div className={`step ${myAppraisal.stage === "manager" ? "now" : myAppraisal.stage === "signed_off" ? "done" : ""}`}><span className="sdot">3</span>Manager review</div><div className="step-arrow" />
+                  <div className={`step ${myAppraisal.stage === "signed_off" ? "done" : ""}`}><span className="sdot">4</span>Sign-off</div>
+                </div>
+              </div>
+              <div style={{ padding: "0 18px 6px", fontSize: 12, color: "var(--ink-soft)" }}>
+                Your KPIs were agreed at the start of the cycle and can’t be changed now. {selfOpen ? "Mark each one you met; your manager sees your rating alongside their own." : myAppraisal.stage === "manager" ? "Your self-assessment is with your manager." : "The review is signed off and locked to your staff file."}
+              </div>
+              <div style={{ padding: "4px 18px 8px" }}>
+                {myAppraisal.kpis.map((k, i) => (
+                  <div key={k.k} onClick={() => selfOpen && selfAssessKpi(myAppraisal.id, i)} style={{ cursor: selfOpen ? "pointer" : "default" }}>
+                    <Check done={k.met}>{k.k}</Check>
+                  </div>
+                ))}
+              </div>
+              {selfOpen && (
+                <div style={{ padding: "0 18px 16px" }}>
+                  <button className="btn primary" onClick={() => submitSelfAssessment(myAppraisal.id)}>Submit self-assessment</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="panel" style={{ marginBottom: 18 }}>
+              <div className="panel-h"><h3>My performance</h3><span className="meta">no cycle open</span></div>
+              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No appraisal yet — your review appears here when HR opens the next cycle.</div>
+            </div>
+          )}
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Previous cycles</h3><span className="meta">signed off</span></div>
+              {prevAppraisals.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Past reviews will build up here cycle by cycle.</div>}
+              {prevAppraisals.map((a) => (
+                <div className="recon" key={a.id}><span>{a.cycle}</span><span className={`pill ${a.stage === "signed_off" ? "done" : "today"}`} style={{ textTransform: "none" }}>{a.kpis.filter((k) => k.met).length} / {a.kpis.length} KPIs{a.stage === "signed_off" ? " · signed off" : ""}</span></div>
               ))}
-            </tbody>
-          </table>
-        ) : (
-          <Note>No leave requests yet — use “Apply for leave” above and it routes to HR.</Note>
-        )}
-      </div>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>What your manager sees</h3><span className="meta">transparency</span></div>
+              <div style={{ padding: "14px 18px", fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.55 }}>Your manager sees the same KPIs and your self-rating. Their rating stays hidden until they share the review, so the two assessments are independent. Once signed off, the record locks to your staff file and neither side can edit it.</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-files" && (
+        <div className="hr-panel active">
+          <div className="panel" style={{ marginBottom: 18 }}>
+            <div className="panel-h"><h3>My files</h3><span className="meta">{docs.length} on file · visible to you and HR only</span></div>
+            <div style={{ padding: "10px 18px 4px", display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {fileFilters.map((f) => (
+                <button key={f.v} className={`btn ${fileFilter === f.v ? "primary" : ""}`} style={{ padding: "4px 11px", fontSize: 11.5 }} onClick={() => setFileFilter(f.v)}>{f.l}</button>
+              ))}
+            </div>
+            <table className="tbl">
+              <thead><tr><th>File</th><th>Type</th><th>Where it goes</th><th></th></tr></thead>
+              <tbody>
+                {filteredDocs.length === 0 && <tr><td colSpan={4} style={{ color: "var(--ink-soft)", fontSize: 13 }}>Nothing here yet — upload below.</td></tr>}
+                {filteredDocs.map((d) => (
+                  <tr key={d.name + d.version}>
+                    <td>{d.name}<span className="meta" style={{ marginLeft: 8 }}>v{d.version}{d.leaveRef ? ` · ${d.leaveRef}` : ""}</span></td>
+                    <td style={{ fontSize: 12 }}>{catLabel(d.category)}</td>
+                    <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{routeNote[d.category ?? "other"] ?? routeNote.other}</td>
+                    <td>
+                      {d.path ? (
+                        <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                          <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(d.path!)}>View</button>
+                          <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteStaffDocument(d.path!, d.name)}>Delete</button>
+                        </span>
+                      ) : (
+                        <span className="rcv ok" style={{ float: "right" }}>on file</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <input ref={fileRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" style={{ display: "none" }} onChange={onPick} />
+            <div className="recon"><span>Upload a file</span>
+              <span style={{ display: "flex", gap: 8 }}>
+                <select className="field" style={{ padding: "4px 8px", fontSize: 11.5, width: "auto" }} value={docCat} onChange={(e) => setDocCat(e.target.value)}>
+                  {docCategories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? "Uploading…" : "Upload"}</button>
+              </span>
+            </div>
+            <Note>What you pick as the <strong>file type</strong> decides what happens next — a certificate goes for verification, a statutory document unblocks payroll, a sick note attaches to a leave request. Nothing here is visible to anyone but you and HR.</Note>
+          </div>
+          <div className="panel">
+            <div className="panel-h"><h3>My certifications</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "myCert" }); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add certification</a></span></div>
+            {myCerts.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No certifications yet — add one and HR verifies it onto your file.</div>}
+            {myCerts.map((c) => (
+              <div className="recon" key={c.id}>
+                <span>{c.name}<span className="meta" style={{ marginLeft: 8 }}>{c.issuer || "—"}{c.expiry ? ` · expires ${fmtD(c.expiry)} ${c.expiry.slice(0, 4)}` : ""}</span></span>
+                {c.state === "verified" ? <span className="rcv ok">verified</span> : c.state === "pending" ? <span className="pill today" style={{ textTransform: "none" }}>Awaiting HR</span> : <span className="rcv no">rejected</span>}
+              </div>
+            ))}
+            <Note>Verified certifications join skills coverage and show in HR's register.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-fb" && (
+        <div className="hr-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h"><h3>Give feedback</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "feedback" }); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ New feedback</a></span></div>
+              <div style={{ padding: "14px 18px 6px", fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.55 }}>Choose who it goes to — a colleague, your manager, HR, or leadership. It goes to that recipient only; nobody else sees it unless you send it to them.</div>
+              <div className="pad" style={{ paddingTop: 6 }}>
+                <div className="recon" style={{ padding: "9px 0" }}><span><strong>A colleague</strong><br /><small style={{ color: "var(--ink-soft)" }}>peer feedback or thanks — always named</small></span><button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => toast("Peer feedback", "Personal inboxes are coming next — for now send via HR / People or Leadership")}>Send</button></div>
+                <div className="recon" style={{ padding: "9px 0" }}><span><strong>My manager</strong><br /><small style={{ color: "var(--ink-soft)" }}>upward feedback — can be anonymous</small></span><button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => toast("Upward feedback", "Personal inboxes are coming next — for now send via HR / People or Leadership")}>Send</button></div>
+                <div className="recon" style={{ padding: "9px 0" }}><span><strong>HR / People</strong><br /><small style={{ color: "var(--ink-soft)" }}>pay, policy, grievance — can be anonymous</small></span><button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => openHrModal({ kind: "feedback" })}>Send</button></div>
+                <div className="recon" style={{ padding: "9px 0" }}><span><strong>Leadership / MD</strong><br /><small style={{ color: "var(--ink-soft)" }}>company-wide suggestions — can be anonymous</small></span><button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => openHrModal({ kind: "feedback" })}>Send</button></div>
+              </div>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Feedback I&rsquo;ve sent</h3><span className="meta">and its status</span></div>
+              {mySentFb.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nothing sent yet — named feedback you send shows its status here.</div>}
+              {mySentFb.map((f) => (
+                <div className="task" key={f.ref} style={{ cursor: "default" }}>
+                  <span className="id" style={{ color: "var(--flame)" }}>{f.ref}</span>
+                  <span className="txt">{f.body}<small>to {f.audience === "hr" ? "HR / People" : "Leadership"} · named</small></span>
+                  <span className={`pill ${fbPill[f.state]?.cls ?? "week"}`} style={{ textTransform: "none" }}>{fbPill[f.state]?.l ?? f.state}</span>
+                </div>
+              ))}
+              <Note>Anonymous items carry no author reference in the system — the recipient sees the content, never your name, so they can't be listed here either.</Note>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-exit" && (
+        <div className="hr-panel active">
+          {!myExit ? (
+            <div className="panel">
+              <div className="panel-h"><h3>Leaving Ignis</h3><span className="meta">your side of the exit</span></div>
+              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No exit in progress — long may that continue. If you resign or your contract ends, your clearance checklist and exit documents appear here.</div>
+            </div>
+          ) : (
+            <>
+              <div className="panel" style={{ marginBottom: 18 }}>
+                <div className="panel-h"><h3>Leaving Ignis — {myExit.ref}</h3><span className="meta">{myExit.reason || "—"}{myExit.finalDay ? ` · final day ${fmtD(myExit.finalDay)}` : ""}</span></div>
+                <div className="pad">
+                  <div className="steps">
+                    <div className="step done"><span className="sdot">✓</span>Notice given</div><div className="step-arrow" />
+                    <div className={`step ${myExit.state === "cleared" ? "done" : exitDone < 4 ? "now" : "done"}`}><span className="sdot">2</span>Handover &amp; property</div><div className="step-arrow" />
+                    <div className={`step ${myExit.state === "cleared" ? "done" : exitDone >= 4 ? "now" : ""}`}><span className="sdot">3</span>Exit interview</div><div className="step-arrow" />
+                    <div className={`step ${myExit.state === "cleared" ? "done" : ""}`}><span className="sdot">4</span>Final clearance</div>
+                  </div>
+                </div>
+                <div style={{ padding: "0 18px 14px", fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.55 }}>This replaces the paper exit form. You complete your parts; your supervisor, IT, Finance and HR complete theirs. When every clearance is signed off, your certificate of service, final payslip and P9 appear below for download.</div>
+              </div>
+              <div className="grid g-2">
+                <div className="panel">
+                  <div className="panel-h"><h3>Clearance progress</h3><span className="meta">{exitDone} of {myExit.clearance.length} signed off</span></div>
+                  <div className="pad" style={{ paddingTop: 6 }}>
+                    {myExit.clearance.map((c) => <Check key={c.area} done={c.done}>{c.area}</Check>)}
+                  </div>
+                  <Note>Each area is signed off in HR's Offboarding &amp; Exit by the function that owns it.</Note>
+                </div>
+                <div className="panel">
+                  <div className="panel-h"><h3>My exit documents</h3><span className="meta">released on final clearance</span></div>
+                  <div className="recon"><span>Certificate of service</span>{myExit.state === "cleared" ? <span className="rcv ok">released</span> : <span className="rcv no">pending clearance</span>}</div>
+                  <div className="recon"><span>Final payslip</span>{myExit.state === "cleared" ? <span className="rcv ok">released</span> : <span className="rcv no">pending clearance</span>}</div>
+                  <div className="recon"><span>P9 tax form</span>{myExit.state === "cleared" ? <span className="rcv ok">released</span> : <span className="rcv no">pending clearance</span>}</div>
+                  <Note>Kenyan law entitles you to a certificate of service on leaving. It is issued automatically here once HR signs off final clearance — you do not have to ask for it.</Note>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      <MyCertModal />
+      <FeedbackModal />
     </>
   );
 }

@@ -356,7 +356,8 @@ function CertificationModal() {
 }
 
 const feedbackCategories = ["Ways of working", "People", "Operations", "Tools & systems", "Pay & benefits", "Field conditions", "Other"];
-function FeedbackModal() {
+// Shared with the Staff Portal's Give Feedback tab.
+export function FeedbackModal() {
   const { hrModal, closeHrModal, submitFeedback, toast } = useApp();
   const open = hrModal?.kind === "feedback";
   const [f, setF] = useState({ body: "", category: feedbackCategories[0], audience: "hr", anonymous: false });

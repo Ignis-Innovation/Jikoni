@@ -71,6 +71,23 @@ try {
   const [wil] = await q(`select dept, contract_end, next_of_kin from staff_files where staff_no='IGN-005'`);
   console.log("— profile:", up.staffNo, "dept", wil.dept, "· ends", wil.contract_end?.toISOString?.().slice(0,10) ?? wil.contract_end, "· kin", wil.next_of_kin.length);
 
+  // --- staff-portal self-service (0027): me-scoped, no HR access needed ---
+  const [lizAp] = await q(`select a.id from appraisals a join app_users u on u.id=a.app_user_id where u.email='elizabeth@ignis.africa'`);
+  const [lizAuth] = await q(`select auth_id from app_users where email='elizabeth@ignis.africa'`);
+  await c.query(`select set_config('request.jwt.claims', $1, false)`,
+    [JSON.stringify({ email: "elizabeth@ignis.africa", sub: lizAuth.auth_id, role: "authenticated" })]);
+  const sa = await rpc(`public.self_assess_kpi('${lizAp.id}'::uuid, 3)`);
+  console.log("— portal: own KPI toggled ·", sa.stage);
+  try {
+    await c.query("savepoint s3");
+    await rpc(`public.self_assess_kpi('${lily.id}'::uuid, 0)`);
+    console.log("— portal: other review NOT BLOCKED (BUG)");
+  } catch (e) { await c.query("rollback to s3"); console.log("— portal: other review blocked:", e.message); }
+  const sub2 = await rpc(`public.submit_self_assessment('${lizAp.id}'::uuid)`);
+  console.log("— portal: self-assessment submitted →", sub2.stage);
+  const myCert = await rpc(`public.submit_my_certification('Prince2 Practitioner','Axelos','2028-06-30'::date)`);
+  console.log("— portal: certification submitted →", myCert.state);
+
   console.log("ALL OK (rolled back)");
 } catch (e) {
   console.error("SMOKE FAILED:", e.message);
