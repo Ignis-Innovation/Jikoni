@@ -6,7 +6,6 @@
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,11 +21,20 @@ const { data: invites, error } = await admin.from("invites").select("email, name
 if (error) { console.error(error.message); process.exit(1); }
 if (!invites.length) { console.log("No pending invites."); process.exit(0); }
 
+const redirectTo = env.APP_URL || "";
 for (const inv of invites) {
-  const password = randomBytes(9).toString("base64url");
-  const { error: e } = await admin.auth.admin.createUser({ email: inv.email, password, email_confirm: true });
-  if (e) { console.log(inv.email, "—", e.message); continue; }
-  console.log(`${inv.email} — auth account created (temp password: ${password})`);
+  // Generate a set-password link (invite creates the account; recovery for existing users),
+  // so the invitee chooses their own permanent password — no temp passwords to share.
+  let link;
+  const invite = await admin.auth.admin.generateLink({ type: "invite", email: inv.email, options: { redirectTo } });
+  if (invite.error) {
+    const recovery = await admin.auth.admin.generateLink({ type: "recovery", email: inv.email, options: { redirectTo } });
+    if (recovery.error) { console.log(inv.email, "—", recovery.error.message); continue; }
+    link = recovery.data?.properties?.action_link;
+  } else {
+    link = invite.data?.properties?.action_link;
+  }
+  console.log(`${inv.email} — set-password link generated`);
   if (env.SMTP_HOST) {
     try {
       const { default: nodemailer } = await import("nodemailer");
@@ -37,12 +45,14 @@ for (const inv of invites) {
       await t.sendMail({
         from: env.SMTP_FROM || env.SMTP_USER,
         to: inv.email,
-        subject: "You've been invited to Jikoni",
-        text: `Hi ${inv.name},\n\nYou've been added to Jikoni (${inv.role_key} access).\nSign in at ${env.APP_URL || "the app"} with this temporary password and change it:\n\n${password}\n\n— Jikoni`,
+        subject: "You've been invited to Jikoni Tool",
+        text: `Hi ${inv.name},\n\nYou've been added to Jikoni Tool (${inv.role_key} access).\nClick the link below to set your password and sign in — that's the password you'll use from then on:\n\n${link}\n\n— Ignis Innovation`,
       });
       console.log(`  → invite email sent to ${inv.email}`);
     } catch (mailErr) {
-      console.log(`  → email not sent (${mailErr.message}); share the temp password manually`);
+      console.log(`  → email not sent (${mailErr.message}); the link is: ${link}`);
     }
+  } else {
+    console.log(`  → set-password link: ${link}`);
   }
 }

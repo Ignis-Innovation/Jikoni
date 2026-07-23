@@ -66,6 +66,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "c-docs", l: "Company Documents" },
     { t: "c-cal", l: "Compliance Calendar" },
     { t: "c-risk", l: "Risk Register" },
+    { t: "c-contracts", l: "Contracts" },
   ],
 };
 

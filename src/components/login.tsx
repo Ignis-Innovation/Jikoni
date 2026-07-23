@@ -35,8 +35,8 @@ export function LoginGate() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div className="mark"><BrandMark /></div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Jikoni</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>CleanCookIQ · Ignis</div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Jikoni Tool</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Operations Suite</div>
           </div>
         </div>
         <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
@@ -55,6 +55,61 @@ export function LoginGate() {
         {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}
         <button className="btn primary" type="submit" disabled={busy} style={{ justifyContent: "center" }}>
           {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// Shown when an invitee (or a password reset) arrives via the emailed link:
+// Supabase has already established a session from the URL token, so we just let
+// them choose the password they'll use from now on.
+export function SetPassword({ onDone }: { onDone: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    if (password.length < 8) { setErr("Use at least 8 characters."); return; }
+    if (password !== confirm) { setErr("The two passwords don't match."); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    // drop the token from the URL so a refresh doesn't re-trigger this screen
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    onDone();
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "var(--counter)" }}>
+      <form onSubmit={save} style={{ width: 360, background: "#fff", border: "1px solid var(--hairline-2)", borderRadius: 16, padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="mark"><BrandMark /></div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Set your password</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Jikoni Tool</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+          Choose the password you'll use to sign in from now on.
+        </div>
+        <div>
+          <label style={labelStyle}>New password</label>
+          <input className="field" type="password" autoComplete="new-password" style={{ width: "100%" }}
+            value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" />
+        </div>
+        <div>
+          <label style={labelStyle}>Confirm password</label>
+          <input className="field" type="password" autoComplete="new-password" style={{ width: "100%" }}
+            value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Re-enter it" />
+        </div>
+        {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}
+        <button className="btn primary" type="submit" disabled={busy} style={{ justifyContent: "center" }}>
+          {busy ? "Saving…" : "Save password & continue"}
         </button>
       </form>
     </div>

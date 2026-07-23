@@ -29,6 +29,13 @@ export default function CrmView() {
   const d = crmData[pipeline];
   const engRows = pipeline === "up" ? crm.engUp : crm.engDown;
 
+  // Recent updates log — flatten every engagement's DB updates, newest first, tagged
+  // with the engagement id so the diary stays consistent with each record's own log.
+  const recentUpdates = [...crm.engUp, ...crm.engDown]
+    .flatMap((e) => (e.updates ?? []).map((u) => ({ ...u, engId: e.id, engName: e.n })))
+    .sort((a, b) => (b.ts ?? "").localeCompare(a.ts ?? ""))
+    .slice(0, 6);
+
   // the primary action follows the active sub-tab so it never says "New engagement" on the Partners tab
   const headerAction =
     tab === "cr-partners" ? { label: "Add partner", onClick: openPartnerForm } :
@@ -143,10 +150,15 @@ export default function CrmView() {
           </div>
           <div className="panel">
             <div className="panel-h"><h3>Recent updates log</h3><span className="meta">diary of interactions</span></div>
-            <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("ENG-012")}><span className="id">ENG-012</span><span className="txt">Charm Impact — term sheet received, reviewing terms<small>Call · Wilson · today</small></span><span className="pill done">Logged</span></div>
-            <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("DST-004")}><span className="id">DST-004</span><span className="txt">Makueni VTCs — 22 of 63 registered on platform<small>Email · Elizabeth · yesterday</small></span><span className="pill done">Logged</span></div>
-            <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("ENG-008")}><span className="id">ENG-008</span><span className="txt">EAIF — concessional terms discussion, follow-up next wk<small>Meeting · Wilson · 2 days ago</small></span><span className="pill done">Logged</span></div>
-            <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("DST-011")}><span className="id">DST-011</span><span className="txt">Catholic Diocese Machakos — EOI signed<small>Field · Elizabeth · 3 days ago</small></span><span className="pill done">Logged</span></div>
+            {recentUpdates.length === 0 ? (
+              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No updates logged yet — open an engagement and hit Update.</div>
+            ) : recentUpdates.map((u, i) => (
+              <div className="task" key={u.engId + i} style={{ cursor: "pointer" }} onClick={() => openEng(u.engId)}>
+                <span className="id">{u.engId}</span>
+                <span className="txt">{u.engName} — {u.note}<small>{u.ch} · {u.who} · {u.d}</small></span>
+                <span className="pill done">Logged</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

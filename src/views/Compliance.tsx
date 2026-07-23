@@ -1,39 +1,55 @@
 import { useApp } from "../store";
 import { Crumb } from "../nav";
+import { PlusI } from "../components/icons";
 
 export default function ComplianceView() {
-  const { tabs, toast } = useApp();
+  const {
+    tabs, compliance, complianceDocUrl, markObligationFiled,
+    openPolicyForm, openDocForm, openRiskForm, openContractForm,
+  } = useApp();
   const tab = tabs.compliance;
+  const { policies, companyDocuments, obligations, risks, contracts } = compliance;
+
+  // one primary action per tab, shown top-right of the view header (same pattern as CRM)
+  const headerAction =
+    tab === "c-policies" ? { label: "Upload / new version", onClick: openPolicyForm } :
+    tab === "c-docs" ? { label: "Add / upload document", onClick: openDocForm } :
+    tab === "c-risk" ? { label: "Add risk", onClick: openRiskForm } :
+    tab === "c-contracts" ? { label: "Add contract", onClick: openContractForm } :
+    null;
 
   return (
     <>
       <div className="vhead">
         <div>
           <h1>Compliance &amp; Governance</h1>
-          <p>The single home for policies and manuals, the company's statutory documents, the compliance calendar and the risk register.</p>
+          <p>The single home for policies and manuals, the company's statutory documents, the compliance calendar, the risk register and the contracts registry.</p>
         </div>
+        {headerAction && (
+          <div className="actions">
+            <button className="btn primary" onClick={headerAction.onClick}><PlusI />{headerAction.label}</button>
+          </div>
+        )}
       </div>
       <Crumb view="compliance" />
 
       {tab === "c-policies" && (
         <div className="comp-panel active">
           <div className="panel">
-            <div className="panel-h">
-              <h3>Policies &amp; manuals</h3>
-              <span className="meta">
-                <a href="#" onClick={(e) => { e.preventDefault(); toast("Upload", "Add a document or a new version"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Upload / new version</a>
-              </span>
-            </div>
+            <div className="panel-h"><h3>Policies &amp; manuals</h3><span className="meta">versioned · access-controlled</span></div>
             <table className="tbl">
-              <thead><tr><th>Document</th><th>Reference</th><th>Version</th><th>Owner</th><th>Status</th></tr></thead>
+              <thead><tr><th>Document</th><th>Reference</th><th>Version</th><th>Effective</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td>Procurement Manual</td><td className="mono">IGN-PROC-001</td><td className="mono">v2.0</td><td>Joan</td><td><span className="pill done">Current</span></td></tr>
-                <tr><td>Employee Handbook</td><td className="mono">IGN-HR-001</td><td className="mono">v1.3</td><td>HR</td><td><span className="pill done">Current</span></td></tr>
-                <tr><td>Finance &amp; Accounting Policy</td><td className="mono">IGN-FIN-001</td><td className="mono">v1.1</td><td>Dennis</td><td><span className="pill done">Current</span></td></tr>
-                <tr><td>Code of Conduct</td><td className="mono">IGN-GOV-002</td><td className="mono">v1.0</td><td>MD</td><td><span className="pill done">Current</span></td></tr>
-                <tr><td>Safeguarding / Child Protection</td><td className="mono">IGN-GOV-004</td><td className="mono">v1.0</td><td>MD</td><td><span className="pill today">Review due</span></td></tr>
-                <tr><td>Data Protection Policy</td><td className="mono">IGN-GOV-005</td><td className="mono">v1.0</td><td>Brian</td><td><span className="pill done">Current</span></td></tr>
-                <tr><td>Anti-Corruption &amp; Sanctions</td><td className="mono">IGN-PROC-002</td><td className="mono">v1.2</td><td>Joan</td><td><span className="pill done">Current</span></td></tr>
+                {policies.length === 0 && <tr><td colSpan={5} className="meta">No policies yet.</td></tr>}
+                {policies.map((p) => (
+                  <tr key={p.code}>
+                    <td>{p.doc ? <a href={complianceDocUrl(p.doc)} target="_blank" rel="noreferrer" style={{ color: "var(--flame)", textDecoration: "none" }}>{p.title}</a> : p.title}</td>
+                    <td className="mono">{p.code}</td>
+                    <td className="mono">{p.version}</td>
+                    <td className="mono">{p.effectiveFrom ?? "—"}</td>
+                    <td><span className={`pill ${p.statusCls}`}>{p.statusTxt}</span></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -45,15 +61,17 @@ export default function ComplianceView() {
           <div className="panel">
             <div className="panel-h"><h3>Company &amp; statutory documents</h3><span className="meta">access-controlled · versioned</span></div>
             <table className="tbl">
-              <thead><tr><th>Document</th><th>Reference</th><th>Expiry</th><th>Status</th></tr></thead>
+              <thead><tr><th>Document</th><th>Kind</th><th>Expiry</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td>Certificate of Incorporation</td><td className="mono">PVT-XXXXXXX</td><td className="mono">—</td><td><span className="rcv ok">on file</span></td></tr>
-                <tr><td>KRA PIN Certificate</td><td className="mono">P05XXXXXXX</td><td className="mono">—</td><td><span className="rcv ok">on file</span></td></tr>
-                <tr><td>Tax Compliance Certificate</td><td className="mono">KRA-TCC</td><td className="mono">14 Feb 2027</td><td><span className="pill done">Valid</span></td></tr>
-                <tr><td>CR12 (shareholding)</td><td className="mono">BRS</td><td className="mono">—</td><td><span className="rcv ok">on file</span></td></tr>
-                <tr><td>Single Business Permit</td><td className="mono">NCC-2026</td><td className="mono">31 Dec 2026</td><td><span className="pill today">Renew Q4</span></td></tr>
-                <tr><td>NSSF / SHIF registration</td><td className="mono">Employer no.</td><td className="mono">—</td><td><span className="rcv ok">on file</span></td></tr>
-                <tr><td>Annual Returns (Registrar)</td><td className="mono">BRS</td><td className="mono">Sep 2026</td><td><span className="pill week">Upcoming</span></td></tr>
+                {companyDocuments.length === 0 && <tr><td colSpan={4} className="meta">No documents yet.</td></tr>}
+                {companyDocuments.map((d) => (
+                  <tr key={d.name}>
+                    <td>{d.doc ? <a href={complianceDocUrl(d.doc)} target="_blank" rel="noreferrer" style={{ color: "var(--flame)", textDecoration: "none" }}>{d.name}</a> : d.name}</td>
+                    <td className="meta" style={{ textTransform: "capitalize" }}>{d.kind ?? "—"}</td>
+                    <td className="mono">{d.expiry}</td>
+                    <td><span className={`pill ${d.statusCls}`}>{d.statusTxt}</span></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -64,11 +82,15 @@ export default function ComplianceView() {
         <div className="comp-panel active">
           <div className="panel">
             <div className="panel-h"><h3>Compliance calendar</h3><span className="meta">statutory obligations</span></div>
-            <div className="task"><span className="id">9 Jul</span><span className="txt">PAYE, NSSF, SHIF &amp; Housing Levy remittance<small>June payroll</small></span><span className="pill today">Due soon</span></div>
-            <div className="task"><span className="id">20 Jul</span><span className="txt">VAT return &amp; payment (KRA)<small>via eTIMS</small></span><span className="pill week">This month</span></div>
-            <div className="task"><span className="id">Sep</span><span className="txt">Annual Returns — Registrar of Companies</span><span className="pill week">Upcoming</span></div>
-            <div className="task"><span className="id">Q4</span><span className="txt">Single Business Permit renewal</span><span className="pill week">Upcoming</span></div>
-            <div className="task"><span className="id">Feb</span><span className="txt">Tax Compliance Certificate renewal</span><span className="pill done">Valid to 2027</span></div>
+            {obligations.length === 0 && <div className="meta" style={{ padding: 12 }}>No obligations tracked.</div>}
+            {obligations.map((o) => (
+              <div className="task" key={o.obligation}>
+                <span className="id">{o.when}</span>
+                <span className="txt">{o.obligation}<small>{[o.authority, o.dueRule].filter(Boolean).join(" · ")}</small></span>
+                <span className={`pill ${o.statusCls}`}>{o.statusTxt}</span>
+                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, marginLeft: 10 }} onClick={() => markObligationFiled(o.obligation)}>Mark filed</button>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -76,20 +98,43 @@ export default function ComplianceView() {
       {tab === "c-risk" && (
         <div className="comp-panel active">
           <div className="panel">
-            <div className="panel-h">
-              <h3>Risk register</h3>
-              <span className="meta">
-                <a href="#" onClick={(e) => { e.preventDefault(); toast("New risk", "Log a risk with owner and mitigation"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add risk</a>
-              </span>
-            </div>
+            <div className="panel-h"><h3>Risk register</h3><span className="meta">owner · severity · mitigation</span></div>
             <table className="tbl">
-              <thead><tr><th>Risk</th><th>Owner</th><th>Severity</th><th>Mitigation</th></tr></thead>
+              <thead><tr><th>Ref</th><th>Risk</th><th>Owner</th><th>Severity</th><th>Mitigation</th></tr></thead>
               <tbody>
-                <tr><td>Single-funder dependency (Wave 1)</td><td>Wilson</td><td><span className="pill over">High</span></td><td style={{ fontSize: 12 }}>Diversify pipeline — 7 funders live</td></tr>
-                <tr><td>FX exposure (USD / KES)</td><td>Dennis</td><td><span className="pill today">Medium</span></td><td style={{ fontSize: 12 }}>Monthly revaluation; USD grant a/c</td></tr>
-                <tr><td>Field data quality</td><td>Elizabeth</td><td><span className="pill today">Medium</span></td><td style={{ fontSize: 12 }}>Enumerator rubric + supervisor QA</td></tr>
-                <tr><td>Key-person dependency</td><td>Dennis</td><td><span className="pill today">Medium</span></td><td style={{ fontSize: 12 }}>Documented SOPs; cross-training</td></tr>
-                <tr><td>Carbon registry ambiguity</td><td>Wanjiku</td><td><span className="pill today">Medium</span></td><td style={{ fontSize: 12 }}>MRV lineage; verifier engagement</td></tr>
+                {risks.length === 0 && <tr><td colSpan={5} className="meta">No risks logged.</td></tr>}
+                {risks.map((r) => (
+                  <tr key={r.ref}>
+                    <td className="mono">{r.ref}</td>
+                    <td>{r.risk}</td>
+                    <td>{r.owner ?? "—"}</td>
+                    <td><span className={`pill ${r.statusCls}`}>{r.statusTxt}</span> <span className="meta">L{r.likelihood}×I{r.impact}</span></td>
+                    <td style={{ fontSize: 12 }}>{r.mitigation ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "c-contracts" && (
+        <div className="comp-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>Contracts registry</h3><span className="meta">Procurement &amp; CRM read the same records</span></div>
+            <table className="tbl">
+              <thead><tr><th>Counterparty</th><th>Type</th><th>Contract</th><th>Expiry</th><th>Status</th></tr></thead>
+              <tbody>
+                {contracts.length === 0 && <tr><td colSpan={5} className="meta">No contracts registered.</td></tr>}
+                {contracts.map((c) => (
+                  <tr key={c.counterparty + c.title}>
+                    <td>{c.counterparty}</td>
+                    <td className="meta" style={{ textTransform: "capitalize" }}>{c.kind}</td>
+                    <td>{c.title}{c.detail ? <><br /><span className="meta" style={{ textTransform: "none", letterSpacing: 0 }}>{c.detail}</span></> : null}</td>
+                    <td className="mono">{c.expiry}</td>
+                    <td><span className={`pill ${c.statusCls}`}>{c.statusTxt}</span></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

@@ -4570,3 +4570,843 @@ begin
     public.set_project_state(uuid, text)
   to authenticated;
 end $$;
+
+
+-- ============================================================
+-- Jikoni — Field workforce: auto-generate the casual contract reference
+-- The New-field-assignment form no longer asks for a per-diem total or a
+-- contract/doc ref. create_field_assignment now mints the contract reference
+-- itself (CAS-<year>-<seq>) from a ref counter when the caller doesn't pass one,
+-- so every casual assignment gets a unique, sequential doc reference.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- casual-contract counter. Seeds (0015) used CAS-2026-011..014 by hand, so start
+-- at 14 and bump past the highest existing CAS-YYYY-NNN so the next mint can't collide.
+insert into public.ref_counters(kind, prefix, n) values ('CAS', 'CAS-', 14)
+on conflict (kind) do nothing;
+
+update public.ref_counters c
+   set n = greatest(c.n, coalesce((
+     select max(split_part(contract_doc, '-', 3)::int)
+     from public.field_assignments
+     where contract_doc ~ '^CAS-\d+-\d+$'
+   ), 0))
+ where c.kind = 'CAS';
+
+-- Same signature as 0015 (defaults preserved) so PostgREST callers that omit
+-- p_per_diem / p_contract_doc still resolve; contract_doc is generated when absent.
+create or replace function public.create_field_assignment(
+  p_enumerator_id uuid, p_project text default null, p_period text default null,
+  p_days numeric default 0, p_per_diem numeric default 0, p_contract_doc text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid; v_doc text; v_seq int;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('hr', 2);
+  if not exists (select 1 from public.enumerators where id = p_enumerator_id) then
+    raise exception 'Unknown enumerator';
+  end if;
+  if p_project is not null and not exists (select 1 from public.projects where name = p_project) then
+    raise exception 'Unknown project: %', p_project;
+  end if;
+  -- use the caller's reference if one was given, otherwise auto-mint CAS-<year>-<seq>
+  v_doc := nullif(trim(coalesce(p_contract_doc, '')), '');
+  if v_doc is null then
+    update public.ref_counters set n = n + 1 where kind = 'CAS' returning n into v_seq;
+    v_doc := 'CAS-' || extract(year from current_date)::int || '-' || lpad(v_seq::text, 3, '0');
+  end if;
+  insert into public.field_assignments(entity_id, enumerator_id, project_name, period, days, per_diem, contract_doc, state)
+  values (v_entity, p_enumerator_id, p_project, nullif(trim(coalesce(p_period,'')),''), coalesce(p_days,0),
+          coalesce(p_per_diem,0), v_doc, 'planned')
+  returning id into v_id;
+  perform public.audit_write('hr.field_assignment_created','field_assignment', v_id::text,
+    jsonb_build_object('project', p_project, 'period', p_period, 'days', p_days, 'contractDoc', v_doc));
+  return jsonb_build_object('id', v_id, 'project', p_project, 'contractDoc', v_doc, 'state', 'planned');
+end $$;
+
+grant execute on function public.create_field_assignment(uuid,text,text,numeric,numeric,text) to authenticated;
+
+
+-- ============================================================
+-- Jikoni — Partnerships CRM: DB-backed engagement progress tracker
+-- The engagement detail drawer was static mock data. This makes the two
+-- interactive parts persistent so the owner/CEO can open a record and see the
+-- real, saved progress of the conversation:
+--   * engagement_notes     — the Updates log (channel/who/note + stage move)
+--   * engagement_partners  — which partners an engagement involves (many)
+--   * log_engagement_note()      — append a note, optionally advance the stage
+--   * set_engagement_partners()  — replace the linked-partner set
+-- Seeds the existing hardcoded updates so the log isn't empty on first load, and
+-- extends bootstrap() to return per-engagement updates + an engPartners map.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- tables ----------
+create table if not exists public.engagement_notes (
+  id            uuid primary key default gen_random_uuid(),
+  engagement_id uuid not null references public.engagements(id) on delete cascade,
+  channel       text,
+  who           text,
+  note          text not null,
+  stage_from    text,
+  stage_to      text,
+  created_at    timestamptz not null default now()
+);
+create index if not exists engagement_notes_eng_idx on public.engagement_notes(engagement_id, created_at desc);
+
+create table if not exists public.engagement_partners (
+  engagement_id uuid not null references public.engagements(id) on delete cascade,
+  partner_id    uuid not null references public.partners(id) on delete cascade,
+  created_at    timestamptz not null default now(),
+  primary key (engagement_id, partner_id)
+);
+
+-- ---------- RLS: read for signed-in users; writes only via definer RPCs ----------
+do $$
+declare t text;
+begin
+  foreach t in array array['engagement_notes', 'engagement_partners']
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists "read for authenticated" on public.%I', t);
+    execute format('create policy "read for authenticated" on public.%I for select to authenticated using (true)', t);
+  end loop;
+end $$;
+
+-- ---------- RPC: log an update (diary note + optional stage move) ----------
+create or replace function public.log_engagement_note(
+  p_eng_ref text, p_channel text, p_who text, p_note text, p_stage_to text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  e public.engagements;
+  v_id uuid; v_stage_to text := nullif(trim(coalesce(p_stage_to, '')), '');
+begin
+  perform public.assert_access('crm', 2);
+  select * into e from public.engagements where ref = p_eng_ref;
+  if not found then raise exception 'Unknown engagement: %', p_eng_ref; end if;
+  if nullif(trim(coalesce(p_note, '')), '') is null then raise exception 'An update needs a note'; end if;
+
+  insert into public.engagement_notes(engagement_id, channel, who, note, stage_from, stage_to)
+  values (e.id, nullif(trim(coalesce(p_channel,'')),''), nullif(trim(coalesce(p_who,'')),''),
+          trim(p_note), e.stage, v_stage_to)
+  returning id into v_id;
+
+  -- advance the engagement's stage when the update moves it
+  if v_stage_to is not null and v_stage_to is distinct from e.stage then
+    update public.engagements set stage = v_stage_to, updated_at = now() where id = e.id;
+  end if;
+
+  perform public.audit_write('crm.engagement_note', 'engagement', p_eng_ref,
+    jsonb_build_object('channel', p_channel, 'who', p_who, 'from', e.stage, 'to', v_stage_to));
+  return jsonb_build_object('id', v_id, 'ref', p_eng_ref, 'stage', coalesce(v_stage_to, e.stage));
+end $$;
+
+-- ---------- RPC: set the linked partners (replace the whole set) ----------
+create or replace function public.set_engagement_partners(p_eng_ref text, p_partner_ids uuid[])
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare e_id uuid;
+begin
+  perform public.assert_access('crm', 2);
+  select id into e_id from public.engagements where ref = p_eng_ref;
+  if e_id is null then raise exception 'Unknown engagement: %', p_eng_ref; end if;
+
+  delete from public.engagement_partners where engagement_id = e_id;
+  insert into public.engagement_partners(engagement_id, partner_id)
+  select e_id, pid from unnest(coalesce(p_partner_ids, '{}'::uuid[])) as pid
+  where exists (select 1 from public.partners where id = pid)
+  on conflict do nothing;
+
+  perform public.audit_write('crm.engagement_partners', 'engagement', p_eng_ref,
+    jsonb_build_object('count', coalesce(array_length(p_partner_ids, 1), 0)));
+  return jsonb_build_object('ref', p_eng_ref, 'count', coalesce(array_length(p_partner_ids, 1), 0));
+end $$;
+
+-- ---------- seed the existing hardcoded updates (from data.ts engDetails) ----------
+insert into public.engagement_notes(engagement_id, channel, who, note, created_at)
+select e.id, v.channel, v.who, v.note, now() - v.ago
+from public.engagements e
+join (values
+  ('ENG-002', 'Email',   'Wilson',    'Chased DSA signature; dataset ready to share on confirmation.', interval '0 day'),
+  ('ENG-002', 'Call',    'Wilson',    'Agreed scope of the data exchange ahead of the summit.',        interval '3 day'),
+  ('ENG-008', 'Meeting', 'Wilson',    'Discussed concessional terms; follow-up call scheduled.',       interval '2 day'),
+  ('ENG-012', 'Call',    'Wilson',    'Term sheet received; reviewing repayment and milestone conditions.', interval '0 day'),
+  ('ENG-012', 'Email',   'Wilson',    'Shared the updated model and pipeline.',                        interval '7 day'),
+  ('ENG-019', 'Email',   'Wilson',    'Sent intro deck; awaiting response.',                           interval '16 day'),
+  ('ENG-026', 'Call',    'Wilson',    'Discussed Ethiopia collaboration; brief requested.',            interval '5 day'),
+  ('DST-004', 'Email',   'Elizabeth', '22 of 63 institutions now registered on the platform.',         interval '1 day'),
+  ('DST-004', 'Field',   'Elizabeth', 'Onboarding workshop held with the county.',                     interval '7 day'),
+  ('DST-011', 'Field',   'Elizabeth', 'EOI signed by the diocese.',                                    interval '3 day'),
+  ('DST-018', 'Call',    'Elizabeth', 'Tentative site-visit window agreed; not yet confirmed.',        interval '16 day')
+) as v(ref, channel, who, note, ago) on v.ref = e.ref
+where not exists (select 1 from public.engagement_notes);
+
+-- ---------- updated bootstrap(): per-engagement updates + engPartners map ----------
+create or replace function public.bootstrap()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_email text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', '');
+begin
+  return jsonb_build_object(
+    'me', (select jsonb_build_object('email', email, 'name', name, 'roleTitle', role_title)
+           from public.app_users where email = v_email),
+    'tasks', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 't', title, 's', sub, 'o', owner_name, 'p', due_pill, 'pl', due_label)
+        order by created_at desc)
+      from public.tasks where state = 'open'), '[]'::jsonb),
+    'reqs', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'item', item, 'amt', amount, 'code', budget_code,
+        'chip', budget_chip, 'chipTxt', budget_chip_txt,
+        'status', case state when 'approved' then 'approved' when 'md_review' then 'md'
+                             when 'converted' then 'po' else 'await' end)
+        order by created_at desc)
+      from public.requisitions where state <> 'rejected'), '[]'::jsonb),
+    'pos', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'vendor', vendor_name, 'amt', amount, 'delivery', delivery)
+        order by created_at desc)
+      from public.purchase_orders), '[]'::jsonb),
+    'salesInvoices', coalesce((select jsonb_agg(jsonb_build_object(
+        'cust', customer, 'id', ref, 'tot', total, 'pillCls', due_pill_cls, 'pillTxt', due_pill_txt)
+        order by created_at desc)
+      from public.sales_invoices), '[]'::jsonb),
+    'perms', coalesce((select jsonb_object_agg(email, mods) from (
+        select email, jsonb_object_agg(module, level) as mods
+        from public.user_permissions group by email) q), '{}'::jsonb),
+    'projects', coalesce((select jsonb_object_agg(name, public.project_detail_json(id))
+      from public.projects), '{}'::jsonb),
+    'extraProjects', coalesce((select jsonb_agg(jsonb_build_object('name', name, 'funder', funder)
+        order by created_at)
+      from public.projects where is_extra), '[]'::jsonb),
+    'engToProject', coalesce((select jsonb_object_agg(eng_ref, project_name)
+      from public.eng_project_links), '{}'::jsonb),
+    'projectToEng', coalesce((select jsonb_object_agg(project_name, eng_ref)
+      from public.eng_project_links where is_primary), '{}'::jsonb),
+    'budgetLines', coalesce((select jsonb_object_agg(code, jsonb_build_object(
+        'b', budget, 'u', committed + actual))
+      from public.budget_lines), '{}'::jsonb),
+    'inventory', jsonb_build_object(
+      'items', coalesce((select jsonb_agg(jsonb_build_object(
+          'sku', i.sku, 'name', i.name, 'category', i.category, 'unit', i.unit,
+          'unitCost', i.unit_cost, 'reorderLevel', i.reorder_level,
+          'onHand', coalesce((select sum(qty) from public.stock_levels where item_id = i.id), 0),
+          'autoReq', i.auto_req_ref) order by i.sku)
+        from public.stock_items i where i.state = 'active'), '[]'::jsonb),
+      'locations', coalesce((select jsonb_agg(name order by name) from public.stock_locations where state='active'), '[]'::jsonb),
+      'movements', coalesce((select jsonb_agg(jsonb_build_object(
+          'when', to_char(m.created_at, 'DD Mon HH24:MI'), 'sku', i.sku, 'type', m.movement_type,
+          'qty', m.qty, 'from', fl.name, 'to', tl.name, 'source', m.source_ref, 'note', m.note) order by m.created_at desc)
+        from (select * from public.stock_movements order by created_at desc limit 40) m
+        join public.stock_items i on i.id = m.item_id
+        left join public.stock_locations fl on fl.id = m.from_location
+        left join public.stock_locations tl on tl.id = m.to_location), '[]'::jsonb),
+      'dispatches', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'project', project_name, 'destination', destination, 'lines', lines, 'state', state)
+          order by created_at desc)
+        from public.dispatches), '[]'::jsonb),
+      'assets', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'name', name, 'category', category, 'cost', cost, 'accumDep', accum_dep,
+          'nbv', cost - accum_dep, 'acquired', to_char(acquired_on, 'Mon YYYY'), 'state', state)
+          order by ref)
+        from public.assets), '[]'::jsonb)),
+    -- ---- CRM forms data ----
+    'engagements', jsonb_build_object(
+      'up', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'n', name, 'st', stage, 'o', owner_name, 'pl', pill, 'plt', pill_txt,
+          'updates', coalesce((select jsonb_agg(jsonb_build_object(
+              'ts', n.created_at, 'd', to_char(n.created_at, 'DD Mon'), 'ch', n.channel, 'who', n.who, 'note', n.note)
+              order by n.created_at desc)
+            from public.engagement_notes n where n.engagement_id = engagements.id), '[]'::jsonb))
+          order by created_at desc)
+        from public.engagements where pipeline = 'up' and state = 'active'), '[]'::jsonb),
+      'down', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'n', name, 'st', stage, 'o', owner_name, 'pl', pill, 'plt', pill_txt,
+          'updates', coalesce((select jsonb_agg(jsonb_build_object(
+              'ts', n.created_at, 'd', to_char(n.created_at, 'DD Mon'), 'ch', n.channel, 'who', n.who, 'note', n.note)
+              order by n.created_at desc)
+            from public.engagement_notes n where n.engagement_id = engagements.id), '[]'::jsonb))
+          order by created_at desc)
+        from public.engagements where pipeline = 'down' and state = 'active'), '[]'::jsonb)),
+    'engPartners', coalesce((select jsonb_object_agg(ref, pids) from (
+        select e.ref, jsonb_agg(ep.partner_id order by ep.created_at) as pids
+        from public.engagements e
+        join public.engagement_partners ep on ep.engagement_id = e.id
+        group by e.ref) q), '{}'::jsonb),
+    'partners', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id, 'name', name, 'type', type, 'country', country,
+        'ownerName', owner_name, 'status', status, 'statusCls', status_cls)
+        order by created_at desc)
+      from public.partners where state = 'active'), '[]'::jsonb),
+    'opportunities', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id, 'name', name, 'type', type, 'deadline', deadline,
+        'linkedTo', linked_to, 'status', status, 'statusCls', status_cls)
+        order by created_at desc)
+      from public.opportunities where state = 'active'), '[]'::jsonb),
+    'crmDropdowns', coalesce((select jsonb_object_agg(cat, vals) from (
+        select category as cat, jsonb_agg(value order by sort) as vals
+        from public.crm_dropdown_options where active group by category) q), '{}'::jsonb),
+    'teamNames', coalesce((select jsonb_agg(name order by name) from public.app_users where state = 'active'), '[]'::jsonb)
+  );
+end $$;
+
+-- ---------- grants: authenticated only, never public/anon ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'log_engagement_note(text,text,text,text,text)',
+    'set_engagement_partners(text,uuid[])']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ============================================================
+-- Jikoni — Partnerships CRM: engagement documents
+-- Documents are only attached when someone actually uploads one — either while
+-- creating an engagement or when logging an update. The file lives in Supabase
+-- Storage; a metadata row keeps the object path so anyone with CRM access can
+-- open / download it from the engagement drawer.
+--   * engagement_documents        — name + storage path per engagement (+ note)
+--   * add_engagement_document()    — records an uploaded file (crm edit access)
+--   * storage bucket 'engagement-docs' (public read, authenticated write)
+-- Bootstrap is left untouched — the client folds docs in by ref (same approach
+-- as dispatch receipts), so no re-declaration of the big bootstrap() function.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- table ----------
+create table if not exists public.engagement_documents (
+  id            uuid primary key default gen_random_uuid(),
+  engagement_id uuid not null references public.engagements(id) on delete cascade,
+  note_id       uuid references public.engagement_notes(id) on delete set null,
+  name          text not null,
+  path          text not null,
+  who           text,
+  created_at    timestamptz not null default now()
+);
+create index if not exists engagement_documents_eng_idx on public.engagement_documents(engagement_id, created_at desc);
+
+-- read for signed-in users; writes only via the definer RPC
+alter table public.engagement_documents enable row level security;
+drop policy if exists "read for authenticated" on public.engagement_documents;
+create policy "read for authenticated" on public.engagement_documents for select to authenticated using (true);
+
+-- ---------- storage bucket + policies (wrapped so a locked-down role can't abort the migration) ----------
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('engagement-docs', 'engagement-docs', true)
+  on conflict (id) do nothing;
+
+  drop policy if exists "engagement docs read"   on storage.objects;
+  drop policy if exists "engagement docs insert" on storage.objects;
+  drop policy if exists "engagement docs update" on storage.objects;
+
+  create policy "engagement docs read" on storage.objects
+    for select to public using (bucket_id = 'engagement-docs');
+  create policy "engagement docs insert" on storage.objects
+    for insert to authenticated with check (bucket_id = 'engagement-docs');
+  create policy "engagement docs update" on storage.objects
+    for update to authenticated using (bucket_id = 'engagement-docs');
+exception when others then
+  raise notice 'storage bucket/policy setup skipped: %', sqlerrm;
+end $$;
+
+-- ---------- record an uploaded document against an engagement ----------
+create or replace function public.add_engagement_document(
+  p_eng_ref text, p_name text, p_path text, p_who text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_id uuid; e_id uuid;
+begin
+  perform public.assert_access('crm', 2);
+  if nullif(trim(coalesce(p_path, '')), '') is null then raise exception 'A document file is required'; end if;
+  select id into e_id from public.engagements where ref = p_eng_ref;
+  if e_id is null then raise exception 'Unknown engagement: %', p_eng_ref; end if;
+  insert into public.engagement_documents(engagement_id, name, path, who)
+  values (e_id, coalesce(nullif(trim(p_name), ''), 'Document'), trim(p_path), nullif(trim(coalesce(p_who,'')),''))
+  returning id into v_id;
+  perform public.audit_write('crm.engagement_document', 'engagement', p_eng_ref,
+    jsonb_build_object('name', p_name, 'path', p_path));
+  return jsonb_build_object('id', v_id, 'ref', p_eng_ref, 'name', p_name, 'path', p_path);
+end $$;
+
+-- ---------- grant: authenticated only, never public/anon ----------
+do $$
+begin
+  revoke execute on function public.add_engagement_document(text, text, text, text) from public, anon;
+  grant  execute on function public.add_engagement_document(text, text, text, text) to authenticated;
+end $$;
+
+
+-- ============================================================
+-- Jikoni — Partnerships CRM: rename the upstream (capital) stage ladder
+-- The old ladder mixed relationship stages with artifacts ("Materials",
+-- "Term sheet"). New solid ladder (all stages):
+--   Discovery → Due diligence → Negotiation → Agreement → Commitment → Closed
+-- Remap existing upstream engagements so the drawer's progress ribbon keeps
+-- highlighting the right rung. Downstream is unchanged.
+-- Idempotent: safe to re-run (old values simply no longer exist after the first run).
+-- ============================================================
+
+update public.engagements
+   set stage = case stage
+                 when 'Materials'  then 'Due diligence'
+                 when 'Term sheet' then 'Agreement'
+                 when 'Committed'  then 'Commitment'
+                 else stage
+               end,
+       updated_at = now()
+ where pipeline = 'up'
+   and stage in ('Materials', 'Term sheet', 'Committed');
+
+
+-- ======== supabase/migrations/0023_compliance_frontend.sql ========
+-- ============================================================
+-- Jikoni — Compliance & Governance: wire the module to the frontend
+-- The Phase 4 backend (policies, company_documents, compliance_obligations,
+-- risks, contracts) already exists but was never read by the app. This makes
+-- Compliance a first-class, Supabase-backed, interactive module like the rest:
+--   * dedicated 'compliance' access key (backfilled from each user's reports level)
+--   * compliance-docs storage bucket (public-read, authenticated-write)
+--   * create RPCs: create_risk / add_policy / add_company_document / add_contract
+--   * mark_obligation_filed re-gated onto 'compliance'
+--   * bootstrap() extended with policies/companyDocuments/obligations/risks/contracts
+--   * seeds reconciled to the intended demo content
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- access key: backfill 'compliance' from each user's 'reports' level ----------
+insert into public.user_permissions(email, module, level)
+select email, 'compliance', level from public.user_permissions where module = 'reports'
+on conflict (email, module) do nothing;
+
+-- ---------- storage bucket 'compliance-docs' (public read, authenticated write) ----------
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('compliance-docs', 'compliance-docs', true)
+  on conflict (id) do nothing;
+
+  drop policy if exists "compliance-docs read"   on storage.objects;
+  drop policy if exists "compliance-docs write"  on storage.objects;
+  drop policy if exists "compliance-docs update" on storage.objects;
+  create policy "compliance-docs read"   on storage.objects
+    for select to public using (bucket_id = 'compliance-docs');
+  create policy "compliance-docs write"  on storage.objects
+    for insert to authenticated with check (bucket_id = 'compliance-docs');
+  create policy "compliance-docs update" on storage.objects
+    for update to authenticated using (bucket_id = 'compliance-docs');
+end $$;
+
+-- ---------- mutation RPCs (mirror the create_partner template) ----------
+
+-- risk register: new risk gets an RSK- ref; severity is likelihood × impact
+create or replace function public.create_risk(
+  p_risk text, p_category text, p_likelihood int, p_impact int, p_mitigation text, p_owner text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_ref text;
+begin
+  perform public.assert_access('compliance', 2);
+  if p_likelihood not between 1 and 5 or p_impact not between 1 and 5 then
+    raise exception 'Likelihood and impact must be 1–5';
+  end if;
+  v_ref := public.next_ref('RSK');
+  insert into public.risks(ref, entity_id, risk, category, likelihood, impact, mitigation, owner_name, state)
+  values (v_ref, v_entity, p_risk, nullif(p_category,''), p_likelihood, p_impact, nullif(p_mitigation,''), nullif(p_owner,''), 'open');
+  perform public.audit_write('risk.created', 'risk', v_ref,
+    jsonb_build_object('risk', p_risk, 'likelihood', p_likelihood, 'impact', p_impact, 'owner', p_owner));
+  return jsonb_build_object('ref', v_ref, 'risk', p_risk);
+end $$;
+
+-- policies: adding a version supersedes the prior active one for the same code
+create or replace function public.add_policy(
+  p_code text, p_title text, p_effective_from date, p_doc text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_ver int;
+begin
+  perform public.assert_access('compliance', 2);
+  select coalesce(max(version), 0) into v_ver from public.policies where code = p_code;
+  update public.policies set state = 'superseded' where code = p_code and state = 'active';
+  insert into public.policies(code, title, version, effective_from, doc, state)
+  values (p_code, p_title, v_ver + 1, p_effective_from, nullif(p_doc,''), 'active');
+  perform public.audit_write('policy.added', 'policy', p_code,
+    jsonb_build_object('title', p_title, 'version', v_ver + 1));
+  return jsonb_build_object('code', p_code, 'title', p_title, 'version', v_ver + 1);
+end $$;
+
+-- company documents: upsert by name (statutory docs are one-per-name with an expiry)
+create or replace function public.add_company_document(
+  p_name text, p_kind text, p_expires_on date, p_doc text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('compliance', 2);
+  insert into public.company_documents(entity_id, name, kind, expires_on, doc, state)
+  values (v_entity, p_name, nullif(p_kind,''), p_expires_on, nullif(p_doc,''), 'active')
+  on conflict (name) do update set
+    kind = coalesce(nullif(excluded.kind,''), public.company_documents.kind),
+    expires_on = excluded.expires_on,
+    doc = coalesce(excluded.doc, public.company_documents.doc),
+    updated_at = now();
+  perform public.audit_write('company_document.added', 'company_document', p_name,
+    jsonb_build_object('kind', p_kind, 'expiresOn', p_expires_on));
+  return jsonb_build_object('name', p_name);
+end $$;
+
+-- contracts registry (governance home; also read by Procurement + CRM)
+create or replace function public.add_contract(
+  p_counterparty text, p_kind text, p_title text, p_detail text, p_expires_on date
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('compliance', 2);
+  if p_kind not in ('vendor','funder','customer','partner') then
+    raise exception 'Contract kind must be vendor, funder, customer or partner';
+  end if;
+  insert into public.contracts(entity_id, counterparty, kind, title, detail, expires_on,
+                               vendor_id, state)
+  values (v_entity, p_counterparty, p_kind, p_title, nullif(p_detail,''), p_expires_on,
+          (select id from public.vendors where name = p_counterparty), 'active')
+  on conflict (counterparty, title) do update set
+    detail = coalesce(excluded.detail, public.contracts.detail),
+    expires_on = excluded.expires_on,
+    updated_at = now();
+  perform public.audit_write('contract.added', 'contract', p_title,
+    jsonb_build_object('counterparty', p_counterparty, 'kind', p_kind, 'expiresOn', p_expires_on));
+  return jsonb_build_object('counterparty', p_counterparty, 'title', p_title);
+end $$;
+
+-- re-gate the existing obligation-filed RPC onto the new module
+create or replace function public.mark_obligation_filed(p_obligation text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare o record; nxt date;
+begin
+  perform public.assert_access('compliance', 2);
+  select * into o from public.compliance_obligations where obligation = p_obligation;
+  if not found then raise exception 'Unknown obligation: %', p_obligation; end if;
+  nxt := case o.frequency
+    when 'monthly' then o.next_due + interval '1 month'
+    when 'quarterly' then o.next_due + interval '3 months'
+    else o.next_due + interval '1 year' end;
+  update public.compliance_obligations set state = 'pending', next_due = nxt where id = o.id;
+  perform public.audit_write('compliance.filed','obligation', p_obligation,
+    jsonb_build_object('filedFor', o.next_due, 'nextDue', nxt));
+  return jsonb_build_object('obligation', p_obligation, 'nextDue', nxt);
+end $$;
+
+-- ---------- seeds: reconcile to the intended demo content (idempotent) ----------
+insert into public.policies(code, title, version, effective_from, state) values
+  ('IGN-PROC-001', 'Procurement policy & SOP',            2, '2026-01-01', 'active'),
+  ('IGN-FIN-001',  'Financial management manual',         1, '2025-07-01', 'active'),
+  ('IGN-HR-001',   'HR policy & staff handbook',          1, '2025-07-01', 'active'),
+  ('IGN-GOV-002',  'Code of Conduct',                     1, '2025-07-01', 'active'),
+  ('IGN-GOV-004',  'Safeguarding / Child Protection',     1, '2024-10-01', 'active'),
+  ('IGN-GOV-005',  'Data protection policy (Kenya DPA)',  1, '2025-10-01', 'active'),
+  ('IGN-PROC-002', 'Anti-corruption & sanctions policy',  1, '2025-10-01', 'active')
+on conflict (code, version) do nothing;
+
+with ke as (select id from public.entities where code = 'KE')
+insert into public.company_documents(entity_id, name, kind, expires_on)
+select ke.id, v.name, v.kind, v.expires::date from ke, (values
+  ('Certificate of incorporation', 'statutory', null),
+  ('KRA PIN certificate',          'statutory', null),
+  ('Tax Compliance Certificate',   'statutory', '2027-02-14'),
+  ('CR12 (shareholding)',          'statutory', null),
+  ('NSSF / SHIF registration',     'statutory', null),
+  ('Single Business Permit',       'licence',   '2026-12-31'),
+  ('Annual Returns (Registrar)',   'statutory', '2026-09-30'),
+  ('EPRA licence — LPG handling',  'licence',   '2027-03-31')
+) as v(name, kind, expires)
+on conflict (name) do nothing;
+
+with ke as (select id from public.entities where code = 'KE')
+insert into public.risks(ref, entity_id, risk, category, likelihood, impact, mitigation, owner_name, state)
+select v.ref, ke.id, v.risk, v.category, v.l, v.i, v.mitigation, v.owner, v.state from ke, (values
+  ('RSK-105', 'Single-funder dependency (Wave 1)', 'Funding',  3, 5, 'Diversify pipeline — 7 funders live',        'Wilson',    'open'),
+  ('RSK-106', 'FX exposure (USD / KES)',           'Market',   3, 3, 'Monthly revaluation; USD grant account',      'Dennis',    'open'),
+  ('RSK-107', 'Field data quality',                'Delivery', 2, 3, 'Enumerator rubric + supervisor QA',           'Elizabeth', 'open'),
+  ('RSK-108', 'Key-person dependency',             'People',   2, 3, 'Documented SOPs; cross-training',             'Dennis',    'open'),
+  ('RSK-109', 'Carbon registry ambiguity',         'Delivery', 2, 3, 'MRV lineage; verifier engagement',            'Wanjiku',   'open')
+) as v(ref, risk, category, l, i, mitigation, owner, state)
+on conflict (ref) do nothing;
+
+-- keep the RSK counter ahead of the seeded refs so create_risk doesn't collide
+update public.ref_counters set n = greatest(n, 109) where kind = 'RSK';
+
+-- ---------- bootstrap(): add compliance keys (policies/docs/obligations/risks/contracts) ----------
+create or replace function public.bootstrap()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_email text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', '');
+begin
+  return jsonb_build_object(
+    'me', (select jsonb_build_object('email', email, 'name', name, 'roleTitle', role_title)
+           from public.app_users where email = v_email),
+    'tasks', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 't', title, 's', sub, 'o', owner_name, 'p', due_pill, 'pl', due_label)
+        order by created_at desc)
+      from public.tasks where state = 'open'), '[]'::jsonb),
+    'reqs', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'item', item, 'amt', amount, 'code', budget_code,
+        'chip', budget_chip, 'chipTxt', budget_chip_txt,
+        'status', case state when 'approved' then 'approved' when 'md_review' then 'md'
+                             when 'converted' then 'po' else 'await' end)
+        order by created_at desc)
+      from public.requisitions where state <> 'rejected'), '[]'::jsonb),
+    'pos', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', ref, 'vendor', vendor_name, 'amt', amount, 'delivery', delivery)
+        order by created_at desc)
+      from public.purchase_orders), '[]'::jsonb),
+    'salesInvoices', coalesce((select jsonb_agg(jsonb_build_object(
+        'cust', customer, 'id', ref, 'tot', total, 'pillCls', due_pill_cls, 'pillTxt', due_pill_txt)
+        order by created_at desc)
+      from public.sales_invoices), '[]'::jsonb),
+    'perms', coalesce((select jsonb_object_agg(email, mods) from (
+        select email, jsonb_object_agg(module, level) as mods
+        from public.user_permissions group by email) q), '{}'::jsonb),
+    'projects', coalesce((select jsonb_object_agg(name, public.project_detail_json(id))
+      from public.projects), '{}'::jsonb),
+    'extraProjects', coalesce((select jsonb_agg(jsonb_build_object('name', name, 'funder', funder)
+        order by created_at)
+      from public.projects where is_extra), '[]'::jsonb),
+    'engToProject', coalesce((select jsonb_object_agg(eng_ref, project_name)
+      from public.eng_project_links), '{}'::jsonb),
+    'projectToEng', coalesce((select jsonb_object_agg(project_name, eng_ref)
+      from public.eng_project_links where is_primary), '{}'::jsonb),
+    'budgetLines', coalesce((select jsonb_object_agg(code, jsonb_build_object(
+        'b', budget, 'u', committed + actual))
+      from public.budget_lines), '{}'::jsonb),
+    'inventory', jsonb_build_object(
+      'items', coalesce((select jsonb_agg(jsonb_build_object(
+          'sku', i.sku, 'name', i.name, 'category', i.category, 'unit', i.unit,
+          'unitCost', i.unit_cost, 'reorderLevel', i.reorder_level,
+          'onHand', coalesce((select sum(qty) from public.stock_levels where item_id = i.id), 0),
+          'autoReq', i.auto_req_ref) order by i.sku)
+        from public.stock_items i where i.state = 'active'), '[]'::jsonb),
+      'locations', coalesce((select jsonb_agg(name order by name) from public.stock_locations where state='active'), '[]'::jsonb),
+      'movements', coalesce((select jsonb_agg(jsonb_build_object(
+          'when', to_char(m.created_at, 'DD Mon HH24:MI'), 'sku', i.sku, 'type', m.movement_type,
+          'qty', m.qty, 'from', fl.name, 'to', tl.name, 'source', m.source_ref, 'note', m.note) order by m.created_at desc)
+        from (select * from public.stock_movements order by created_at desc limit 40) m
+        join public.stock_items i on i.id = m.item_id
+        left join public.stock_locations fl on fl.id = m.from_location
+        left join public.stock_locations tl on tl.id = m.to_location), '[]'::jsonb),
+      'dispatches', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'project', project_name, 'destination', destination, 'lines', lines, 'state', state)
+          order by created_at desc)
+        from public.dispatches), '[]'::jsonb),
+      'assets', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'name', name, 'category', category, 'cost', cost, 'accumDep', accum_dep,
+          'nbv', cost - accum_dep, 'acquired', to_char(acquired_on, 'Mon YYYY'), 'state', state)
+          order by ref)
+        from public.assets), '[]'::jsonb)),
+    -- ---- CRM forms data ----
+    'engagements', jsonb_build_object(
+      'up', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'n', name, 'st', stage, 'o', owner_name, 'pl', pill, 'plt', pill_txt)
+          order by created_at desc)
+        from public.engagements where pipeline = 'up' and state = 'active'), '[]'::jsonb),
+      'down', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', ref, 'n', name, 'st', stage, 'o', owner_name, 'pl', pill, 'plt', pill_txt)
+          order by created_at desc)
+        from public.engagements where pipeline = 'down' and state = 'active'), '[]'::jsonb)),
+    'partners', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id, 'name', name, 'type', type, 'country', country,
+        'ownerName', owner_name, 'status', status, 'statusCls', status_cls)
+        order by created_at desc)
+      from public.partners where state = 'active'), '[]'::jsonb),
+    'opportunities', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id, 'name', name, 'type', type, 'deadline', deadline,
+        'linkedTo', linked_to, 'status', status, 'statusCls', status_cls)
+        order by created_at desc)
+      from public.opportunities where state = 'active'), '[]'::jsonb),
+    'crmDropdowns', coalesce((select jsonb_object_agg(cat, vals) from (
+        select category as cat, jsonb_agg(value order by sort) as vals
+        from public.crm_dropdown_options where active group by category) q), '{}'::jsonb),
+    'teamNames', coalesce((select jsonb_agg(name order by name) from public.app_users where state = 'active'), '[]'::jsonb),
+    -- ---- Compliance & Governance (new) ----
+    'compliance', jsonb_build_object(
+      'policies', coalesce((select jsonb_agg(jsonb_build_object(
+          'code', code, 'title', title, 'version', 'v' || version, 'effectiveFrom', effective_from,
+          'doc', doc, 'state', state,
+          'statusCls', case
+            when state = 'superseded' then 'week'
+            when state = 'draft' then 'today'
+            when effective_from is not null and effective_from < (now() - interval '1 year')::date then 'today'
+            else 'done' end,
+          'statusTxt', case
+            when state = 'superseded' then 'Superseded'
+            when state = 'draft' then 'Draft'
+            when effective_from is not null and effective_from < (now() - interval '1 year')::date then 'Review due'
+            else 'Current' end)
+          order by code)
+        from public.policies where state <> 'superseded'), '[]'::jsonb),
+      'companyDocuments', coalesce((select jsonb_agg(jsonb_build_object(
+          'name', name, 'kind', kind, 'doc', doc,
+          'expiry', case when expires_on is null then '—' else to_char(expires_on, 'DD Mon YYYY') end,
+          'statusCls', case
+            when expires_on is null then 'done'
+            when expires_on < now()::date then 'over'
+            when expires_on < (now() + interval '60 days')::date then 'today'
+            when expires_on < (now() + interval '6 months')::date then 'week'
+            else 'done' end,
+          'statusTxt', case
+            when expires_on is null then 'On file'
+            when expires_on < now()::date then 'Expired'
+            when expires_on < (now() + interval '60 days')::date then 'Renew soon'
+            when expires_on < (now() + interval '6 months')::date then 'Upcoming'
+            else 'Valid' end)
+          order by expires_on nulls first, name)
+        from public.company_documents where state = 'active'), '[]'::jsonb),
+      'obligations', coalesce((select jsonb_agg(jsonb_build_object(
+          'obligation', obligation, 'authority', authority, 'dueRule', due_rule,
+          'nextDue', next_due, 'when', to_char(next_due, 'DD Mon'), 'state', state, 'ownerModule', owner_module,
+          'statusCls', case
+            when state = 'overdue' or next_due < now()::date then 'over'
+            when next_due < (now() + interval '10 days')::date then 'today'
+            else 'week' end,
+          'statusTxt', case
+            when state = 'overdue' or next_due < now()::date then 'Overdue'
+            when next_due < (now() + interval '10 days')::date then 'Due soon'
+            when next_due < (date_trunc('month', now()) + interval '1 month')::date then 'This month'
+            else 'Upcoming' end)
+          order by next_due)
+        from public.compliance_obligations), '[]'::jsonb),
+      'risks', coalesce((select jsonb_agg(jsonb_build_object(
+          'ref', ref, 'risk', risk, 'category', category, 'owner', owner_name,
+          'likelihood', likelihood, 'impact', impact, 'score', likelihood * impact,
+          'mitigation', mitigation, 'state', state,
+          'statusCls', case when likelihood * impact >= 12 then 'over'
+                            when likelihood * impact >= 6 then 'today' else 'week' end,
+          'statusTxt', case when likelihood * impact >= 12 then 'High'
+                            when likelihood * impact >= 6 then 'Medium' else 'Low' end)
+          order by likelihood * impact desc, ref)
+        from public.risks where state <> 'closed'), '[]'::jsonb),
+      'contracts', coalesce((select jsonb_agg(jsonb_build_object(
+          'counterparty', counterparty, 'kind', kind, 'title', title, 'detail', detail,
+          'expiry', case when expires_on is null then '—' else to_char(expires_on, 'DD Mon YYYY') end,
+          'state', state,
+          'statusCls', case state when 'active' then 'done' when 'renew_soon' then 'today'
+                                  when 'expired' then 'over' else 'week' end,
+          'statusTxt', case state when 'active' then 'Active' when 'renew_soon' then 'Renew soon'
+                                  when 'expired' then 'Expired' else 'Terminated' end)
+          order by expires_on nulls last, counterparty)
+        from public.contracts where state <> 'terminated'), '[]'::jsonb))
+  );
+end $$;
+
+-- ---------- grants: create RPCs are authenticated-only ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'create_risk(text,text,int,int,text,text)',
+    'add_policy(text,text,date,text)',
+    'add_company_document(text,text,date,text)',
+    'add_contract(text,text,text,text,date)',
+    'mark_obligation_filed(text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ======== supabase/migrations/0024_create_project.sql ========
+-- ============================================================
+-- Jikoni — Projects & Programmes: standalone "Add project"
+-- Projects could previously only be created by converting a won CRM engagement
+-- (create_project_from_eng). This adds a direct create path so a user can add a
+-- project from the module itself. Mirrors create_project_from_eng: inserts an
+-- is_extra project, seeds three starter milestones, audit-logs, and returns the
+-- {name, detail} payload the frontend store already consumes.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+create or replace function public.create_project(
+  p_name text, p_funder text, p_budget_txt text, p_timeline text, p_team text, p_status text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  p record;
+begin
+  perform public.assert_access('projects', 2);
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'A project name is required';
+  end if;
+  if exists (select 1 from public.projects where name = trim(p_name)) then
+    raise exception 'A project named "%" already exists', trim(p_name);
+  end if;
+  insert into public.projects(entity_id, name, funder, status, budget_txt, timeline, team, is_extra, docs)
+  values (v_entity, trim(p_name), nullif(trim(coalesce(p_funder, '')), ''),
+          coalesce(nullif(trim(coalesce(p_status, '')), ''), 'Setup'),
+          coalesce(nullif(trim(coalesce(p_budget_txt, '')), ''), 'TBD'),
+          coalesce(nullif(trim(coalesce(p_timeline, '')), ''), '2026'),
+          nullif(trim(coalesce(p_team, '')), ''), true, '[]'::jsonb)
+  returning * into p;
+  -- Bare project: no placeholder milestones/drawdowns, so a fresh project stays
+  -- out of the Milestones/Grants/Budgets aggregates until it has real data. The
+  -- user fills those in from the project drawer.
+  perform public.audit_write('project.created', 'project', p.name,
+    jsonb_build_object('funder', p_funder, 'budget', p_budget_txt, 'team', p_team));
+  return jsonb_build_object('name', p.name, 'created', true,
+    'detail', public.project_detail_json(p.id));
+end $$;
+
+revoke execute on function public.create_project(text,text,text,text,text,text) from public, anon;
+grant execute on function public.create_project(text,text,text,text,text,text) to authenticated;
+-- ============================================================
+-- Jikoni — Projects & Programmes: real project documents
+-- Project docs were plain label strings with no file behind them. This adds a
+-- project-docs storage bucket + an add_project_document RPC that appends a
+-- {name, path} object to projects.docs, so the drawer can offer real View /
+-- Download. The docs column already accepts either legacy strings or objects
+-- (the frontend renders both). Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- storage bucket 'project-docs' (public read, authenticated write) ----------
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('project-docs', 'project-docs', true)
+  on conflict (id) do nothing;
+
+  drop policy if exists "project-docs read"   on storage.objects;
+  drop policy if exists "project-docs write"  on storage.objects;
+  drop policy if exists "project-docs update" on storage.objects;
+  create policy "project-docs read"   on storage.objects
+    for select to public using (bucket_id = 'project-docs');
+  create policy "project-docs write"  on storage.objects
+    for insert to authenticated with check (bucket_id = 'project-docs');
+  create policy "project-docs update" on storage.objects
+    for update to authenticated using (bucket_id = 'project-docs');
+end $$;
+
+-- ---------- append a document to a project ----------
+create or replace function public.add_project_document(
+  p_project_id uuid, p_name text, p_path text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  perform public.assert_access('projects', 2);
+  if not exists (select 1 from public.projects where id = p_project_id) then
+    raise exception 'Project not found';
+  end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null or nullif(trim(coalesce(p_path, '')), '') is null then
+    raise exception 'A document name and path are required';
+  end if;
+  update public.projects
+     set docs = coalesce(docs, '[]'::jsonb) || jsonb_build_object('name', trim(p_name), 'path', p_path),
+         updated_at = now()
+   where id = p_project_id;
+  perform public.audit_write('project.document_added', 'project', p_project_id::text,
+    jsonb_build_object('name', p_name, 'path', p_path));
+  return public.project_payload(p_project_id);
+end $$;
+
+revoke execute on function public.add_project_document(uuid,text,text) from public, anon;
+grant execute on function public.add_project_document(uuid,text,text) to authenticated;

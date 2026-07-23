@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
-import { LoginGate } from "./components/login";
+import { LoginGate, SetPassword } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
@@ -67,13 +67,27 @@ export type HrModalMode =
   | null;
 
 /* ---------- Partnerships CRM (engagements / partners / opportunities) ---------- */
-export interface CrmEng { id: string; n: string; st: string; o: string; pl: string; plt: string }
+export interface EngUpdate { ts?: string; d: string; ch: string; who: string; note: string }
+export interface EngDoc { name: string; path: string }
+export interface CrmEng { id: string; n: string; st: string; o: string; pl: string; plt: string; updates: EngUpdate[]; docs: EngDoc[] }
 export interface Partner { id: string; name: string; type: string; country: string; ownerName: string; status: string; statusCls: string }
 export interface Opportunity { id: string; name: string; type: string; deadline: string; linkedTo: string; status: string; statusCls: string }
 export interface CrmData {
   engUp: CrmEng[]; engDown: CrmEng[];
   partners: Partner[]; opportunities: Opportunity[];
   dropdowns: Record<string, string[]>; teamNames: string[];
+  engPartners: Record<string, string[]>;
+}
+
+/* ---------- Compliance & Governance (policies / documents / calendar / risk / contracts) ---------- */
+export interface PolicyRow { code: string; title: string; version: string; effectiveFrom: string | null; doc: string | null; state: string; statusCls: string; statusTxt: string }
+export interface CompanyDocRow { name: string; kind: string | null; doc: string | null; expiry: string; statusCls: string; statusTxt: string }
+export interface ObligationRow { obligation: string; authority: string | null; dueRule: string | null; nextDue: string; when: string; state: string; ownerModule: string | null; statusCls: string; statusTxt: string }
+export interface RiskRow { ref: string; risk: string; category: string | null; owner: string | null; likelihood: number; impact: number; score: number; mitigation: string | null; state: string; statusCls: string; statusTxt: string }
+export interface ContractRow { counterparty: string; kind: string; title: string; detail: string | null; expiry: string; state: string; statusCls: string; statusTxt: string }
+export interface ComplianceData {
+  policies: PolicyRow[]; companyDocuments: CompanyDocRow[]; obligations: ObligationRow[];
+  risks: RiskRow[]; contracts: ContractRow[];
 }
 
 interface AppApi {
@@ -145,12 +159,18 @@ interface AppApi {
   engToProject: Record<string, string>;
   projectToEng: Record<string, string>;
   createProjectFromEng: (id: string) => void;
+  projectFormOpen: boolean;
+  openProjectForm: () => void;
+  closeProjectForm: () => void;
+  createProject: (v: { name: string; funder: string; budget: string; timeline: string; team: string; status: string }) => void;
   addMilestone: (projectId: string, title: string, status?: string) => void;
   setMilestoneStatus: (milestoneId: string, status: string) => void;
   addDrawdown: (projectId: string, title: string, amount: string, status?: string) => void;
   setDrawdownStatus: (drawdownId: string, status: string) => void;
   logFieldActivity: (projectId: string, kind: string, county: string, note: string) => void;
   setProjectState: (projectId: string, state: string) => void;
+  addProjectDocument: (projectId: string, file: File) => void;
+  projectDocUrl: (path: string, downloadName?: string) => string;
 
   hrMe: HrSummary | null;
   leaveOpen: boolean;
@@ -180,15 +200,21 @@ interface AppApi {
   createRecruitmentReq: (roleTitle: string, dept: string) => void;
   addCandidate: (reqRef: string, name: string, email: string, stage: string) => void;
   advanceCandidate: (id: string, stage: string) => void;
-  createEnumerator: (v: { name: string; county: string; idNo: string; dailyRate: number }) => void;
-  createFieldAssignment: (v: { enumeratorId: string; project: string; period: string; days: number; perDiem: number; contractDoc: string }) => void;
+  createEnumerator: (v: { name: string; county: string; idNo: string }) => void;
+  createFieldAssignment: (v: { enumeratorId: string; project: string; period: string; days: number }) => void;
   setFieldAssignmentState: (id: string, state: string) => void;
 
   crm: CrmData;
   engFormOpen: boolean;
   openEngForm: () => void;
   closeEngForm: () => void;
-  createEngagement: (name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string) => void;
+  createEngagement: (name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string, file?: File | null) => void;
+  engUpdateOpen: boolean;
+  openEngUpdate: () => void;
+  closeEngUpdate: () => void;
+  logEngagementNote: (ref: string, v: { channel: string; who: string; note: string; stageTo: string; file?: File | null }) => void;
+  setEngagementPartners: (ref: string, partnerIds: string[]) => void;
+  engDocUrl: (path: string, downloadName?: string) => string;
   partnerOpen: boolean;
   openPartnerForm: () => void;
   closePartnerForm: () => void;
@@ -197,6 +223,27 @@ interface AppApi {
   openOppForm: () => void;
   closeOppForm: () => void;
   createOpportunity: (name: string, type: string, deadline: string, linkedTo: string, status: string) => void;
+
+  // Compliance & Governance
+  compliance: ComplianceData;
+  markObligationFiled: (obligation: string) => void;
+  riskOpen: boolean;
+  openRiskForm: () => void;
+  closeRiskForm: () => void;
+  createRisk: (v: { risk: string; category: string; likelihood: number; impact: number; mitigation: string; owner: string }) => void;
+  policyOpen: boolean;
+  openPolicyForm: () => void;
+  closePolicyForm: () => void;
+  addPolicy: (v: { code: string; title: string; effectiveFrom: string; file?: File | null }) => void;
+  docOpen: boolean;
+  openDocForm: () => void;
+  closeDocForm: () => void;
+  addCompanyDocument: (v: { name: string; kind: string; expiresOn: string; file?: File | null }) => void;
+  contractOpen: boolean;
+  openContractForm: () => void;
+  closeContractForm: () => void;
+  addContract: (v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string }) => void;
+  complianceDocUrl: (path: string, downloadName?: string) => string;
 
   inventory: InventoryData | null;
   stockModal: StockModalMode;
@@ -239,6 +286,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [needPassword, setNeedPassword] = useState(false);
   const [entity, setEntity] = useState<Entity>("Kenya");
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -266,6 +314,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [extraProjects, setExtraProjects] = useState<{ name: string; funder: string }[]>([]);
   const [engToProject, setEngToProject] = useState(initialEngToProject);
   const [projectToEng, setProjectToEng] = useState(initialProjectToEng);
+  const [projectFormOpen, setProjectFormOpen] = useState(false);
 
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [stockModal, setStockModal] = useState<StockModalMode>(null);
@@ -281,11 +330,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [hrModal, setHrModal] = useState<HrModalMode>(null);
 
   const [crm, setCrm] = useState<CrmData>({
-    engUp: [], engDown: [], partners: [], opportunities: [], dropdowns: {}, teamNames: [],
+    engUp: [], engDown: [], partners: [], opportunities: [], dropdowns: {}, teamNames: [], engPartners: {},
   });
   const [engFormOpen, setEngFormOpen] = useState(false);
+  const [engUpdateOpen, setEngUpdateOpen] = useState(false);
   const [partnerOpen, setPartnerOpen] = useState(false);
   const [oppOpen, setOppOpen] = useState(false);
+
+  const [compliance, setCompliance] = useState<ComplianceData>({
+    policies: [], companyDocuments: [], obligations: [], risks: [], contracts: [],
+  });
+  const [riskOpen, setRiskOpen] = useState(false);
+  const [policyOpen, setPolicyOpen] = useState(false);
+  const [docOpen, setDocOpen] = useState(false);
+  const [contractOpen, setContractOpen] = useState(false);
 
   function toast(title: string, sub?: string) {
     const id = ++toastSeq;
@@ -295,8 +353,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   /* ---------- auth session (Phase 0: "who is logged in") ---------- */
   useEffect(() => {
+    // invitees (and password resets) land here via an emailed link whose URL hash
+    // carries type=invite|recovery — that's our cue to show the set-password screen.
+    if (/type=(invite|recovery)/.test(window.location.hash)) setNeedPassword(true);
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((e, s) => {
+      setSession(s);
+      if (e === "PASSWORD_RECOVERY") setNeedPassword(true);
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -321,15 +385,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       inv.dispatches = inv.dispatches.map((d) => ({ ...d, receipt: byRef.get(d.id) ?? null }));
     }
     setInventory(inv);
+    // Engagement documents live in a side table — fold them into each engagement by ref
+    // (same approach as dispatch receipts above), so bootstrap() stays untouched.
+    const { data: docRows } = await supabase
+      .from("engagement_documents")
+      .select("name, path, engagements(ref)")
+      .order("created_at");
+    const docsByRef = new Map<string, EngDoc[]>();
+    ((docRows ?? []) as any[]).forEach((r) => {
+      // the joined relationship comes back as an object (to-one) or array depending on typing
+      const rel = r.engagements;
+      const ref: string | undefined = Array.isArray(rel) ? rel[0]?.ref : rel?.ref;
+      if (!ref) return;
+      const arr = docsByRef.get(ref) ?? [];
+      arr.push({ name: r.name as string, path: r.path as string });
+      docsByRef.set(ref, arr);
+    });
+    const withDocs = (e: CrmEng): CrmEng => ({ ...e, docs: docsByRef.get(e.id) ?? [] });
     // Partnerships CRM — engagements (two pipelines), partners, opportunities + editable dropdowns/owners
     setCrm({
-      engUp: (data.engagements?.up ?? []) as CrmEng[],
-      engDown: (data.engagements?.down ?? []) as CrmEng[],
+      engUp: ((data.engagements?.up ?? []) as CrmEng[]).map(withDocs),
+      engDown: ((data.engagements?.down ?? []) as CrmEng[]).map(withDocs),
       partners: (data.partners ?? []) as Partner[],
       opportunities: (data.opportunities ?? []) as Opportunity[],
       dropdowns: (data.crmDropdowns ?? {}) as Record<string, string[]>,
       teamNames: (data.teamNames ?? []) as string[],
+      engPartners: (data.engPartners ?? {}) as Record<string, string[]>,
     });
+    // Compliance & Governance — policies, statutory documents, calendar, risk register, contracts
+    setCompliance((data.compliance ?? {
+      policies: [], companyDocuments: [], obligations: [], risks: [], contracts: [],
+    }) as ComplianceData);
     // sync the req modal's live budget preview with the ledger (same object the modal imports)
     for (const [k, v] of Object.entries(data.budgetLines as Record<string, { b: number; u: number }>)) {
       if (budgetLines[k]) { budgetLines[k].b = v.b; budgetLines[k].u = v.u; }
@@ -543,6 +629,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     xProject(name);
   }
 
+  /* ---------- standalone new project (not from a CRM engagement) ---------- */
+  async function createProject(v: { name: string; funder: string; budget: string; timeline: string; team: string; status: string }) {
+    const { data, error } = await supabase.rpc("create_project", {
+      p_name: v.name, p_funder: v.funder || null, p_budget_txt: v.budget || null,
+      p_timeline: v.timeline || null, p_team: v.team || null, p_status: v.status || null,
+    });
+    if (error) { toast("Project not created", error.message); return; }
+    const name = data.name as string;
+    const detail = data.detail as ProjectDetail;
+    setProjectDetails((prev) => ({ ...prev, [name]: detail }));
+    setExtraProjects((prev) => (prev.some((p) => p.name === name) ? prev : [...prev, { name, funder: v.funder || "—" }]));
+    setProjectFormOpen(false);
+    toast(name + " created", "New project — budget, milestones and drawdowns track here");
+    xProject(name);
+  }
+
   /* ---------- project drawer mutations: RPC → upsert one project's detail → toast ---------- */
   // each RPC returns { name, detail }; we replace just that project so the drawer + all tabs re-render
   async function projectRpc(fn: string, args: Record<string, unknown>, okTitle: string, okSub: string) {
@@ -565,14 +667,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setProjectState = (projectId: string, state: string) =>
     projectRpc("set_project_state", { p_project_id: projectId, p_new_state: state }, "Project status updated", state);
 
-  /* ---------- invite (Phase 5): least-privilege template + audit; auth account
-     is provisioned by scripts/provision-invites.mjs which emails the link ---------- */
+  // Upload a document to the project-docs bucket and record it against the project.
+  async function addProjectDocument(projectId: string, file: File) {
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${projectId}/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("project-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Upload failed", up.error.message); return; }
+    const { data, error } = await supabase.rpc("add_project_document", {
+      p_project_id: projectId, p_name: file.name, p_path: up.data.path,
+    });
+    if (error) { toast("Couldn't save document", error.message); return; }
+    setProjectDetails((prev) => ({ ...prev, [data.name as string]: data.detail as ProjectDetail }));
+    toast("Document added", `${file.name} — attached to the project`);
+  }
+  // Public URL for a stored project document; pass a name to force a download.
+  function projectDocUrl(path: string, downloadName?: string) {
+    return supabase.storage.from("project-docs").getPublicUrl(path, downloadName ? { download: downloadName } : undefined).data.publicUrl;
+  }
+
+  /* ---------- invite (Phase 5): record the invite + least-privilege template + audit,
+     then fire the /api/invite serverless function to email a set-password link. The
+     email step only runs where the function is deployed (Vercel) or under `vercel dev`;
+     with plain `vite`, the invite is still recorded and scripts/provision-invites.mjs
+     can email the link. ---------- */
   async function sendInvite(name: string, email: string, role: string) {
     const { error } = await supabase.rpc("invite_user", { p_name: name, p_email: email, p_role_key: role });
     if (error) { toast("Invite failed", error.message); return; }
     setInviteOpen(false);
     await loadFromDb();
-    toast("Invite sent to " + name, "Access set from the " + role + " template — they'll set a password and enrol in 2FA");
+    try {
+      const res = await fetch("/api/invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+        body: JSON.stringify({ name, email, role }),
+      });
+      if (res.ok) {
+        toast("Invite emailed to " + name, "They'll get a link to set their password and sign in");
+      } else {
+        const j = await res.json().catch(() => ({}));
+        toast("Invite recorded for " + name, j.error ? "Email not sent: " + j.error : "Run provision-invites to email the link");
+      }
+    } catch {
+      toast("Invite recorded for " + name, "Access set from the " + role + " template — email sends once deployed");
+    }
   }
 
   /* ---------- leave (Phase 2 HR): apply_leave holds the days as reserved,
@@ -666,22 +803,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadHrModule();
     toast("Candidate moved", `Now at "${stage}"`);
   }
-  async function createEnumerator(v: { name: string; county: string; idNo: string; dailyRate: number }) {
-    const { error } = await supabase.rpc("create_enumerator", { p_name: v.name, p_county: v.county || null, p_id_no: v.idNo || null, p_daily_rate: v.dailyRate });
+  async function createEnumerator(v: { name: string; county: string; idNo: string }) {
+    const { error } = await supabase.rpc("create_enumerator", { p_name: v.name, p_county: v.county || null, p_id_no: v.idNo || null });
     if (error) { toast("Enumerator not added", error.message); return; }
     setHrModal(null);
     await loadHrModule();
     toast(`${v.name} registered`, v.county ? `Field roster · ${v.county}` : "Added to the field roster");
   }
-  async function createFieldAssignment(v: { enumeratorId: string; project: string; period: string; days: number; perDiem: number; contractDoc: string }) {
-    const { error } = await supabase.rpc("create_field_assignment", {
+  async function createFieldAssignment(v: { enumeratorId: string; project: string; period: string; days: number }) {
+    const { data, error } = await supabase.rpc("create_field_assignment", {
       p_enumerator_id: v.enumeratorId, p_project: v.project || null, p_period: v.period || null,
-      p_days: v.days, p_per_diem: v.perDiem, p_contract_doc: v.contractDoc || null,
+      p_days: v.days,
     });
     if (error) { toast("Assignment not created", error.message); return; }
     setHrModal(null);
     await loadHrModule();
-    toast("Field assignment created", `Per-diem ${kes(v.perDiem)} — awaiting approval`);
+    toast("Field assignment created", `${(data as any)?.contractDoc ?? "Contract"} — awaiting approval`);
   }
   async function setFieldAssignmentState(id: string, state: string) {
     const { error } = await supabase.rpc("set_field_assignment_state", { p_id: id, p_state: state });
@@ -692,7 +829,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   /* ---------- Partnerships CRM: create-forms insert via SECURITY DEFINER RPCs
      (audit-logged, access-gated), then reload so the tables re-render live ---------- */
-  async function createEngagement(name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string) {
+  // Upload a document to Storage and record it against an engagement. Returns true on success.
+  async function uploadEngagementDoc(ref: string, file: File, who?: string) {
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${ref}/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("engagement-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Upload failed", up.error.message); return false; }
+    const { error } = await supabase.rpc("add_engagement_document", {
+      p_eng_ref: ref, p_name: file.name, p_path: up.data.path, p_who: who ?? null,
+    });
+    if (error) { toast("Couldn't save document", error.message); return false; }
+    return true;
+  }
+  // Public URL for a stored engagement document; pass a name to force a download.
+  function engDocUrl(path: string, downloadName?: string) {
+    return supabase.storage.from("engagement-docs").getPublicUrl(path, downloadName ? { download: downloadName } : undefined).data.publicUrl;
+  }
+  async function createEngagement(name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string, file?: File | null) {
     // stage isn't collected on the form — the RPC starts new engagements at the top of the
     // funnel; the note ("where we are on the discussion") seeds the engagement's update log
     const { data, error } = await supabase.rpc("create_engagement", {
@@ -700,9 +853,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       p_next_action: note.trim() || null, p_due_key: dueKey,
     });
     if (error) { toast("Engagement not created", error.message); return; }
+    if (file) await uploadEngagementDoc(data.id, file, owner);
     setEngFormOpen(false);
     await loadFromDb();
-    toast(`${data.id} created`, `${name} · ${owner}${note.trim() ? " · note logged" : ""}`);
+    toast(`${data.id} created`, `${name} · ${owner}${note.trim() ? " · note logged" : ""}${file ? " · document attached" : ""}`);
+  }
+  async function logEngagementNote(ref: string, v: { channel: string; who: string; note: string; stageTo: string; file?: File | null }) {
+    const { data, error } = await supabase.rpc("log_engagement_note", {
+      p_eng_ref: ref, p_channel: v.channel || null, p_who: v.who || null,
+      p_note: v.note, p_stage_to: v.stageTo || null,
+    });
+    if (error) { toast("Update not saved", error.message); return; }
+    if (v.file) await uploadEngagementDoc(ref, v.file, v.who);
+    setEngUpdateOpen(false);
+    await loadFromDb();
+    toast(`${ref} updated`, `Now at ${(data as any)?.stage ?? "—"}${v.file ? " · document attached" : ""}`);
+  }
+  async function setEngagementPartners(ref: string, partnerIds: string[]) {
+    const { error } = await supabase.rpc("set_engagement_partners", { p_eng_ref: ref, p_partner_ids: partnerIds });
+    if (error) { toast("Partners not linked", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} — partners linked`, partnerIds.length ? `${partnerIds.length} linked` : "All links cleared");
   }
   async function createPartner(name: string, type: string, country: string, owner: string, status: string) {
     const { error } = await supabase.rpc("create_partner", {
@@ -721,6 +892,68 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setOppOpen(false);
     await loadFromDb();
     toast(name + " added to the map", `${type} · ${status}`);
+  }
+
+  /* ---------- Compliance & Governance: create-forms hit SECURITY DEFINER RPCs
+     (access-gated, audit-logged), then reload so the tables re-render live ---------- */
+  // Upload a document to the compliance-docs bucket; returns the stored path or null.
+  async function uploadComplianceDoc(prefix: string, file: File): Promise<string | null> {
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${prefix}/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("compliance-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Upload failed", up.error.message); return null; }
+    return up.data.path;
+  }
+  function complianceDocUrl(path: string, downloadName?: string) {
+    return supabase.storage.from("compliance-docs").getPublicUrl(path, downloadName ? { download: downloadName } : undefined).data.publicUrl;
+  }
+  async function markObligationFiled(obligation: string) {
+    const { data, error } = await supabase.rpc("mark_obligation_filed", { p_obligation: obligation });
+    if (error) { toast("Couldn't mark filed", error.message); return; }
+    await loadFromDb();
+    toast(`${obligation} filed`, `Next due ${(data as any)?.nextDue ?? "—"}`);
+  }
+  async function createRisk(v: { risk: string; category: string; likelihood: number; impact: number; mitigation: string; owner: string }) {
+    const { data, error } = await supabase.rpc("create_risk", {
+      p_risk: v.risk, p_category: v.category || null, p_likelihood: v.likelihood,
+      p_impact: v.impact, p_mitigation: v.mitigation || null, p_owner: v.owner || null,
+    });
+    if (error) { toast("Risk not logged", error.message); return; }
+    setRiskOpen(false);
+    await loadFromDb();
+    toast(`${(data as any)?.ref ?? "Risk"} logged`, `${v.risk} · severity ${v.likelihood * v.impact}`);
+  }
+  async function addPolicy(v: { code: string; title: string; effectiveFrom: string; file?: File | null }) {
+    const path = v.file ? await uploadComplianceDoc(v.code, v.file) : null;
+    if (v.file && !path) return; // upload failed — toast already fired
+    const { data, error } = await supabase.rpc("add_policy", {
+      p_code: v.code, p_title: v.title, p_effective_from: v.effectiveFrom || null, p_doc: path,
+    });
+    if (error) { toast("Policy not saved", error.message); return; }
+    setPolicyOpen(false);
+    await loadFromDb();
+    toast(`${v.code} ${(data as any)?.version ?? ""} saved`, `${v.title}${v.file ? " · document attached" : ""}`);
+  }
+  async function addCompanyDocument(v: { name: string; kind: string; expiresOn: string; file?: File | null }) {
+    const path = v.file ? await uploadComplianceDoc("company", v.file) : null;
+    if (v.file && !path) return;
+    const { error } = await supabase.rpc("add_company_document", {
+      p_name: v.name, p_kind: v.kind || null, p_expires_on: v.expiresOn || null, p_doc: path,
+    });
+    if (error) { toast("Document not saved", error.message); return; }
+    setDocOpen(false);
+    await loadFromDb();
+    toast(`${v.name} saved`, v.expiresOn ? `Expiry ${v.expiresOn}${v.file ? " · attached" : ""}` : (v.file ? "Document attached" : "On file"));
+  }
+  async function addContract(v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string }) {
+    const { error } = await supabase.rpc("add_contract", {
+      p_counterparty: v.counterparty, p_kind: v.kind, p_title: v.title,
+      p_detail: v.detail || null, p_expires_on: v.expiresOn || null,
+    });
+    if (error) { toast("Contract not saved", error.message); return; }
+    setContractOpen(false);
+    await loadFromDb();
+    toast(`${v.title} registered`, `${v.counterparty} · ${v.kind}`);
   }
 
   /* ---------- inventory (Phase 2): mutations hit the ledger, then reload ---------- */
@@ -900,7 +1133,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     invOpen, openInvoice: () => setInvOpen(true), closeInvoice: () => setInvOpen(false),
     submitInvoice, newInvoices,
     projectDetails, extraProjects, engToProject, projectToEng, createProjectFromEng,
+    projectFormOpen, openProjectForm: () => setProjectFormOpen(true), closeProjectForm: () => setProjectFormOpen(false), createProject,
     addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
+    addProjectDocument, projectDocUrl,
     hrMe, leaveOpen, leaveEdit,
     openLeave: () => { setLeaveEdit(null); setLeaveOpen(true); },
     openLeaveEdit: (a) => { setLeaveEdit(a); setLeaveOpen(true); },
@@ -912,8 +1147,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     createRecruitmentReq, addCandidate, advanceCandidate, createEnumerator, createFieldAssignment, setFieldAssignmentState,
     crm,
     engFormOpen, openEngForm: () => setEngFormOpen(true), closeEngForm: () => setEngFormOpen(false), createEngagement,
+    engUpdateOpen, openEngUpdate: () => setEngUpdateOpen(true), closeEngUpdate: () => setEngUpdateOpen(false),
+    logEngagementNote, setEngagementPartners, engDocUrl,
     partnerOpen, openPartnerForm: () => setPartnerOpen(true), closePartnerForm: () => setPartnerOpen(false), createPartner,
     oppOpen, openOppForm: () => setOppOpen(true), closeOppForm: () => setOppOpen(false), createOpportunity,
+    compliance, markObligationFiled,
+    riskOpen, openRiskForm: () => setRiskOpen(true), closeRiskForm: () => setRiskOpen(false), createRisk,
+    policyOpen, openPolicyForm: () => setPolicyOpen(true), closePolicyForm: () => setPolicyOpen(false), addPolicy,
+    docOpen, openDocForm: () => setDocOpen(true), closeDocForm: () => setDocOpen(false), addCompanyDocument,
+    contractOpen, openContractForm: () => setContractOpen(true), closeContractForm: () => setContractOpen(false), addContract,
+    complianceDocUrl,
     inventory, stockModal,
     openStockModal: (m) => setStockModal(m), closeStockModal: () => setStockModal(null),
     receiveStock, issueStock, transferStock, adjustStock, createDispatch, setDispatchState, attachDispatchReceipt, receiptUrl,
@@ -924,6 +1167,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   if (!authReady) return null;
+  // an invitee with a session but a pending password sees the set-password screen first
+  if (session && needPassword) return <SetPassword onDone={() => setNeedPassword(false)} />;
   return <Ctx.Provider value={api}>{session ? children : <LoginGate />}</Ctx.Provider>;
 }
 

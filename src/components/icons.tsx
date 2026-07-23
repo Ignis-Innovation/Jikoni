@@ -8,21 +8,14 @@ const S = (props: P, sw: number, children: React.ReactNode, fill = "none") => (
   </svg>
 );
 
+// Jikoni Tool mark — a cooking pot over a flame, in the app's warm palette.
 export const BrandMark = () => (
   <svg viewBox="0 0 24 24" fill="none">
-    <line x1="12" y1="12" x2="6" y2="7" stroke="#7BC24A" strokeWidth="1.1" />
-    <line x1="12" y1="12" x2="12" y2="5" stroke="#37B24D" strokeWidth="1.1" />
-    <line x1="12" y1="12" x2="18" y2="7" stroke="#F5A623" strokeWidth="1.1" />
-    <line x1="12" y1="12" x2="7" y2="17" stroke="#2E7DD1" strokeWidth="1.1" />
-    <line x1="12" y1="12" x2="17" y2="18" stroke="#E1533F" strokeWidth="1.1" />
-    <line x1="12" y1="12" x2="12" y2="19" stroke="#7B3FB0" strokeWidth="1.1" />
-    <circle cx="12" cy="12" r="2.3" fill="#17B0C4" />
-    <circle cx="6" cy="7" r="1.7" fill="#7BC24A" />
-    <circle cx="12" cy="5" r="1.7" fill="#37B24D" />
-    <circle cx="18" cy="7" r="1.7" fill="#F5A623" />
-    <circle cx="7" cy="17" r="1.7" fill="#2E7DD1" />
-    <circle cx="17" cy="18" r="1.7" fill="#E1533F" />
-    <circle cx="12" cy="19" r="1.7" fill="#7B3FB0" />
+    <path d="M12 2.6c1.5 1.7 2.3 2.9 2.3 4.1 0 1.4-1 2.4-2.3 2.4S9.7 8.1 9.7 6.7c0-1.2.8-2.4 2.3-4.1Z" fill="#E2632A" />
+    <path d="M12 5.4c.7.9 1.1 1.5 1.1 2.1 0 .7-.5 1.2-1.1 1.2s-1.1-.5-1.1-1.2c0-.6.4-1.2 1.1-2.1Z" fill="#F5A623" />
+    <path d="M4.5 12h15" stroke="#3E3226" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M6 12v3.5A5.5 5.5 0 0 0 11.5 21h1a5.5 5.5 0 0 0 5.5-5.5V12" stroke="#3E3226" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M3 13.6l1.5-1.6M21 13.6 19.5 12" stroke="#3E3226" strokeWidth="1.6" strokeLinecap="round" />
   </svg>
 );
 

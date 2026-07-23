@@ -2,10 +2,10 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../store";
 import {
-  findEng, engDetails, vendorDetails, users, roleMeta, superAdmins,
+  findEng, engDetails, engStages, vendorDetails, users, roleMeta, superAdmins,
   accessModules, lvlName, lvlClass, roleTemplates, Perms,
 } from "../data";
-import { XI, LockI, EyeI, PlusI } from "./icons";
+import { XI, LockI, EyeI, PlusI, ExportI } from "./icons";
 
 function LinkBtn({ label, onClick, primary, icon }: { label: string; onClick: () => void; primary?: boolean; icon?: React.ReactNode }) {
   return (
@@ -34,12 +34,59 @@ function DrawerShell({ open, onClose, width, header, footer, children }: {
   );
 }
 
+/* Horizontal stage ribbon — rungs before/at the current stage read as done. */
+function StageRibbon({ stages, current }: { stages: string[]; current: string }) {
+  const curIdx = stages.indexOf(current);
+  return (
+    <div className="eng-ribbon">
+      {stages.map((s, i) => {
+        const state = curIdx < 0 ? "todo" : i < curIdx ? "done" : i === curIdx ? "now" : "todo";
+        return (
+          <React.Fragment key={s}>
+            <div className={`rib-step ${state}`}>
+              <span className="rib-dot" />
+              <span className="rib-lbl">{s}</span>
+            </div>
+            {i < stages.length - 1 && <span className={`rib-line ${i < curIdx ? "done" : ""}`} />}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ================= ENGAGEMENT ================= */
 export function EngDrawer() {
-  const { engId, closeEng, toast, engToProject, xProject, xView, xTab, createProjectFromEng, openTask } = useApp();
+  const {
+    engId, closeEng, toast, engToProject, xProject, createProjectFromEng, openTask,
+    crm, openEngUpdate, setEngagementPartners, engDocUrl,
+  } = useApp();
   const b = engId ? findEng(engId) : null;
   const det = (engId && engDetails[engId]) || {};
   const up = b?.pipeline === "up";
+  // live engagement (DB): current stage + persisted updates log
+  const live = engId ? [...crm.engUp, ...crm.engDown].find((e) => e.id === engId) : null;
+  const stage = live?.st || b?.st || "";
+  const updates = live?.updates ?? det.updates ?? [];
+  const ladder = engStages[up ? "up" : "down"];
+
+  // partner links — currently linked + inline multi-select editor
+  const linkedIds = (engId && crm.engPartners[engId]) || [];
+  const [editLinks, setEditLinks] = useState(false);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  useEffect(() => { setEditLinks(false); }, [engId]);
+  function openLinkEditor() {
+    const seed: Record<string, boolean> = {};
+    linkedIds.forEach((id) => { seed[id] = true; });
+    setChecked(seed);
+    setEditLinks(true);
+  }
+  function saveLinks() {
+    if (!engId) return;
+    setEngagementPartners(engId, Object.keys(checked).filter((id) => checked[id]));
+    setEditLinks(false);
+  }
+  const linkedPartners = crm.partners.filter((p) => linkedIds.includes(p.id));
 
   return (
     <DrawerShell
@@ -56,33 +103,43 @@ export function EngDrawer() {
         </div>
       }
       footer={
-        <>
-          <button className="btn" onClick={() => toast("Log update", "Add a diary entry to this engagement")}>Log update</button>
-          <button className="btn primary" onClick={() => toast("Stage advanced", "Moved to the next pipeline stage")}>Advance stage</button>
-        </>
+        <button className="btn primary" style={{ width: "100%" }} onClick={openEngUpdate}>Update</button>
       }
     >
       {b && (
         <>
           <div className="eng-chips">
-            <span className={`pill ${b.pl}`}>{b.plt || b.st}</span>
+            <span className={`pill ${b.pl}`}>{b.plt || stage}</span>
             {det.priority && <span className="acc-chip">{det.priority} priority</span>}
             <span className="acc-chip">{up ? "Upstream · capital" : "Downstream · deployment"}</span>
             {det.value && <span className="acc-chip full">{det.value}</span>}
           </div>
+
+          <div className="eng-sec">Progress</div>
+          <StageRibbon stages={ladder} current={stage} />
+
           <div className="eng-next">
             <div className="l">Next action · {det.due || b.plt || "—"}</div>
-            {det.next || b.st}
+            {det.next || stage}
           </div>
-          <div className="eng-sec">Updates log</div>
+
+          <div className="eng-sec">
+            Updates log{" "}
+            <a href="#" onClick={(e) => { e.preventDefault(); openEngUpdate(); }} style={{ color: "var(--flame)", textDecoration: "none", fontWeight: 600, textTransform: "none", letterSpacing: 0, marginLeft: 6 }}>+ update</a>
+          </div>
           <div>
-            {(det.updates || [{ d: "—", ch: "—", who: b.o, note: "No updates logged yet." }]).map((u, i) => (
-              <div className="upd" key={i}>
-                <div className="um">{u.d} · {u.ch} · {u.who}</div>
-                <div className="un">{u.note}</div>
-              </div>
-            ))}
+            {updates.length ? (
+              updates.map((u, i) => (
+                <div className="upd" key={i}>
+                  <div className="um">{u.d} · {u.ch} · {u.who}</div>
+                  <div className="un">{u.note}</div>
+                </div>
+              ))
+            ) : (
+              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "4px 0" }}>No updates logged yet — hit Update to start the diary.</div>
+            )}
           </div>
+
           <div className="eng-sec">
             Action items{" "}
             <a href="#" onClick={(e) => { e.preventDefault(); openTask(); }} style={{ color: "var(--flame)", textDecoration: "none", fontWeight: 600, textTransform: "none", letterSpacing: 0, marginLeft: 6 }}>+ add</a>
@@ -99,34 +156,69 @@ export function EngDrawer() {
               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "4px 0" }}>No open action items.</div>
             )}
           </div>
-          <div className="eng-sec">Documents</div>
-          <div>
-            {det.docs?.length ? (
-              det.docs.map((d, i) => (
-                <div className="recon" style={{ paddingLeft: 0, paddingRight: 0 }} key={i}>
-                  <span>{d}</span>
-                  <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => toast(d, "Opens the document")}>Open</button>
-                </div>
-              ))
-            ) : (
-              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "4px 0" }}>No documents attached.</div>
-            )}
+
+          {(live?.docs?.length ?? 0) > 0 && (
+            <>
+              <div className="eng-sec">Documents</div>
+              <div>
+                {live!.docs.map((d, i) => (
+                  <div className="recon" style={{ paddingLeft: 0, paddingRight: 0 }} key={i}>
+                    <span>{d.name}</span>
+                    <span style={{ display: "flex", gap: 6 }}>
+                      <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => window.open(engDocUrl(d.path), "_blank", "noopener")}>Open</button>
+                      <a className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} href={engDocUrl(d.path, d.name)}>Download</a>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="eng-sec">
+            Linked partners{" "}
+            <a href="#" onClick={(e) => { e.preventDefault(); editLinks ? setEditLinks(false) : openLinkEditor(); }} style={{ color: "var(--flame)", textDecoration: "none", fontWeight: 600, textTransform: "none", letterSpacing: 0, marginLeft: 6 }}>{editLinks ? "close" : linkedPartners.length ? "edit" : "+ link"}</a>
           </div>
-          <div className="eng-sec">Linked records</div>
-          <div style={{ display: "flex", flexWrap: "wrap" }}>
-            {engToProject[b.id] ? (
-              <LinkBtn label="Open linked project" onClick={() => xProject(engToProject[b.id])} />
-            ) : !up ? (
-              <LinkBtn
-                primary
-                icon={<PlusI style={{ width: 13, height: 13, verticalAlign: -2 }} />}
-                label=" Create project"
-                onClick={() => createProjectFromEng(b.id)}
-              />
-            ) : null}
-            {up && <LinkBtn label="View in Fundraise" onClick={() => xView("raise")} />}
-            <LinkBtn label="Partner registry" onClick={() => xTab("crm", "cr-partners")} />
-          </div>
+          {editLinks ? (
+            <div>
+              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--hairline)", borderRadius: 8, padding: "4px 0", marginBottom: 10 }}>
+                {crm.partners.length === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "8px 12px" }}>No partners in the registry yet.</div>}
+                {crm.partners.map((p) => (
+                  <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", fontSize: 13, cursor: "pointer" }}>
+                    <input type="checkbox" checked={!!checked[p.id]} onChange={(e) => setChecked((c) => ({ ...c, [p.id]: e.target.checked }))} />
+                    <span style={{ flex: 1 }}>{p.name}<small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{p.type} · {p.country}</small></span>
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn primary" style={{ padding: "6px 14px", fontSize: 12 }} onClick={saveLinks}>Save links</button>
+                <button className="btn" style={{ padding: "6px 14px", fontSize: 12 }} onClick={() => setEditLinks(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : linkedPartners.length ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {linkedPartners.map((p) => <span className="acc-chip" key={p.id}>{p.name}</span>)}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "4px 0" }}>No partners linked — use “+ link” to attach one or more.</div>
+          )}
+
+          {(engToProject[b.id] || !up) && (
+            <>
+              <div className="eng-sec">Project</div>
+              <div style={{ display: "flex", flexWrap: "wrap" }}>
+                {engToProject[b.id] ? (
+                  <LinkBtn label="Open linked project" onClick={() => xProject(engToProject[b.id])} />
+                ) : (
+                  <LinkBtn
+                    primary
+                    icon={<PlusI style={{ width: 13, height: 13, verticalAlign: -2 }} />}
+                    label=" Create project"
+                    onClick={() => createProjectFromEng(b.id)}
+                  />
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
     </DrawerShell>
@@ -231,8 +323,9 @@ const smallField = { padding: "4px 8px", fontSize: 11.5, width: "auto" } as cons
 
 export function ProjectDrawer() {
   const {
-    projectName, closeProject, toast, projectDetails, projectToEng, xEng, xTab,
+    projectName, closeProject, toast, projectDetails,
     addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
+    addProjectDocument, projectDocUrl,
   } = useApp();
   const p = projectName ? projectDetails[projectName] : null;
   const ms: Record<string, [string, string]> = { done: ["done", "Complete"], now: ["today", "In progress"], todo: ["week", "Upcoming"] };
@@ -314,8 +407,14 @@ export function ProjectDrawer() {
           <div className="eng-sec">Milestones</div>
           <div>
             {p.milestones.map((m, i) => (
-              <div className="recon" style={{ padding: "8px 0" }} key={m.id ?? i}>
-                <span>{m.t}</span>
+              <div className="recon" style={{ padding: "8px 0", gap: 8 }} key={m.id ?? i}>
+                {m.id && (
+                  <input type="checkbox" checked={m.s === "done"}
+                    onChange={(e) => setMilestoneStatus(m.id!, e.target.checked ? "done" : "todo")}
+                    style={{ cursor: "pointer", width: 16, height: 16, accentColor: "var(--flame)", flexShrink: 0 }}
+                    title={m.s === "done" ? "Mark not complete" : "Mark complete"} />
+                )}
+                <span style={{ flex: 1, textDecoration: m.s === "done" ? "line-through" : "none", color: m.s === "done" ? "var(--ink-soft)" : "inherit" }}>{m.t}</span>
                 {m.id
                   ? <select className="field" style={smallField} value={m.s} onChange={(e) => setMilestoneStatus(m.id!, e.target.value)}>
                       {MS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -358,19 +457,32 @@ export function ProjectDrawer() {
           </div>
           <div className="eng-sec">Documents</div>
           <div>
-            {p.docs.map((d, i) => (
-              <div className="recon" style={{ padding: "8px 0" }} key={i}>
-                <span>{d}</span>
-                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => toast(d, "Opens the document")}>Open</button>
-              </div>
-            ))}
-          </div>
-          <div className="eng-sec">Linked records</div>
-          <div style={{ display: "flex", flexWrap: "wrap" }}>
-            {projectToEng[projectName] && <LinkBtn label="Originating engagement" onClick={() => xEng(projectToEng[projectName])} />}
-            <LinkBtn label="Budget in Finance" onClick={() => xTab("finance", "f-budget")} />
-            <LinkBtn label="Procurement" onClick={() => xTab("procurement", "p-po")} />
-            <LinkBtn label="Field activity" onClick={() => xTab("projects", "pr-field")} />
+            {p.docs.map((d, i) => {
+              const file = typeof d === "object" ? d : null;   // uploaded files carry a path
+              const label = typeof d === "string" ? d : d.name;
+              const iconBtn = { padding: "4px 8px", fontSize: 11.5, display: "inline-flex", alignItems: "center", gap: 5, textDecoration: "none" } as const;
+              return (
+                <div className="recon" style={{ padding: "8px 0", gap: 8 }} key={i}>
+                  <span style={{ flex: 1 }}>{label}</span>
+                  {file ? (
+                    <span style={{ display: "flex", gap: 6 }}>
+                      <a className="btn" style={iconBtn} href={projectDocUrl(file.path)} target="_blank" rel="noreferrer" title="View"><EyeI /> View</a>
+                      <a className="btn" style={iconBtn} href={projectDocUrl(file.path, file.name)} title="Download"><ExportI /> Download</a>
+                    </span>
+                  ) : (
+                    <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => toast(String(d), "Opens the document")}>Open</button>
+                  )}
+                </div>
+              );
+            })}
+            {!p.docs.length && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "4px 0" }}>No documents yet.</div>}
+            {p.id && (
+              <label className="btn" style={{ padding: "5px 10px", fontSize: 11.5, marginTop: 6, display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                <PlusI />Upload document
+                <input type="file" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f && p.id) addProjectDocument(p.id, f); e.target.value = ""; }} />
+              </label>
+            )}
           </div>
         </>
       )}

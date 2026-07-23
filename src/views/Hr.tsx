@@ -153,7 +153,7 @@ function RequisitionModal() {
   function submit() { if (!role.trim()) { toast("Role title is required", "Name the vacancy"); return; } createRecruitmentReq(role.trim(), dept); }
   return (
     <ModalShell open={open} onClose={closeHrModal} width={480}>
-      <div className="mh"><h3>New requisition</h3><p>Opens a vacancy — add candidates to its pipeline once it's open.</p></div>
+      <div className="mh"><h3>New job opening</h3><p>Post a job opening — add candidates to its pipeline once it's open.</p></div>
       <div className="mb">
         <div><label>Role title</label><input className="field" placeholder="Field Operations Coordinator" value={role} onChange={(e) => setRole(e.target.value)} /></div>
         <div><label>Department</label>
@@ -163,7 +163,7 @@ function RequisitionModal() {
           </select>
         </div>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Open requisition</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Post job opening</button></div>
     </ModalShell>
   );
 }
@@ -197,10 +197,10 @@ function CandidateModal() {
 function EnumeratorModal() {
   const { hrModal, closeHrModal, createEnumerator, toast } = useApp();
   const open = hrModal?.kind === "enumerator";
-  const [f, setF] = useState({ name: "", county: "", idNo: "", dailyRate: "" });
-  useEffect(() => { if (open) setF({ name: "", county: "", idNo: "", dailyRate: "" }); }, [open]);
+  const [f, setF] = useState({ name: "", county: "", idNo: "" });
+  useEffect(() => { if (open) setF({ name: "", county: "", idNo: "" }); }, [open]);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
-  function submit() { if (!f.name.trim()) { toast("Name is required", "Name the field worker"); return; } createEnumerator({ name: f.name.trim(), county: f.county, idNo: f.idNo, dailyRate: parseFloat(f.dailyRate) || 0 }); }
+  function submit() { if (!f.name.trim()) { toast("Name is required", "Name the field worker"); return; } createEnumerator({ name: f.name.trim(), county: f.county, idNo: f.idNo }); }
   return (
     <ModalShell open={open} onClose={closeHrModal} width={480}>
       <div className="mh"><h3>Register enumerator</h3><p>Adds a field worker to the roster — assign them per-diem work below.</p></div>
@@ -212,10 +212,7 @@ function EnumeratorModal() {
             <datalist id="ke-counties">{kenyaLocations.map((l) => <option key={l} value={l} />)}</datalist>
           </div>
         </div>
-        <div className="mrow c2">
-          <div><label>ID number</label><input className="field" placeholder="ID-…" value={f.idNo} onChange={(e) => set("idNo", e.target.value)} /></div>
-          <div><label>Daily rate (KES)</label><input className="field" type="number" min="0" placeholder="1800" value={f.dailyRate} onChange={(e) => set("dailyRate", e.target.value)} /></div>
-        </div>
+        <div><label>ID number</label><input className="field" placeholder="ID-…" value={f.idNo} onChange={(e) => set("idNo", e.target.value)} /></div>
       </div>
       <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Register</button></div>
     </ModalShell>
@@ -227,16 +224,16 @@ function AssignmentModal() {
   const open = hrModal?.kind === "assignment";
   const enums = hrData?.enumerators ?? [];
   const projects = Object.keys(projectDetails);
-  const [f, setF] = useState({ enumeratorId: "", project: "", period: new Date().toISOString().slice(0, 7), days: "", perDiem: "", contractDoc: "" });
-  useEffect(() => { if (open) setF({ enumeratorId: enums[0]?.id ?? "", project: projects[0] ?? "", period: new Date().toISOString().slice(0, 7), days: "", perDiem: "", contractDoc: "" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+  const [f, setF] = useState({ enumeratorId: "", project: "", period: new Date().toISOString().slice(0, 7), days: "" });
+  useEffect(() => { if (open) setF({ enumeratorId: enums[0]?.id ?? "", project: projects[0] ?? "", period: new Date().toISOString().slice(0, 7), days: "" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   function submit() {
     if (!f.enumeratorId) { toast("Pick an enumerator", "Register one first if the list is empty"); return; }
-    createFieldAssignment({ enumeratorId: f.enumeratorId, project: f.project, period: f.period, days: parseFloat(f.days) || 0, perDiem: parseFloat(f.perDiem) || 0, contractDoc: f.contractDoc });
+    createFieldAssignment({ enumeratorId: f.enumeratorId, project: f.project, period: f.period, days: parseFloat(f.days) || 0 });
   }
   return (
     <ModalShell open={open} onClose={closeHrModal} width={520}>
-      <div className="mh"><h3>New field assignment</h3><p>Books per-diem / casual work against a project. It starts as planned; approve it to release the per-diem.</p></div>
+      <div className="mh"><h3>New field assignment</h3><p>Books casual / field work against a project. A contract reference is generated automatically. It starts as planned; approve it to release the assignment.</p></div>
       <div className="mb">
         <div className="mrow c2">
           <div><label>Enumerator</label>
@@ -251,12 +248,10 @@ function AssignmentModal() {
             </select>
           </div>
         </div>
-        <div className="mrow c3">
+        <div className="mrow c2">
           <div><label>Period</label><input className="field" type="month" value={f.period} onChange={(e) => set("period", e.target.value)} /></div>
           <div><label>Days</label><input className="field" type="number" min="0" placeholder="0" value={f.days} onChange={(e) => set("days", e.target.value)} /></div>
-          <div><label>Per-diem total (KES)</label><input className="field" type="number" min="0" placeholder="0" value={f.perDiem} onChange={(e) => set("perDiem", e.target.value)} /></div>
         </div>
-        <div><label>Contract / doc ref</label><input className="field" placeholder="CAS-2026-015" value={f.contractDoc} onChange={(e) => set("contractDoc", e.target.value)} /></div>
       </div>
       <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Create assignment</button></div>
     </ModalShell>
@@ -350,7 +345,7 @@ export default function HrView() {
             <button className="btn primary" onClick={() => preparePayroll(curPeriod)}><PlusI />Prepare {fmtPeriod(curPeriod)} run</button>
           )}
           {tab === "h-recruit" && (
-            <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New requisition</button>
+            <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New job opening</button>
           )}
           {tab === "h-field" && (
             <>
@@ -403,7 +398,7 @@ export default function HrView() {
                 <div className="task" onClick={() => goTab("hr", "h-staff")}><span className="id" style={{ color: "var(--ember)" }}>DOCS</span><span className="txt">{missingFiles.length} staff file{missingFiles.length > 1 ? "s" : ""} missing statutory IDs<small>{missingFiles.map((s) => s.name).join(", ")}</small></span><span className="pill today">Review</span></div>
               )}
               {openRoles.length > 0 && (
-                <div className="task" onClick={() => goTab("hr", "h-recruit")}><span className="id" style={{ color: "var(--flame)" }}>REC</span><span className="txt">{openRoles.length} open requisition{openRoles.length > 1 ? "s" : ""} — {allCandidates.length} candidates in pipeline</span><span className="pill week">In progress</span></div>
+                <div className="task" onClick={() => goTab("hr", "h-recruit")}><span className="id" style={{ color: "var(--flame)" }}>REC</span><span className="txt">{openRoles.length} open job opening{openRoles.length > 1 ? "s" : ""} — {allCandidates.length} candidates in pipeline</span><span className="pill week">In progress</span></div>
               )}
               {pendingLeave.length + noTwoFa.length + missingFiles.length + openRoles.length === 0 && (
                 <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>All clear — no pending approvals, complete files, everyone enrolled.</div>
@@ -601,13 +596,13 @@ export default function HrView() {
           <div className="grid g-2">
             <div className="panel">
               <div className="panel-h">
-                <h3>Open requisitions</h3>
+                <h3>Open job openings</h3>
                 <span className="meta">{recruitment.length} roles</span>
               </div>
               <table className="tbl">
                 <thead><tr><th>Ref</th><th>Role</th><th>Dept</th><th>Candidates</th><th></th></tr></thead>
                 <tbody>
-                  {recruitment.length === 0 && <tr><td colSpan={5} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No requisitions yet.</td></tr>}
+                  {recruitment.length === 0 && <tr><td colSpan={5} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No job openings yet.</td></tr>}
                   {recruitment.map((r) => (
                     <tr key={r.ref}>
                       <td className="mono">{r.ref}</td>
@@ -680,16 +675,15 @@ export default function HrView() {
           <div className="panel" style={{ marginTop: 18 }}>
             <div className="panel-h"><h3>Field assignments &amp; casual contracts</h3><span className="meta">piece-rate &amp; fixed-term</span></div>
             <table className="tbl">
-              <thead><tr><th>Enumerator</th><th>Project</th><th>Period</th><th>Days</th><th>Per-diem</th><th>Contract</th><th>State</th></tr></thead>
+              <thead><tr><th>Enumerator</th><th>Project</th><th>Period</th><th>Days</th><th>Contract</th><th>State</th></tr></thead>
               <tbody>
-                {fieldAssignments.length === 0 && <tr><td colSpan={7} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No assignments yet.</td></tr>}
+                {fieldAssignments.length === 0 && <tr><td colSpan={6} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No assignments yet.</td></tr>}
                 {fieldAssignments.map((a) => (
                   <tr key={a.id}>
                     <td><strong>{a.enumerator}</strong></td>
                     <td style={{ fontSize: 12 }}>{a.project || "—"}</td>
                     <td className="mono">{a.period || "—"}</td>
                     <td className="mono">{a.days}</td>
-                    <td className="mono">{kes(a.perDiem)}</td>
                     <td style={{ fontSize: 12 }}>{a.contractDoc || "—"}</td>
                     <td><span className={`pill ${a.state === "complete" ? "done" : a.state === "cancelled" ? "over" : a.state === "active" ? "week" : "today"}`} style={{ textTransform: "none" }}>{cap(a.state)}</span></td>
                   </tr>

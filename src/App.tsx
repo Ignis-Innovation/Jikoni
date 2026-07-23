@@ -22,7 +22,7 @@ import ComplianceView from "./views/Compliance";
 import UsersView from "./views/Users";
 import SettingsView from "./views/Settings";
 import { EngDrawer, VendorDrawer, ProjectDrawer, AccessDrawer } from "./components/drawers";
-import { InviteModal, TaskModal, ReqModal, POModal, InvoiceModal, LeaveModal, EngagementModal, PartnerModal, OpportunityModal } from "./components/modals";
+import { InviteModal, TaskModal, ReqModal, POModal, InvoiceModal, LeaveModal, EngagementModal, EngUpdateModal, PartnerModal, OpportunityModal, RiskModal, PolicyModal, DocumentModal, ContractModal, ProjectModal } from "./components/modals";
 
 const views: Record<string, React.ComponentType> = {
   home: HomeView, deploy: DeployView, readiness: ReadinessView, raise: RaiseView,
@@ -88,8 +88,8 @@ function Sidebar() {
       <div className="brand">
         <div className="mark"><BrandMark /></div>
         <div>
-          <div className="name">Jikoni</div>
-          <div className="sub">CleanCookIQ · Ignis</div>
+          <div className="name">Jikoni Tool</div>
+          <div className="sub">Operations Suite</div>
         </div>
       </div>
 
@@ -206,8 +206,14 @@ function Shell() {
       <InvoiceModal />
       <LeaveModal />
       <EngagementModal />
+      <EngUpdateModal />
       <PartnerModal />
       <OpportunityModal />
+      <RiskModal />
+      <PolicyModal />
+      <DocumentModal />
+      <ContractModal />
+      <ProjectModal />
       <Toasts />
     </>
   );

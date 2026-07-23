@@ -170,6 +170,7 @@ export const accessModules = [
   { k: "crm", l: "Partnerships CRM" },
   { k: "projects", l: "Projects & Programmes" },
   { k: "reports", l: "Reports & Board pack" },
+  { k: "compliance", l: "Compliance & Governance" },
   { k: "dataroom", l: "Investor Data Room" },
   { k: "settings", l: "Settings" },
   { k: "users", l: "User Management" },
@@ -183,9 +184,9 @@ const allFull: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 3]));
 
 export const roleTemplates: Record<string, Perms> = {
   admin: { ...allFull },
-  fin: { finance: 3, procurement: 3, inventory: 3, hr: 1, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 2, reports: 2, dataroom: 0, settings: 0, users: 0 },
-  std: { finance: 0, procurement: 1, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 1, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
-  view: { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 0, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  fin: { finance: 3, procurement: 3, inventory: 3, hr: 1, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 0, settings: 0, users: 0 },
+  std: { finance: 0, procurement: 1, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 1, crm: 3, projects: 1, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
+  view: { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 0, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
 };
 
 // the super admins who can assign rights — Wanjiku is signed in as one
@@ -195,11 +196,11 @@ export const superAdmins = ["dennis@ignis.africa", "wanjiku@ignis.africa"];
 export const initialPerms: Record<string, Perms> = {
   "dennis@ignis.africa": { ...allFull },
   "wanjiku@ignis.africa": { ...allFull },
-  "brian@ignis.africa": { finance: 1, procurement: 1, inventory: 3, hr: 1, deploy: 3, readiness: 2, raise: 1, crm: 1, projects: 2, reports: 2, dataroom: 1, settings: 3, users: 3 },
-  "joan@ignis.africa": { finance: 3, procurement: 3, inventory: 3, hr: 2, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 2, reports: 2, dataroom: 0, settings: 0, users: 0 },
-  "wilson@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 2, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
-  "elizabeth@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 2, raise: 0, crm: 3, projects: 1, reports: 1, dataroom: 0, settings: 0, users: 0 },
-  "lily@ignis.africa": { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 0, reports: 1, dataroom: 0, settings: 0, users: 0 },
+  "brian@ignis.africa": { finance: 1, procurement: 1, inventory: 3, hr: 1, deploy: 3, readiness: 2, raise: 1, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 1, settings: 3, users: 3 },
+  "joan@ignis.africa": { finance: 3, procurement: 3, inventory: 3, hr: 2, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 0, settings: 0, users: 0 },
+  "wilson@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 2, crm: 3, projects: 1, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
+  "elizabeth@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 2, raise: 0, crm: 3, projects: 1, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
+  "lily@ignis.africa": { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 0, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
 };
 
 /* ----- vendor records ----- */
@@ -284,7 +285,8 @@ export interface ProjectDetail {
   drawdowns: { id?: string; t: string; v: string; s: string }[];
   reporting: string;
   field: string;
-  docs: string[];
+  // legacy seed docs are plain strings; uploaded docs are { name, path } objects
+  docs: (string | { name: string; path: string })[];
 }
 
 export const initialProjectDetails: Record<string, ProjectDetail> = {
@@ -439,6 +441,15 @@ export const engDetails: Record<string, EngDetail> = {
     docs: [],
   },
 };
+
+// Engagement progress ladders (one rung per stage) + the channels an update can log.
+// The ribbon in the engagement drawer and the Update form read from these; the
+// log_engagement_note RPC validates the target stage against the matching ladder.
+export const engStages: { up: string[]; down: string[] } = {
+  up: ["Discovery", "Due diligence", "Negotiation", "Agreement", "Commitment", "Closed"],
+  down: ["EOI", "Site visit", "Contracting", "Onboarding", "Active"],
+};
+export const engChannels = ["Email", "Call", "Meeting", "Field", "Note"];
 
 export function findEng(id: string): (EngRow & { pipeline: "up" | "down" }) | null {
   for (const k of ["up", "down"] as const) {

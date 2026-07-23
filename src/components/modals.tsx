@@ -2,7 +2,7 @@
 // approval routing), raise PO from an approved requisition, raise sales invoice.
 import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
-import { budgetLines, kes, reqRouting, reqBudgetState } from "../data";
+import { budgetLines, kes, reqRouting, reqBudgetState, engStages, engChannels } from "../data";
 
 export function ModalShell({ open, onClose, width, children }: { open: boolean; onClose: () => void; width?: number; children: React.ReactNode }) {
   return (
@@ -375,15 +375,16 @@ export function EngagementModal() {
   const [owner, setOwner] = useState("");
   const [due, setDue] = useState("week");
   const [note, setNote] = useState("");
+  const [file, setFile] = useState<File | null>(null);
 
   useEffect(() => {
-    if (engFormOpen) { setName(""); setPipeline("up"); setDue("week"); setNote(""); setOwner(crm.teamNames[0] ?? ""); }
+    if (engFormOpen) { setName(""); setPipeline("up"); setDue("week"); setNote(""); setFile(null); setOwner(crm.teamNames[0] ?? ""); }
   }, [engFormOpen, crm.teamNames]);
 
   function save() {
     if (!name.trim()) { toast("Name the partner", "Which organisation is this engagement with?"); return; }
     if (!owner) { toast("Pick an owner", "Who's carrying this engagement?"); return; }
-    createEngagement(name.trim(), owner, pipeline, due, note);
+    createEngagement(name.trim(), owner, pipeline, due, note, file);
   }
 
   return (
@@ -420,10 +421,98 @@ export function EngagementModal() {
             onChange={(e) => setNote(e.target.value)}
           />
         </div>
+        <div>
+          <label>Document <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <input className="field" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — attaches to this engagement</div>}
+        </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeEngForm}>Cancel</button>
         <button className="btn primary" onClick={save}>Create engagement</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= LOG ENGAGEMENT UPDATE ================= */
+export function EngUpdateModal() {
+  const { engUpdateOpen, closeEngUpdate, engId, crm, logEngagementNote, toast } = useApp();
+  const eng = [...crm.engUp, ...crm.engDown].find((e) => e.id === engId) || null;
+  const pipeline: "up" | "down" = crm.engDown.some((e) => e.id === engId) ? "down" : "up";
+  const ladder = engStages[pipeline];
+
+  const [channel, setChannel] = useState("Note");
+  const [who, setWho] = useState("");
+  const [note, setNote] = useState("");
+  const [stageTo, setStageTo] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+
+  useEffect(() => {
+    if (engUpdateOpen) {
+      setChannel("Note"); setNote(""); setFile(null); setWho(crm.teamNames[0] ?? "");
+      // default the stage picker to where the engagement already sits (or the first rung)
+      setStageTo(eng && ladder.includes(eng.st) ? eng.st : ladder[0] ?? "");
+    }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [engUpdateOpen]);
+
+  function save() {
+    if (!note.trim()) { toast("Add a note", "What happened in this update?"); return; }
+    if (!engId) return;
+    logEngagementNote(engId, { channel, who, note: note.trim(), stageTo, file });
+  }
+
+  const curIdx = eng ? ladder.indexOf(eng.st) : -1;
+  const toIdx = ladder.indexOf(stageTo);
+  const moved = eng && stageTo && stageTo !== eng.st;
+
+  return (
+    <ModalShell open={engUpdateOpen} onClose={closeEngUpdate} width={520}>
+      <div className="mh">
+        <h3>Log update{eng ? ` · ${eng.n}` : ""}</h3>
+        <p>Adds a dated entry to the engagement's log. Move the stage to green-light it forward — everyone who opens this record sees the progress.</p>
+      </div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Channel</label>
+            <select className="field" style={{ width: "100%" }} value={channel} onChange={(e) => setChannel(e.target.value)}>
+              {engChannels.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}><PickField label="Who" value={who} onChange={setWho} options={crm.teamNames} /></div>
+        </div>
+        <div>
+          <label>What happened</label>
+          <textarea
+            className="field"
+            style={{ width: "100%", minHeight: 88, resize: "vertical", fontFamily: "inherit" }}
+            placeholder="e.g. Reviewed the term sheet on the call — they're comfortable, moving to committed."
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </div>
+        <div>
+          <label>Move stage {curIdx >= 0 && <span className="meta" style={{ textTransform: "none", letterSpacing: 0 }}>· currently {eng!.st || "—"}</span>}</label>
+          <select className="field" style={{ width: "100%" }} value={stageTo} onChange={(e) => setStageTo(e.target.value)}>
+            {ladder.map((s, i) => <option key={s} value={s}>{i + 1}. {s}</option>)}
+          </select>
+          {moved && (
+            <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 6, color: toIdx > curIdx ? "var(--green)" : "var(--ink-soft)" }}>
+              {eng!.st || "—"} → {stageTo}{toIdx > curIdx ? "  ✓ advancing" : ""}
+            </div>
+          )}
+        </div>
+        <div>
+          <label>Document <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <input className="field" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — attaches to this engagement</div>}
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeEngUpdate}>Cancel</button>
+        <button className="btn primary" onClick={save}>Save update</button>
       </div>
     </ModalShell>
   );
@@ -521,6 +610,244 @@ export function OpportunityModal() {
       <div className="mf">
         <button className="btn" onClick={closeOppForm}>Cancel</button>
         <button className="btn primary" onClick={save}>Create opportunity</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= ADD RISK ================= */
+export function RiskModal() {
+  const { riskOpen, closeRiskForm, createRisk, crm, toast } = useApp();
+  const [risk, setRisk] = useState("");
+  const [category, setCategory] = useState("Delivery");
+  const [likelihood, setLikelihood] = useState(3);
+  const [impact, setImpact] = useState(3);
+  const [mitigation, setMitigation] = useState("");
+  const [owner, setOwner] = useState("");
+  useEffect(() => {
+    if (riskOpen) { setRisk(""); setCategory("Delivery"); setLikelihood(3); setImpact(3); setMitigation(""); setOwner(crm.teamNames[0] ?? ""); }
+  }, [riskOpen, crm.teamNames]);
+
+  const score = likelihood * impact;
+  const sev = score >= 12 ? { txt: "High", bg: "var(--red-soft)", fg: "var(--red)" }
+    : score >= 6 ? { txt: "Medium", bg: "#FDF3E3", fg: "#8a5a12" }
+    : { txt: "Low", bg: "#FCFAF6", fg: "var(--ink-soft)" };
+
+  function save() {
+    if (!risk.trim()) { toast("Describe the risk", "What could go wrong?"); return; }
+    createRisk({ risk: risk.trim(), category, likelihood, impact, mitigation: mitigation.trim(), owner });
+  }
+
+  return (
+    <ModalShell open={riskOpen} onClose={closeRiskForm} width={520}>
+      <div className="mh"><h3>Log a risk</h3><p>Gets an RSK- reference; severity is likelihood × impact.</p></div>
+      <div className="mb">
+        <div><label>Risk</label><input className="field" placeholder="e.g. Single-funder dependency (Wave 1)" value={risk} onChange={(e) => setRisk(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Category</label>
+            <select className="field" style={{ width: "100%" }} value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option>Funding</option><option>Market</option><option>Supply</option><option>Delivery</option><option>People</option><option>Compliance</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}><PickField label="Owner" value={owner} onChange={setOwner} options={crm.teamNames} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Likelihood (1–5)</label>
+            <select className="field" style={{ width: "100%" }} value={likelihood} onChange={(e) => setLikelihood(Number(e.target.value))}>
+              {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>Impact (1–5)</label>
+            <select className="field" style={{ width: "100%" }} value={impact} onChange={(e) => setImpact(Number(e.target.value))}>
+              {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+        </div>
+        <div><label>Mitigation</label><input className="field" placeholder="e.g. Diversify pipeline — 7 funders live" value={mitigation} onChange={(e) => setMitigation(e.target.value)} /></div>
+        <div className="reqbox" style={{ background: sev.bg, color: sev.fg, borderColor: "transparent" }}>
+          <div className="rl">Severity</div>
+          <strong>{sev.txt}</strong> · score {score} (L{likelihood} × I{impact})
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeRiskForm}>Cancel</button>
+        <button className="btn primary" onClick={save}>Log risk</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= UPLOAD POLICY / NEW VERSION ================= */
+export function PolicyModal() {
+  const { policyOpen, closePolicyForm, addPolicy, toast } = useApp();
+  const [code, setCode] = useState("");
+  const [title, setTitle] = useState("");
+  const [effectiveFrom, setEffectiveFrom] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  useEffect(() => {
+    if (policyOpen) { setCode(""); setTitle(""); setEffectiveFrom(""); setFile(null); }
+  }, [policyOpen]);
+
+  function save() {
+    if (!code.trim()) { toast("Add a reference", "e.g. IGN-GOV-002"); return; }
+    if (!title.trim()) { toast("Name the policy", "What's the document called?"); return; }
+    addPolicy({ code: code.trim(), title: title.trim(), effectiveFrom, file });
+  }
+
+  return (
+    <ModalShell open={policyOpen} onClose={closePolicyForm} width={500}>
+      <div className="mh"><h3>Upload policy / new version</h3><p>Re-using an existing reference supersedes the current version and bumps the version number.</p></div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ width: 180 }}><label>Reference</label><input className="field" style={{ width: "100%" }} placeholder="IGN-GOV-002" value={code} onChange={(e) => setCode(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>Effective from</label><input className="field" type="date" style={{ width: "100%" }} value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></div>
+        </div>
+        <div><label>Title</label><input className="field" placeholder="e.g. Code of Conduct" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+        <div>
+          <label>Document <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <input className="field" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — attaches to this version</div>}
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closePolicyForm}>Cancel</button>
+        <button className="btn primary" onClick={save}>Save policy</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= ADD COMPANY DOCUMENT ================= */
+export function DocumentModal() {
+  const { docOpen, closeDocForm, addCompanyDocument, toast } = useApp();
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("statutory");
+  const [expiresOn, setExpiresOn] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  useEffect(() => {
+    if (docOpen) { setName(""); setKind("statutory"); setExpiresOn(""); setFile(null); }
+  }, [docOpen]);
+
+  function save() {
+    if (!name.trim()) { toast("Name the document", "e.g. Single Business Permit"); return; }
+    addCompanyDocument({ name: name.trim(), kind, expiresOn, file });
+  }
+
+  return (
+    <ModalShell open={docOpen} onClose={closeDocForm} width={500}>
+      <div className="mh"><h3>Add / upload document</h3><p>Statutory documents are versioned and access-controlled. Leave expiry blank for documents that don't expire.</p></div>
+      <div className="mb">
+        <div><label>Document</label><input className="field" placeholder="e.g. Single Business Permit" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Kind</label>
+            <select className="field" style={{ width: "100%" }} value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="statutory">Statutory</option><option value="licence">Licence</option><option value="registration">Registration</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}><label>Expiry <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" type="date" style={{ width: "100%" }} value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} /></div>
+        </div>
+        <div>
+          <label>Document <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <input className="field" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — attaches to this document</div>}
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeDocForm}>Cancel</button>
+        <button className="btn primary" onClick={save}>Save document</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= ADD CONTRACT ================= */
+export function ContractModal() {
+  const { contractOpen, closeContractForm, addContract, toast } = useApp();
+  const [counterparty, setCounterparty] = useState("");
+  const [kind, setKind] = useState("vendor");
+  const [title, setTitle] = useState("");
+  const [detail, setDetail] = useState("");
+  const [expiresOn, setExpiresOn] = useState("");
+  useEffect(() => {
+    if (contractOpen) { setCounterparty(""); setKind("vendor"); setTitle(""); setDetail(""); setExpiresOn(""); }
+  }, [contractOpen]);
+
+  function save() {
+    if (!counterparty.trim()) { toast("Name the counterparty", "Who's the contract with?"); return; }
+    if (!title.trim()) { toast("Name the contract", "e.g. Cookstove supply framework"); return; }
+    addContract({ counterparty: counterparty.trim(), kind, title: title.trim(), detail: detail.trim(), expiresOn });
+  }
+
+  return (
+    <ModalShell open={contractOpen} onClose={closeContractForm} width={500}>
+      <div className="mh"><h3>Add contract</h3><p>Registers an agreement in the contracts registry — Procurement and CRM read the same records.</p></div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Counterparty</label><input className="field" style={{ width: "100%" }} placeholder="e.g. BURN Manufacturing" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} /></div>
+          <div style={{ width: 150 }}>
+            <label>Type</label>
+            <select className="field" style={{ width: "100%" }} value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="vendor">Vendor</option><option value="funder">Funder</option><option value="customer">Customer</option><option value="partner">Partner</option>
+            </select>
+          </div>
+        </div>
+        <div><label>Contract</label><input className="field" placeholder="e.g. Cookstove supply framework" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+        <div><label>Detail <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" placeholder="e.g. Framework · agreed rates" value={detail} onChange={(e) => setDetail(e.target.value)} /></div>
+        <div><label>Expiry <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" type="date" style={{ width: "100%" }} value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} /></div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeContractForm}>Cancel</button>
+        <button className="btn primary" onClick={save}>Add contract</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= NEW PROJECT ================= */
+export function ProjectModal() {
+  const { projectFormOpen, closeProjectForm, createProject, crm, toast } = useApp();
+  const [name, setName] = useState("");
+  const [funder, setFunder] = useState("");
+  const [budget, setBudget] = useState("");
+  const [timeline, setTimeline] = useState("");
+  const [team, setTeam] = useState("");
+  const [status, setStatus] = useState("Setup");
+  useEffect(() => {
+    if (projectFormOpen) { setName(""); setFunder(""); setBudget(""); setTimeline(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); }
+  }, [projectFormOpen, crm.teamNames]);
+
+  function save() {
+    if (!name.trim()) { toast("Name the project", "What's the project called?"); return; }
+    createProject({ name: name.trim(), funder: funder.trim(), budget: budget.trim(), timeline: timeline.trim(), team, status });
+  }
+
+  return (
+    <ModalShell open={projectFormOpen} onClose={closeProjectForm} width={520}>
+      <div className="mh"><h3>New project</h3><p>Creates a project on its own code — budget, milestones, drawdowns and field activity track against it.</p></div>
+      <div className="mb">
+        <div><label>Project name</label><input className="field" placeholder="e.g. Makueni VTC rollout" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Funder <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. Charm Impact" value={funder} onChange={(e) => setFunder(e.target.value)} /></div>
+          <div style={{ width: 160 }}><label>Budget <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. KES 3.2M" value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><PickField label="Owner / team" value={team} onChange={setTeam} options={crm.teamNames} /></div>
+          <div style={{ width: 160 }}><label>Timeline <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. 2026 — Q4" value={timeline} onChange={(e) => setTimeline(e.target.value)} /></div>
+        </div>
+        <div>
+          <label>Status</label>
+          <select className="field" style={{ width: "100%" }} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option>Setup</option><option>On track</option><option>At risk</option><option>Complete</option>
+          </select>
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeProjectForm}>Cancel</button>
+        <button className="btn primary" onClick={save}>Create project</button>
       </div>
     </ModalShell>
   );

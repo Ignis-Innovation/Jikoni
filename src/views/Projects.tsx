@@ -2,6 +2,7 @@ import { useApp } from "../store";
 import { Pulse, Note } from "../components/ui";
 import { Donut, ChartLegend, Bars, StaticBars } from "../components/charts";
 import { Crumb } from "../nav";
+import { PlusI } from "../components/icons";
 import type { ProjectDetail } from "../data";
 
 /* Chart palette — projects are coloured by position so the donut, legend and
@@ -39,7 +40,7 @@ const ddPill = (s: string) =>
   /received/i.test(s) ? "done" : /request|pending|due/i.test(s) ? "today" : "week";
 
 export default function ProjectsView() {
-  const { tabs, goTab, openProject, projectDetails } = useApp();
+  const { tabs, goTab, openProject, projectDetails, openProjectForm, setMilestoneStatus } = useApp();
   const tab = tabs.projects;
 
   // one source of truth: every project the backend returns, keyed by name
@@ -50,6 +51,12 @@ export default function ProjectsView() {
   const allMilestones = list.flatMap((p) => p.milestones.map((m) => ({ ...m, project: p.name })));
   const allDrawdowns = list.flatMap((p) => p.drawdowns.map((d) => ({ ...d, project: p.name })));
   const fieldRows = list.filter((p) => p.field && p.field !== "—");
+  // Aggregate tabs (Budgets / Grants / burn charts) only show projects that
+  // actually carry that data — a bare new project lives in the registry until
+  // it has a budget, a funder/drawdown or a reporting date.
+  const budgeted = list.filter((p) => amtM(p.budget) > 0);
+  const grantRows = list.filter((p) => (p.funder && p.funder !== "—") || p.drawdowns.length > 0);
+  const reportingRows = list.filter((p) => p.reporting && !/to be set/i.test(p.reporting));
 
   const budgetTotal = list.reduce((a, p) => a + amtM(p.budget), 0);
   const spentTotal = list.reduce((a, p) => a + amtM(p.spent), 0);
@@ -62,15 +69,15 @@ export default function ProjectsView() {
   const reportsDue = list.filter((p) => /jul|next|due/i.test(p.reporting || ""));
 
   const pulse = [
-    { k: "Active projects", tick: "t-blue", v: String(list.length), d: `${new Set(list.map((p) => p.funder)).size} funders`, dc: "flat" as const },
+    { k: "Active projects", tick: "t-blue", v: String(list.length), d: `${new Set(grantRows.map((p) => p.funder)).size} funders`, dc: "flat" as const },
     { k: "Portfolio budget", tick: "t-blue", v: fmtM(budgetTotal), d: "across projects", dc: "flat" as const },
     { k: "Spent to date", tick: "t-ember", v: fmtM(spentTotal), d: `${burnPct}%`, dc: "flat" as const },
     { k: "Milestones due", tick: "t-ember", v: String(milestonesDue.length), d: "in progress", dc: "flat" as const },
     { k: "Reports due", tick: reportsDue.length ? "t-red" : "t-blue", v: String(reportsDue.length), d: "funder obligations", dc: "flat" as const },
     { k: "Drawdowns pending", tick: "t-ember", v: String(drawdownsPending.length), d: "awaiting sign-off", dc: "flat" as const },
   ];
-  const donutSegs = list.filter((p) => amtM(p.budget) > 0).map((p) => ({ l: p.short, v: amtM(p.budget), c: p.c, d: p.budget || "TBD" }));
-  const burnRows = list.map((p) => ({ l: p.short, n: p.pct || "0%", w: pctNum(p), c: pctNum(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
+  const donutSegs = budgeted.map((p) => ({ l: p.short, v: amtM(p.budget), c: p.c, d: p.budget || "TBD" }));
+  const burnRows = budgeted.map((p) => ({ l: p.short, n: p.pct || "0%", w: pctNum(p), c: pctNum(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
 
   return (
     <>
@@ -78,6 +85,9 @@ export default function ProjectsView() {
         <div>
           <h1>Projects &amp; Programmes</h1>
           <p>Every funded project and deployment on one code — budget, milestones, deliverables, drawdowns and field activity, tying CRM, Finance and Deployment together.</p>
+        </div>
+        <div className="actions">
+          <button className="btn primary" onClick={openProjectForm}><PlusI />New project</button>
         </div>
       </div>
       <Crumb view="projects" />
@@ -144,7 +154,7 @@ export default function ProjectsView() {
                     <td><span className={`pill ${statusPill(p.status)}`}>{p.status || "Setup"}</span></td>
                   </tr>
                 ))}
-                {!list.length && <tr><td colSpan={5}><Note>No projects yet — convert a won CRM engagement to create one.</Note></td></tr>}
+                {!list.length && <tr><td colSpan={5}><Note>No projects yet — click <strong>+ New project</strong>, or convert a won CRM engagement to create one.</Note></td></tr>}
               </tbody>
             </table>
           </div>
@@ -175,16 +185,21 @@ export default function ProjectsView() {
           <div className="panel">
             <div className="panel-h"><h3>Milestones &amp; deliverables</h3><span className="meta">{allMilestones.length} across {list.length} projects</span></div>
             <table className="tbl">
-              <thead><tr><th>Milestone / deliverable</th><th>Project</th><th>Status</th></tr></thead>
+              <thead><tr><th>Milestone / deliverable</th><th>Project</th><th>Status</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
               <tbody>
                 {allMilestones.map((m, i) => (
-                  <tr key={i}>
-                    <td>{m.t}</td>
+                  <tr key={m.id ?? i}>
+                    <td style={{ textDecoration: m.s === "done" ? "line-through" : "none", color: m.s === "done" ? "var(--ink-soft)" : "inherit" }}>{m.t}</td>
                     <td>{m.project}</td>
                     <td><span className={`pill ${msPill[m.s]?.cls || "week"}`}>{msPill[m.s]?.txt || m.s}</span></td>
+                    <td style={{ textAlign: "right" }}>
+                      {m.id && (m.s === "done"
+                        ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setMilestoneStatus(m.id!, "todo")}>Reopen</button>
+                        : <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setMilestoneStatus(m.id!, "done")}>Mark complete</button>)}
+                    </td>
                   </tr>
                 ))}
-                {!allMilestones.length && <tr><td colSpan={3}><Note>No milestones recorded yet.</Note></td></tr>}
+                {!allMilestones.length && <tr><td colSpan={4}><Note>No milestones recorded yet.</Note></td></tr>}
               </tbody>
             </table>
           </div>
@@ -199,7 +214,7 @@ export default function ProjectsView() {
               <table className="tbl">
                 <thead><tr><th>Grant / funder</th><th>Amount</th><th>Drawn</th><th>Next drawdown</th></tr></thead>
                 <tbody>
-                  {list.map((p) => {
+                  {grantRows.map((p) => {
                     const next = p.drawdowns.find((d) => !/received/i.test(d.s));
                     return (
                       <tr key={p.name}>
@@ -210,19 +225,20 @@ export default function ProjectsView() {
                       </tr>
                     );
                   })}
-                  {!list.length && <tr><td colSpan={4}><Note>No grants yet.</Note></td></tr>}
+                  {!grantRows.length && <tr><td colSpan={4}><Note>No grants yet.</Note></td></tr>}
                 </tbody>
               </table>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Reporting calendar</h3><span className="meta">funder obligations</span></div>
-              {list.filter((p) => p.reporting).map((p) => (
+              {reportingRows.map((p) => (
                 <div className="task" key={p.name}>
                   <span className="id">{p.short}</span>
                   <span className="txt">{p.reporting}<small>{p.funder}</small></span>
                   <span className={`pill ${/jul|due/i.test(p.reporting) ? "over" : "week"}`}>{/jul|due/i.test(p.reporting) ? "Due" : "Upcoming"}</span>
                 </div>
               ))}
+              {!reportingRows.length && <Note>No reporting obligations set yet.</Note>}
               <Note>Drawdowns release on milestone sign-off; each is evidenced by the milestone and its report.</Note>
             </div>
           </div>

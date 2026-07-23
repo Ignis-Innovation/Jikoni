@@ -345,12 +345,23 @@
   .upd:last-child{border-bottom:0}
   .upd .um{font-size:11px;color:var(--ink-soft);font-family:var(--mono);margin-bottom:3px}
   .upd .un{font-size:13px;line-height:1.4}
+  /* engagement stage ribbon */
+  .eng-ribbon{display:flex;align-items:flex-start;gap:0;margin:2px 0 4px}
+  .rib-step{display:flex;flex-direction:column;align-items:center;gap:6px;flex:0 0 auto;text-align:center;min-width:0}
+  .rib-dot{width:14px;height:14px;border-radius:50%;background:#EDE7DD;border:2px solid var(--hairline-2);box-sizing:border-box;flex-shrink:0}
+  .rib-lbl{font-size:10px;line-height:1.2;color:var(--ink-soft);max-width:62px;font-weight:600}
+  .rib-step.done .rib-dot{background:var(--green);border-color:var(--green)}
+  .rib-step.done .rib-lbl{color:var(--ink-soft)}
+  .rib-step.now .rib-dot{background:var(--flame);border-color:var(--flame);box-shadow:0 0 0 4px var(--ember-soft)}
+  .rib-step.now .rib-lbl{color:var(--flame);font-weight:700}
+  .rib-line{flex:1 1 auto;height:2px;background:var(--hairline-2);margin-top:6px;min-width:12px}
+  .rib-line.done{background:var(--green)}
   .reqbox{border-radius:10px;padding:11px 13px;font-size:12.5px;line-height:1.45;border:1px solid var(--hairline)}
   .reqbox .rl{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;font-weight:600;margin-bottom:3px;opacity:.85}
   .acc-chip.none{background:var(--red-soft);color:var(--red)}
 
   /* modal */
-  .modal-bg{position:fixed;inset:0;background:rgba(23,18,14,.45);backdrop-filter:blur(3px);z-index:150;
+  .modal-bg{position:fixed;inset:0;background:rgba(23,18,14,.45);backdrop-filter:blur(3px);z-index:180;
     display:none;align-items:center;justify-content:center;padding:20px}
   .modal-bg.show{display:flex;animation:fade .2s}
   .modal{background:#fff;border-radius:18px;width:440px;max-width:100%;box-shadow:0 30px 60px -12px rgba(23,18,14,.4);overflow:hidden;animation:pop .25s cubic-bezier(.2,.8,.2,1)}
