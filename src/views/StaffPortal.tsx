@@ -5,7 +5,7 @@ import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
 import { kes, contractTypes } from "../data";
 import { Crumb } from "../nav";
-import { FeedbackModal } from "./Hr";
+import { FeedbackModal, ExitSteps } from "./Hr";
 
 const docCategories = [
   { value: "id", label: "ID / KRA / statutory" },
@@ -23,6 +23,7 @@ const fileFilters = [
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtD = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+const fmtDT = (ts: string) => new Date(ts).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const fmtPeriod = (p: string) => { const [y, m] = p.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); };
 const statePill: Record<string, { cls: string; txt: string }> = {
   pending: { cls: "today", txt: "Awaiting HR" },
@@ -54,29 +55,38 @@ function MyCertModal() {
   const { hrModal, closeHrModal, submitMyCertification, toast } = useApp();
   const open = hrModal?.kind === "myCert";
   const [f, setF] = useState({ name: "", issuer: "", expiry: "" });
-  useEffect(() => { if (open) setF({ name: "", issuer: "", expiry: "" }); }, [open]);
+  const [file, setFile] = useState<File | null>(null);
+  useEffect(() => { if (open) { setF({ name: "", issuer: "", expiry: "" }); setFile(null); } }, [open]);
   return (
     <ModalShell open={open} onClose={closeHrModal} width={480}>
-      <div className="mh"><h3>Add a certification</h3><p>Goes to HR for verification, then attaches to your file</p></div>
+      <div className="mh"><h3>Add a certification</h3><p>Upload the certificate — it goes to HR for verification, then attaches to your file</p></div>
       <div className="mb">
         <div><label>Certification / qualification</label><input className="field" placeholder="e.g. Prince2 Practitioner" value={f.name} onChange={(e) => setF((p) => ({ ...p, name: e.target.value }))} /></div>
         <div className="mrow c2">
           <div><label>Issuer</label><input className="field" placeholder="e.g. Axelos" value={f.issuer} onChange={(e) => setF((p) => ({ ...p, issuer: e.target.value }))} /></div>
           <div><label>Expiry (optional)</label><input className="field" type="date" value={f.expiry} onChange={(e) => setF((p) => ({ ...p, expiry: e.target.value }))} /></div>
         </div>
+        <div>
+          <label>Certificate file <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· PDF or image · optional</span></label>
+          <input className="field" type="file" accept=".pdf,image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — uploads to your file for HR to verify</div>}
+        </div>
         <Note>HR checks the certificate and verifies. Only verified items count towards skills coverage.</Note>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeHrModal}>Cancel</button>
-        <button className="btn primary" onClick={() => { if (!f.name.trim()) { toast("Certification name is required", "e.g. Prince2 Practitioner"); return; } submitMyCertification({ ...f, name: f.name.trim() }); }}>Submit</button>
+        <button className="btn primary" onClick={() => { if (!f.name.trim()) { toast("Certification name is required", "e.g. Prince2 Practitioner"); return; } submitMyCertification({ ...f, name: f.name.trim() }, file); }}>Submit</button>
       </div>
     </ModalShell>
   );
 }
 
 export default function StaffPortalView() {
-  const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment } = useApp();
+  const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment, signMyExitStep, refreshHr } = useApp();
   const tab = tabs.staffportal;
+  // HR may have opened a cycle, signed off a review or cleared an exit area
+  // since last look — pull fresh state each time one of these tabs opens
+  useEffect(() => { if (tab === "sp-perf" || tab === "sp-exit" || tab === "sp-certs") refreshHr(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [docCat, setDocCat] = useState("other");
   const [fileFilter, setFileFilter] = useState("all");
@@ -110,6 +120,12 @@ export default function StaffPortalView() {
   const myAppraisal = myAppraisals[myAppraisals.length - 1];
   const prevAppraisals = myAppraisals.slice(0, -1).reverse();
   const selfOpen = !!myAppraisal && (myAppraisal.stage === "not_started" || myAppraisal.stage === "self");
+  const selfRated = myAppraisal ? myAppraisal.kpis.filter((k) => k.selfMet).length : 0;
+  function submitSelf() {
+    if (!myAppraisal) return;
+    if (!selfRated) { toast("Rate your KPIs first", "Tick at least one KPI you met before sending the review to your manager"); return; }
+    submitSelfAssessment(myAppraisal.id);
+  }
   const myCerts = (hrData?.certifications ?? []).filter((c) => c.appUserId === me?.appUserId);
   const mySentFb = (hrData?.feedback ?? []).filter((f) => !!me && f.author === me.name);
   const myExit = (hrData?.exits ?? []).filter((x) => x.appUserId === me?.appUserId).sort((a, b) => (a.state === "in_progress" ? -1 : 1) - (b.state === "in_progress" ? -1 : 1))[0];
@@ -138,8 +154,8 @@ export default function StaffPortalView() {
         </div>
         <div className="actions">
           {(tab === "sp-me" || tab === "sp-leave") && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
-          {tab === "sp-perf" && selfOpen && <button className="btn primary" onClick={() => submitSelfAssessment(myAppraisal.id)}>Submit self-assessment</button>}
-          {tab === "sp-files" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
+          {tab === "sp-perf" && selfOpen && <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>}
+          {tab === "sp-certs" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
           {tab === "sp-fb" && <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />New feedback</button>}
         </div>
       </div>
@@ -259,18 +275,29 @@ export default function StaffPortalView() {
                 </div>
               </div>
               <div style={{ padding: "0 18px 6px", fontSize: 12, color: "var(--ink-soft)" }}>
-                Your KPIs were agreed at the start of the cycle and can’t be changed now. {selfOpen ? "Mark each one you met; your manager sees your rating alongside their own." : myAppraisal.stage === "manager" ? "Your self-assessment is with your manager." : "The review is signed off and locked to your staff file."}
+                Your KPIs were agreed at the start of the cycle and can’t be changed now. {selfOpen ? "Mark each one you met; your manager rates the same KPIs independently." : myAppraisal.stage === "manager" ? "Your self-assessment is with your manager." : "The review is signed off — your manager's rating now shows beside yours, and the record is locked to your staff file."}
               </div>
               <div style={{ padding: "4px 18px 8px" }}>
                 {myAppraisal.kpis.map((k, i) => (
                   <div key={k.k} onClick={() => selfOpen && selfAssessKpi(myAppraisal.id, i)} style={{ cursor: selfOpen ? "pointer" : "default" }}>
-                    <Check done={k.met}>{k.k}</Check>
+                    <Check done={k.selfMet}>
+                      <span style={{ flex: 1, minWidth: 0 }}>{k.k}</span>
+                      {myAppraisal.stage === "signed_off" && (
+                        <span style={{
+                          fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 600, padding: "2px 6px", borderRadius: 5, flexShrink: 0, whiteSpace: "nowrap",
+                          background: k.met ? "var(--green-soft)" : "var(--ember-soft)", color: k.met ? "var(--green)" : "var(--ember)",
+                        }}>
+                          Manager {k.met ? "✓" : "✗"}
+                        </span>
+                      )}
+                    </Check>
                   </div>
                 ))}
               </div>
               {selfOpen && (
                 <div style={{ padding: "0 18px 16px" }}>
-                  <button className="btn primary" onClick={() => submitSelfAssessment(myAppraisal.id)}>Submit self-assessment</button>
+                  <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>
+                  {!selfRated && <span className="meta" style={{ marginLeft: 10 }}>tick at least one KPI to send</span>}
                 </div>
               )}
             </div>
@@ -285,7 +312,7 @@ export default function StaffPortalView() {
               <div className="panel-h"><h3>Previous cycles</h3><span className="meta">signed off</span></div>
               {prevAppraisals.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Past reviews will build up here cycle by cycle.</div>}
               {prevAppraisals.map((a) => (
-                <div className="recon" key={a.id}><span>{a.cycle}</span><span className={`pill ${a.stage === "signed_off" ? "done" : "today"}`} style={{ textTransform: "none" }}>{a.kpis.filter((k) => k.met).length} / {a.kpis.length} KPIs{a.stage === "signed_off" ? " · signed off" : ""}</span></div>
+                <div className="recon" key={a.id}><span>{a.cycle}</span><span className={`pill ${a.stage === "signed_off" ? "done" : "today"}`} style={{ textTransform: "none" }}>{a.kpis.filter((k) => k.met).length} / {a.kpis.length} met{a.stage === "signed_off" ? " · signed off" : ""}</span></div>
               ))}
             </div>
             <div className="panel">
@@ -339,16 +366,34 @@ export default function StaffPortalView() {
             </div>
             <Note>What you pick as the <strong>file type</strong> decides what happens next — a certificate goes for verification, a statutory document unblocks payroll, a sick note attaches to a leave request. Nothing here is visible to anyone but you and HR.</Note>
           </div>
+        </div>
+      )}
+
+      {tab === "sp-certs" && (
+        <div className="hr-panel active">
           <div className="panel">
-            <div className="panel-h"><h3>My certifications</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "myCert" }); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add certification</a></span></div>
-            {myCerts.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No certifications yet — add one and HR verifies it onto your file.</div>}
-            {myCerts.map((c) => (
-              <div className="recon" key={c.id}>
-                <span>{c.name}<span className="meta" style={{ marginLeft: 8 }}>{c.issuer || "—"}{c.expiry ? ` · expires ${fmtD(c.expiry)} ${c.expiry.slice(0, 4)}` : ""}</span></span>
-                {c.state === "verified" ? <span className="rcv ok">verified</span> : c.state === "pending" ? <span className="pill today" style={{ textTransform: "none" }}>Awaiting HR</span> : <span className="rcv no">rejected</span>}
-              </div>
-            ))}
-            <Note>Verified certifications join skills coverage and show in HR's register.</Note>
+            <div className="panel-h"><h3>My certificates</h3><span className="meta">{myCerts.length} on file · you upload, HR verifies</span></div>
+            {myCerts.length === 0 ? (
+              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No certificates yet — click <strong>Add certification</strong> above to upload one. HR verifies it onto your file, and any certificate HR adds for you shows up here too.</div>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Certification</th><th>Issuer</th><th>Expiry</th><th>Certificate</th><th>Status</th></tr></thead>
+                <tbody>
+                  {myCerts.map((c) => (
+                    <tr key={c.id}>
+                      <td><strong>{c.name}</strong></td>
+                      <td style={{ fontSize: 12.5 }}>{c.issuer || "—"}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{c.expiry ? `${fmtD(c.expiry)} ${c.expiry.slice(0, 4)}` : "—"}</td>
+                      <td>{c.docPath
+                        ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(c.docPath!)}>View</button>
+                        : <span className="meta">no file</span>}</td>
+                      <td>{c.state === "verified" ? <span className="rcv ok">verified</span> : c.state === "pending" ? <span className="pill today" style={{ textTransform: "none" }}>Awaiting HR</span> : <span className="rcv no">rejected</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <Note>Upload the actual certificate — HR opens the file to verify it. Verified certifications join skills coverage and show in HR's register. Certificates HR uploads for you appear here automatically.</Note>
           </div>
         </div>
       )}
@@ -394,22 +439,38 @@ export default function StaffPortalView() {
               <div className="panel" style={{ marginBottom: 18 }}>
                 <div className="panel-h"><h3>Leaving Ignis — {myExit.ref}</h3><span className="meta">{myExit.reason || "—"}{myExit.finalDay ? ` · final day ${fmtD(myExit.finalDay)}` : ""}</span></div>
                 <div className="pad">
-                  <div className="steps">
-                    <div className="step done"><span className="sdot">✓</span>Notice given</div><div className="step-arrow" />
-                    <div className={`step ${myExit.state === "cleared" ? "done" : exitDone < 4 ? "now" : "done"}`}><span className="sdot">2</span>Handover &amp; property</div><div className="step-arrow" />
-                    <div className={`step ${myExit.state === "cleared" ? "done" : exitDone >= 4 ? "now" : ""}`}><span className="sdot">3</span>Exit interview</div><div className="step-arrow" />
-                    <div className={`step ${myExit.state === "cleared" ? "done" : ""}`}><span className="sdot">4</span>Final clearance</div>
-                  </div>
+                  <ExitSteps exit={myExit} />
                 </div>
-                <div style={{ padding: "0 18px 14px", fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.55 }}>This replaces the paper exit form. You complete your parts; your supervisor, IT, Finance and HR complete theirs. When every clearance is signed off, your certificate of service, final payslip and P9 appear below for download.</div>
+                <div style={{ padding: "0 18px 14px", fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.55 }}>
+                  {myExit.state === "cleared"
+                    ? <>Fully cleared. <strong style={{ color: "var(--ink)" }}>Your access closes {myExit.accessUntil ? fmtDT(myExit.accessUntil) : "24 hours after clearance"}</strong> — download your documents below before then. After that your account is suspended and this login stops working.</>
+                    : <>This replaces the paper exit form. Tick your own parts — supervisor handover and returned assets. IT, Finance and HR sign theirs in Offboarding &amp; Exit. When every area is signed off, your certificate of service, final payslip and P9 appear below, and your access closes 24 hours later.</>}
+                </div>
               </div>
               <div className="grid g-2">
                 <div className="panel">
                   <div className="panel-h"><h3>Clearance progress</h3><span className="meta">{exitDone} of {myExit.clearance.length} signed off</span></div>
                   <div className="pad" style={{ paddingTop: 6 }}>
-                    {myExit.clearance.map((c) => <Check key={c.area} done={c.done}>{c.area}</Check>)}
+                    {myExit.clearance.map((c, i) => {
+                      const mine = c.owner === "staff" && myExit.state === "in_progress";
+                      return (
+                        <div key={c.area} onClick={() => mine && signMyExitStep(myExit.ref, i)} style={{ cursor: mine ? "pointer" : "default" }}>
+                          <Check done={c.done}>
+                            <span style={{ flex: 1, minWidth: 0 }}>{c.area}</span>
+                            <span style={{
+                              fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 600, padding: "2px 6px", borderRadius: 5, flexShrink: 0, whiteSpace: "nowrap",
+                              ...(c.owner === "staff"
+                                ? { background: "var(--flame-soft)", color: "var(--flame)" }
+                                : { background: "#F1EDE5", color: "var(--ink-faint)" }),
+                            }}>
+                              {c.owner === "staff" ? "you tick this" : "signed by owner"}
+                            </span>
+                          </Check>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <Note>Each area is signed off in HR's Offboarding &amp; Exit by the function that owns it.</Note>
+                  <Note>Your two areas — supervisor handover and assets returned — are yours to tick. The rest are signed off in HR's Offboarding &amp; Exit by the function that owns each one.</Note>
                 </div>
                 <div className="panel">
                   <div className="panel-h"><h3>My exit documents</h3><span className="meta">released on final clearance</span></div>

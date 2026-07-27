@@ -19,7 +19,7 @@ export function LoginGate() {
     setBusy(true);
     setErr(null);
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    if (error) setErr(error.message);
+    if (error) setErr(/banned/i.test(error.message) ? "This account is closed — your exit was finalised. Contact HR if you think this is wrong." : error.message);
     setBusy(false);
   }
 

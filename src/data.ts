@@ -496,6 +496,23 @@ export const contractTypes = [
 export const hrDepartments = ["Operations", "Finance", "Partnerships", "Commercial / BD", "Tech", "Leadership", "Field"];
 export const candidateStages = ["applied", "screened", "interviewed", "offer", "hired", "rejected"];
 
+// Recruitment posting criteria (shared by the HR modal and the public careers page)
+export const employmentTypes = [
+  { value: "permanent", label: "Permanent" },
+  { value: "fixed_term", label: "Fixed-term" },
+  { value: "contract", label: "Contract" },
+  { value: "casual", label: "Casual" },
+];
+export const educationLevels = [
+  { value: "none", label: "No formal requirement" },
+  { value: "certificate", label: "Certificate" },
+  { value: "diploma", label: "Diploma" },
+  { value: "degree", label: "Degree" },
+  { value: "masters", label: "Master's" },
+];
+export const educationLabel = (v: string) => educationLevels.find((e) => e.value === v)?.label ?? v;
+export const employmentLabel = (v: string) => employmentTypes.find((e) => e.value === v)?.label ?? v;
+
 // Kenyan counties + a few common towns — powers the destination typeahead on dispatches.
 // Free-text is still allowed (e.g. "Makueni VTC cluster"); this just suggests real places.
 export const kenyaLocations = [

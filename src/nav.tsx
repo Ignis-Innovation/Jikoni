@@ -56,6 +56,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "sp-me", l: "This Month" },
     { t: "sp-leave", l: "My Leave" },
     { t: "sp-perf", l: "My Performance" },
+    { t: "sp-certs", l: "My Certificates" },
     { t: "sp-files", l: "My Files" },
     { t: "sp-fb", l: "Give Feedback" },
     { t: "sp-exit", l: "My Exit" },

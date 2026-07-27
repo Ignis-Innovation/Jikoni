@@ -5886,3 +5886,752 @@ begin
     execute format('grant execute on function public.%s to authenticated', fn);
   end loop;
 end $$;
+
+-- ======== supabase/migrations/0028_appraisal_self_vs_manager.sql ========
+-- ============================================================
+-- Jikoni — Appraisals: independent self vs manager ratings
+-- Until now HR (toggle_appraisal_kpi) and the employee
+-- (self_assess_kpi) flipped the SAME kpis[].met flag, so the two
+-- "independent" assessments overwrote each other. This migration
+-- splits them:
+--   * kpis[]        → [{k, met, self_met}]  met = manager, self_met = employee
+--   * self_assess_kpi now flips self_met
+--   * set_appraisal_kpis lets HR agree a custom KPI list while a
+--     review is still not_started (locks when self-assessment opens)
+--   * start_appraisal_cycle seeds self_met on the default template
+-- toggle_appraisal_kpi / advance_appraisal / submit_self_assessment
+-- are unchanged on purpose (manager may rate any time before
+-- sign-off; submitting an all-✗ self-assessment is legitimate).
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- backfill: give every existing kpi element a self_met ----------
+-- Copy met → self_met where the key is missing. Signed-off history must show
+-- the same outcome on both sides; in-flight rows get a forgiving baseline the
+-- manager can adjust before sign-off.
+update public.appraisals a
+set kpis = coalesce((
+      select jsonb_agg(e || jsonb_build_object('self_met',
+               coalesce((e->>'self_met')::boolean, (e->>'met')::boolean, false))
+             order by ord)
+      from jsonb_array_elements(a.kpis) with ordinality as t(e, ord)
+    ), '[]'::jsonb),
+    updated_at = now()
+where exists (select 1 from jsonb_array_elements(a.kpis) e where not (e ? 'self_met'));
+
+-- ---------- my appraisal: self-rating now writes self_met ----------
+create or replace function public.self_assess_kpi(p_id uuid, p_idx int)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  a record; v jsonb;
+begin
+  if v_me is null then raise exception 'No staff record is linked to this login'; end if;
+  select * into a from public.appraisals where id = p_id;
+  if not found then raise exception 'Appraisal not found'; end if;
+  if a.app_user_id <> v_me then raise exception 'This is not your review'; end if;
+  if a.stage not in ('not_started','self') then
+    raise exception 'Self-assessment is closed — the review is with your manager';
+  end if;
+  if p_idx < 0 or p_idx >= jsonb_array_length(a.kpis) then raise exception 'No KPI at position %', p_idx; end if;
+  v := jsonb_set(a.kpis, array[p_idx::text, 'self_met'],
+         to_jsonb(not coalesce((a.kpis -> p_idx ->> 'self_met')::boolean, false)));
+  update public.appraisals set kpis = v, stage = 'self', updated_at = now() where id = p_id;
+  return jsonb_build_object('id', p_id, 'kpis', v, 'stage', 'self');
+end $$;
+
+-- ---------- HR: agree the KPI list before self-assessment opens ----------
+-- Whole-list replace; ratings reset to false (nothing real exists yet at
+-- not_started). Locks the moment the employee starts rating, because
+-- self_assess_kpi moves the stage to 'self' on their first click.
+create or replace function public.set_appraisal_kpis(p_id uuid, p_kpis jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare a record; v jsonb; v_distinct int;
+begin
+  perform public.assert_access('hr', 2);
+  select ap.*, u.name as who into a from public.appraisals ap
+    join public.app_users u on u.id = ap.app_user_id where ap.id = p_id;
+  if not found then raise exception 'Appraisal not found'; end if;
+  if a.stage <> 'not_started' then
+    raise exception 'KPIs lock once self-assessment opens';
+  end if;
+  if p_kpis is null or jsonb_typeof(p_kpis) <> 'array' or jsonb_array_length(p_kpis) = 0 then
+    raise exception 'A review needs at least one KPI';
+  end if;
+  if jsonb_array_length(p_kpis) > 12 then raise exception 'Keep it under 12 KPIs'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object('k', t.k, 'met', false, 'self_met', false) order by t.ord), '[]'::jsonb),
+         count(distinct lower(t.k))
+    into v, v_distinct
+  from (select nullif(trim(e->>'k'),'') as k, ord
+        from jsonb_array_elements(p_kpis) with ordinality as x(e, ord)) t
+  where t.k is not null;
+  if jsonb_array_length(v) <> jsonb_array_length(p_kpis) or v_distinct <> jsonb_array_length(v) then
+    raise exception 'Each KPI needs a distinct, non-empty name';
+  end if;
+  update public.appraisals set kpis = v, updated_at = now() where id = p_id;
+  perform public.audit_write('hr.appraisal_kpis_set','appraisal', a.cycle,
+    jsonb_build_object('who', a.who, 'count', jsonb_array_length(v)));
+  return jsonb_build_object('id', p_id, 'kpis', v);
+end $$;
+
+-- ---------- cycle start: seed the template with both rating fields ----------
+create or replace function public.start_appraisal_cycle(p_cycle text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_md uuid := (select id from public.app_users where role_title = 'Managing Director' limit 1);
+  v_n int;
+begin
+  perform public.assert_access('hr', 3);
+  if nullif(trim(coalesce(p_cycle,'')),'') is null then raise exception 'A cycle needs a name, e.g. H1 2026'; end if;
+  insert into public.appraisals(entity_id, app_user_id, cycle, reviewer_id, kpis, stage)
+  select v_entity, sf.app_user_id, trim(p_cycle), v_md,
+    jsonb_build_array(
+      jsonb_build_object('k','Delivery against plan','met',false,'self_met',false),
+      jsonb_build_object('k','Quality & compliance','met',false,'self_met',false),
+      jsonb_build_object('k','Collaboration & culture','met',false,'self_met',false),
+      jsonb_build_object('k','Growth objective','met',false,'self_met',false)),
+    'not_started'
+  from public.staff_files sf
+  where sf.state = 'active'
+    and not exists (select 1 from public.appraisals a where a.app_user_id = sf.app_user_id and a.cycle = trim(p_cycle));
+  get diagnostics v_n = row_count;
+  perform public.audit_write('hr.appraisal_cycle_started','appraisal', trim(p_cycle), jsonb_build_object('opened', v_n));
+  return jsonb_build_object('cycle', trim(p_cycle), 'opened', v_n);
+end $$;
+
+-- ---------- grants (replaced functions keep theirs; only the new one needs this) ----------
+do $$ begin
+  revoke execute on function public.set_appraisal_kpis(uuid, jsonb) from public, anon;
+  grant execute on function public.set_appraisal_kpis(uuid, jsonb) to authenticated;
+end $$;
+
+-- ======== supabase/migrations/0029_exit_self_service_and_suspension.sql ========
+-- ============================================================
+-- Jikoni — Exit self-service + account suspension on clearance
+-- Two gaps closed:
+--   1. The departing employee could only WATCH the clearance list.
+--      Areas now carry an owner ('staff' | 'company'); the employee
+--      ticks their own two — Supervisor handover, Assets returned —
+--      from My Exit via sign_my_exit_step. HR can still tick all.
+--   2. Clearing an exit never closed access. sign_exit_step (and the
+--      self variant, if their tick is the last) now stamps
+--      cleared_at + access_until = now() + 24h. Once that grace
+--      window passes, enforce_exit_suspensions() offboards the user
+--      (reusing offboard_user: state exited, permissions zeroed,
+--      grants/invites revoked) and bans the auth login. The sweep is
+--      run opportunistically by my_access_state(), which every
+--      client calls at session load.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+alter table public.staff_exits add column if not exists cleared_at   timestamptz;
+alter table public.staff_exits add column if not exists access_until timestamptz;
+
+-- ---------- backfill: clearance areas gain an owner ----------
+update public.staff_exits x
+set clearance = coalesce((
+      select jsonb_agg(e || jsonb_build_object('owner',
+               case when e->>'area' in ('Supervisor handover','Assets returned')
+                    then 'staff' else 'company' end)
+             order by ord)
+      from jsonb_array_elements(x.clearance) with ordinality as t(e, ord)
+    ), '[]'::jsonb),
+    updated_at = now()
+where exists (select 1 from jsonb_array_elements(x.clearance) e where not (e ? 'owner'));
+
+-- ---------- start_exit: seed areas with owners ----------
+create or replace function public.start_exit(
+  p_person text, p_reason text default null, p_final_day date default null, p_staff_no text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_user uuid; v_role text; v_ref text;
+begin
+  perform public.assert_access('hr', 2);
+  if nullif(trim(coalesce(p_person,'')),'') is null then raise exception 'An exit needs a person'; end if;
+  if p_staff_no is not null then
+    select sf.app_user_id, u.role_title into v_user, v_role
+    from public.staff_files sf join public.app_users u on u.id = sf.app_user_id
+    where sf.staff_no = p_staff_no;
+    if v_user is not null and exists (select 1 from public.staff_exits where app_user_id = v_user and state = 'in_progress') then
+      raise exception '% already has an exit in progress', p_person;
+    end if;
+  end if;
+  v_ref := public.next_ref('EXT');
+  insert into public.staff_exits(ref, entity_id, app_user_id, person, role_title, reason, final_day, clearance, state)
+  values (v_ref, v_entity, v_user, trim(p_person), v_role, nullif(trim(coalesce(p_reason,'')),''), p_final_day,
+    jsonb_build_array(
+      jsonb_build_object('area','Supervisor handover','done',false,'owner','staff'),
+      jsonb_build_object('area','IT — access & equipment','done',false,'owner','company'),
+      jsonb_build_object('area','Finance — advances & floats','done',false,'owner','company'),
+      jsonb_build_object('area','Assets returned','done',false,'owner','staff'),
+      jsonb_build_object('area','HR — documents & exit interview','done',false,'owner','company'),
+      jsonb_build_object('area','Final pay computed','done',false,'owner','company'),
+      jsonb_build_object('area','Certificate of service issued','done',false,'owner','company')),
+    'in_progress');
+  perform public.audit_write('hr.exit_started','exit', v_ref,
+    jsonb_build_object('person', p_person, 'reason', p_reason, 'finalDay', p_final_day));
+  return jsonb_build_object('id', v_ref, 'person', p_person);
+end $$;
+
+-- ---------- HR signs any area; full clearance starts the 24h clock ----------
+create or replace function public.sign_exit_step(p_ref text, p_idx int)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare x record; v jsonb; v_all boolean;
+begin
+  perform public.assert_access('hr', 2);
+  select * into x from public.staff_exits where ref = p_ref;
+  if not found then raise exception 'Exit % not found', p_ref; end if;
+  if x.state = 'cleared' then raise exception '% is fully cleared already', p_ref; end if;
+  if p_idx < 0 or p_idx >= jsonb_array_length(x.clearance) then raise exception 'No clearance area at position %', p_idx; end if;
+  v := jsonb_set(x.clearance, array[p_idx::text, 'done'], to_jsonb(not coalesce((x.clearance -> p_idx ->> 'done')::boolean, false)));
+  v_all := not exists (select 1 from jsonb_array_elements(v) e where not coalesce((e ->> 'done')::boolean, false));
+  update public.staff_exits
+     set clearance = v, state = case when v_all then 'cleared' else 'in_progress' end,
+         cleared_at   = case when v_all then now() else cleared_at end,
+         access_until = case when v_all then now() + interval '24 hours' else access_until end,
+         updated_at = now()
+   where ref = p_ref;
+  if v_all then
+    if x.app_user_id is not null then
+      update public.staff_files set state = 'exited', updated_at = now() where app_user_id = x.app_user_id;
+    end if;
+    perform public.audit_write('hr.exit_cleared','exit', p_ref,
+      jsonb_build_object('person', x.person, 'certificateOfService', true, 'accessCloses', now() + interval '24 hours'));
+  end if;
+  return jsonb_build_object('id', p_ref, 'clearance', v, 'state', case when v_all then 'cleared' else 'in_progress' end);
+end $$;
+
+-- ---------- the departing employee ticks their own areas ----------
+create or replace function public.sign_my_exit_step(p_ref text, p_idx int)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  x record; v jsonb; v_all boolean;
+begin
+  if v_me is null then raise exception 'No staff record is linked to this login'; end if;
+  select * into x from public.staff_exits where ref = p_ref;
+  if not found then raise exception 'Exit % not found', p_ref; end if;
+  if x.app_user_id is distinct from v_me then raise exception 'This is not your exit'; end if;
+  if x.state = 'cleared' then raise exception 'Your exit is fully cleared already'; end if;
+  if p_idx < 0 or p_idx >= jsonb_array_length(x.clearance) then raise exception 'No clearance area at position %', p_idx; end if;
+  if coalesce(x.clearance -> p_idx ->> 'owner', 'company') <> 'staff' then
+    raise exception '"%" is signed off by the function that owns it — you can only tick your own parts', x.clearance -> p_idx ->> 'area';
+  end if;
+  v := jsonb_set(x.clearance, array[p_idx::text, 'done'], to_jsonb(not coalesce((x.clearance -> p_idx ->> 'done')::boolean, false)));
+  v_all := not exists (select 1 from jsonb_array_elements(v) e where not coalesce((e ->> 'done')::boolean, false));
+  update public.staff_exits
+     set clearance = v, state = case when v_all then 'cleared' else 'in_progress' end,
+         cleared_at   = case when v_all then now() else cleared_at end,
+         access_until = case when v_all then now() + interval '24 hours' else access_until end,
+         updated_at = now()
+   where ref = p_ref;
+  perform public.audit_write('hr.exit_step_self_signed','exit', p_ref,
+    jsonb_build_object('person', x.person, 'area', x.clearance -> p_idx ->> 'area'));
+  if v_all then
+    update public.staff_files set state = 'exited', updated_at = now() where app_user_id = x.app_user_id;
+    perform public.audit_write('hr.exit_cleared','exit', p_ref,
+      jsonb_build_object('person', x.person, 'certificateOfService', true, 'accessCloses', now() + interval '24 hours'));
+  end if;
+  return jsonb_build_object('id', p_ref, 'clearance', v, 'state', case when v_all then 'cleared' else 'in_progress' end);
+end $$;
+
+-- ---------- suspend accounts whose 24h grace has passed ----------
+-- Reuses offboard_user (state exited, permissions zeroed, grants + invites
+-- revoked) under the system-action bypass, then bans the auth login so the
+-- password stops working. Auth-schema access is attempted best-effort — the
+-- app-side block holds even if that update is not permitted.
+create or replace function public.enforce_exit_suspensions()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r record; v_n int := 0;
+begin
+  for r in
+    select x.ref, u.id as uid, u.auth_id, u.email, u.name
+    from public.staff_exits x
+    join public.app_users u on u.id = x.app_user_id
+    where x.state = 'cleared' and x.access_until is not null and x.access_until < now()
+      and u.state <> 'exited'
+  loop
+    perform set_config('jikoni.system_action', 'true', true);
+    perform public.offboard_user(r.email);
+    perform set_config('jikoni.system_action', 'false', true);
+    if r.auth_id is not null then
+      begin
+        update auth.users set banned_until = timestamptz '2999-12-31' where id = r.auth_id;
+      exception when others then
+        perform public.audit_write('user.suspend_auth_ban_failed','user', r.email, jsonb_build_object('error', sqlerrm));
+      end;
+    end if;
+    perform public.audit_write('user.suspended_after_exit','user', r.email,
+      jsonb_build_object('name', r.name, 'exit', r.ref));
+    v_n := v_n + 1;
+  end loop;
+  return jsonb_build_object('suspended', v_n);
+end $$;
+
+-- ---------- the client's session gate: sweep, then report my state ----------
+create or replace function public.my_access_state()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me record;
+  v_until timestamptz;
+begin
+  perform public.enforce_exit_suspensions();
+  select u.id, u.state into v_me from public.app_users u where u.auth_id = auth.uid();
+  if v_me.id is null then return jsonb_build_object('state', 'unlinked'); end if;
+  select x.access_until into v_until
+  from public.staff_exits x
+  where x.app_user_id = v_me.id and x.state = 'cleared'
+  order by x.cleared_at desc nulls last limit 1;
+  return jsonb_build_object('state', v_me.state, 'accessUntil', v_until);
+end $$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'sign_my_exit_step(text,int)','enforce_exit_suspensions()','my_access_state()']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+-- ======== supabase/migrations/0030_cancel_exit.sql ========
+-- ============================================================
+-- Jikoni — Cancel a mistaken exit
+-- An exit can be started (or even cleared) by mistake. cancel_exit
+-- removes the exit record and undoes its side effects: the staff
+-- file returns to active, and if the 24h grace had already passed
+-- (account offboarded + auth banned by 0029), the person is
+-- reinstated and the login unbanned. Module permissions zeroed by
+-- offboard_user are NOT restorable automatically — re-grant those
+-- in User Management.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- reinstatement becomes a legal transition for both records (were one-way active → exited)
+insert into public.record_transitions(record_type, from_state, to_state)
+select v.record_type, v.from_state, v.to_state
+from (values ('app_user','exited','active'), ('staff','exited','active')) as v(record_type, from_state, to_state)
+where not exists (select 1 from public.record_transitions r
+                  where r.record_type = v.record_type and r.from_state = v.from_state and r.to_state = v.to_state);
+
+create or replace function public.cancel_exit(p_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare x record; u record; v_reinstated boolean := false;
+begin
+  perform public.assert_access('hr', 2);
+  select * into x from public.staff_exits where ref = p_ref;
+  if not found then raise exception 'Exit % not found', p_ref; end if;
+  if x.app_user_id is not null then
+    update public.staff_files set state = 'active', updated_at = now()
+     where app_user_id = x.app_user_id and state = 'exited';
+    select * into u from public.app_users where id = x.app_user_id;
+    if u.state = 'exited' then
+      update public.app_users set state = 'active', status = 'active', updated_at = now() where id = u.id;
+      v_reinstated := true;
+      if u.auth_id is not null then
+        begin
+          update auth.users set banned_until = null where id = u.auth_id;
+        exception when others then
+          perform public.audit_write('user.unban_failed','user', u.email, jsonb_build_object('error', sqlerrm));
+        end;
+      end if;
+    end if;
+  end if;
+  delete from public.staff_exits where ref = p_ref;
+  perform public.audit_write('hr.exit_cancelled','exit', p_ref,
+    jsonb_build_object('person', x.person, 'wasState', x.state, 'reinstated', v_reinstated));
+  return jsonb_build_object('id', p_ref, 'person', x.person, 'reinstated', v_reinstated);
+end $$;
+
+do $$ begin
+  revoke execute on function public.cancel_exit(text) from public, anon;
+  grant execute on function public.cancel_exit(text) to authenticated;
+end $$;
+
+-- ======== supabase/migrations/0031_certification_files.sql ========
+-- ============================================================
+-- Jikoni — Certificate files
+-- Certifications could only be recorded by name; you couldn't attach
+-- the actual certificate. Now both sides upload the file:
+--   * staff, from the Staff Portal "My Certificates" tab
+--   * HR, when adding a certification to a staff file
+-- The PDF/image lives in the existing private 'staff-documents'
+-- bucket under the HOLDER's <app_user_id>/certifications/ prefix, so
+-- the employee (own prefix) and HR (module read) can both open it.
+-- HR gains write access into any staff prefix so it can upload on a
+-- person's behalf. certifications.doc_path stores the object path.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+alter table public.certifications add column if not exists doc_path text;
+
+-- ---------- storage: let HR write into any staff prefix ----------
+-- (owner-prefix write already exists from 0016; this adds an HR-scoped
+--  permissive policy so HR can upload a certificate for someone else)
+do $$
+begin
+  drop policy if exists "staff docs hr insert" on storage.objects;
+  drop policy if exists "staff docs hr update" on storage.objects;
+
+  create policy "staff docs hr insert" on storage.objects
+    for insert to authenticated with check (
+      bucket_id = 'staff-documents' and exists (
+        select 1 from public.user_permissions up
+        join public.app_users u on u.email = up.email
+        where u.auth_id = auth.uid() and up.module = 'hr' and up.level >= 2));
+  create policy "staff docs hr update" on storage.objects
+    for update to authenticated using (
+      bucket_id = 'staff-documents' and exists (
+        select 1 from public.user_permissions up
+        join public.app_users u on u.email = up.email
+        where u.auth_id = auth.uid() and up.module = 'hr' and up.level >= 2));
+exception when others then
+  raise notice 'staff-documents HR write policy setup skipped: %', sqlerrm;
+end $$;
+
+-- ---------- HR adds a certification, optionally with the file ----------
+drop function if exists public.add_certification(text, text, text, date, text, boolean);
+create or replace function public.add_certification(
+  p_holder text, p_name text, p_issuer text default null, p_expiry date default null,
+  p_staff_no text default null, p_verified boolean default false, p_doc_path text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_user uuid; v_id uuid;
+begin
+  perform public.assert_access('hr', 2);
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'A certification needs a name'; end if;
+  if nullif(trim(coalesce(p_holder,'')),'') is null then raise exception 'A certification needs a holder'; end if;
+  if p_staff_no is not null then
+    select app_user_id into v_user from public.staff_files where staff_no = p_staff_no;
+  end if;
+  insert into public.certifications(entity_id, app_user_id, holder, name, issuer, expiry, state, doc_path)
+  values (v_entity, v_user, trim(p_holder), trim(p_name), nullif(trim(coalesce(p_issuer,'')),''), p_expiry,
+          case when p_verified then 'verified' else 'pending' end, nullif(trim(coalesce(p_doc_path,'')),''))
+  returning id into v_id;
+  perform public.audit_write('hr.certification_added','staff', coalesce(p_staff_no, trim(p_holder)),
+    jsonb_build_object('name', p_name, 'issuer', p_issuer, 'state', case when p_verified then 'verified' else 'pending' end, 'file', p_doc_path is not null));
+  return jsonb_build_object('id', v_id, 'holder', p_holder, 'name', p_name);
+end $$;
+
+-- ---------- staff submit their own certification, optionally with the file ----------
+drop function if exists public.submit_my_certification(text, text, date);
+create or replace function public.submit_my_certification(
+  p_name text, p_issuer text default null, p_expiry date default null, p_doc_path text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_name text; v_id uuid;
+begin
+  if v_me is null then raise exception 'No staff record is linked to this login'; end if;
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'A certification needs a name'; end if;
+  select name into v_name from public.app_users where id = v_me;
+  insert into public.certifications(entity_id, app_user_id, holder, name, issuer, expiry, state, doc_path)
+  values (v_entity, v_me, v_name, trim(p_name), nullif(trim(coalesce(p_issuer,'')),''), p_expiry, 'pending',
+          nullif(trim(coalesce(p_doc_path,'')),''))
+  returning id into v_id;
+  perform public.audit_write('hr.certification_submitted','staff', v_name,
+    jsonb_build_object('name', p_name, 'issuer', p_issuer, 'file', p_doc_path is not null));
+  return jsonb_build_object('id', v_id, 'name', p_name, 'state', 'pending');
+end $$;
+
+-- ---------- grants for the new signatures ----------
+do $$ begin
+  revoke execute on function public.add_certification(text, text, text, date, text, boolean, text) from public, anon;
+  grant  execute on function public.add_certification(text, text, text, date, text, boolean, text) to authenticated;
+  revoke execute on function public.submit_my_certification(text, text, date, text) from public, anon;
+  grant  execute on function public.submit_my_certification(text, text, date, text) to authenticated;
+end $$;
+
+-- ======== supabase/migrations/0032_recruitment_public_applications.sql ========
+-- ============================================================
+-- Jikoni — Recruitment: public job board + auto-ranked applicants
+-- Until now HR could only type candidates into a pipeline by hand.
+-- This turns a requisition into a publishable job posting with stated
+-- criteria (required skills / minimum years / education), advertises it
+-- on a PUBLIC careers page (no login), lets anyone apply with a CV, and
+-- auto-scores every application against the criteria so HR sees the
+-- total applicant count and an auto-ranked shortlist (top N, configurable).
+--
+-- Reuses the existing recruitment_reqs + candidates tables (extended,
+-- not replaced) so the current Recruitment tab and Staff Portal keep
+-- working. Follows house conventions: security definer RPCs, next_ref,
+-- audit_write, storage policies shaped like 0031. Idempotent.
+-- ============================================================
+
+-- ---------- posting criteria on the requisition ----------
+alter table public.recruitment_reqs add column if not exists description     text;
+alter table public.recruitment_reqs add column if not exists location        text;
+alter table public.recruitment_reqs add column if not exists employment_type text not null default 'permanent';
+alter table public.recruitment_reqs add column if not exists req_skills      jsonb not null default '[]'::jsonb;
+alter table public.recruitment_reqs add column if not exists min_years       numeric not null default 0;
+alter table public.recruitment_reqs add column if not exists min_education   text not null default 'none';
+alter table public.recruitment_reqs add column if not exists shortlist_size  int not null default 4;
+alter table public.recruitment_reqs add column if not exists published       boolean not null default false;
+alter table public.recruitment_reqs add column if not exists published_at    timestamptz;
+alter table public.recruitment_reqs add column if not exists closes_at       date;
+
+-- ---------- application detail on the candidate ----------
+alter table public.candidates add column if not exists phone       text;
+alter table public.candidates add column if not exists years_exp   numeric not null default 0;
+alter table public.candidates add column if not exists skills      jsonb not null default '[]'::jsonb;
+alter table public.candidates add column if not exists education   text not null default 'none';
+alter table public.candidates add column if not exists cv_path     text;
+alter table public.candidates add column if not exists source      text not null default 'hr';
+alter table public.candidates add column if not exists eligibility int not null default 0;
+
+-- ============================================================
+-- Scoring: 55% skills · 30% experience · 15% education → 0..100
+-- ============================================================
+create or replace function public.score_application(
+  p_req uuid, p_skills jsonb, p_years numeric, p_education text
+) returns int
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_req_skills text[]; v_app_skills text[];
+  v_min_years numeric; v_min_edu text;
+  v_total int; v_matched int;
+  v_skill numeric; v_exp numeric; v_edu numeric;
+  v_rank_req int; v_rank_app int;
+begin
+  select
+    coalesce(array(select lower(trim(x)) from jsonb_array_elements_text(coalesce(req_skills,'[]'::jsonb)) x), '{}'),
+    coalesce(min_years, 0),
+    coalesce(min_education, 'none')
+  into v_req_skills, v_min_years, v_min_edu
+  from public.recruitment_reqs where id = p_req;
+
+  v_app_skills := coalesce(array(select lower(trim(x)) from jsonb_array_elements_text(coalesce(p_skills,'[]'::jsonb)) x), '{}');
+
+  -- skills: share of required skills the applicant lists
+  v_total := coalesce(array_length(v_req_skills, 1), 0);
+  if v_total = 0 then
+    v_skill := 100;
+  else
+    select count(*) into v_matched from unnest(v_req_skills) rs where rs = any (v_app_skills);
+    v_skill := round(v_matched::numeric / v_total * 100);
+  end if;
+
+  -- experience: capped ratio against the minimum
+  if v_min_years <= 0 then
+    v_exp := 100;
+  else
+    v_exp := least(100, round(coalesce(p_years, 0) / v_min_years * 100));
+  end if;
+
+  -- education: meets-or-exceeds the required level → full marks
+  v_rank_req := case v_min_edu           when 'certificate' then 1 when 'diploma' then 2 when 'degree' then 3 when 'masters' then 4 else 0 end;
+  v_rank_app := case lower(coalesce(p_education,'none')) when 'certificate' then 1 when 'diploma' then 2 when 'degree' then 3 when 'masters' then 4 else 0 end;
+  if v_rank_req = 0 or v_rank_app >= v_rank_req then
+    v_edu := 100;
+  else
+    v_edu := round(v_rank_app::numeric / v_rank_req * 100);
+  end if;
+
+  return round(0.55 * v_skill + 0.30 * v_exp + 0.15 * v_edu);
+end $$;
+
+-- Is a posting live? security definer so the public/storage layer can check
+-- without a read policy on recruitment_reqs.
+create or replace function public.is_published_job(p_ref text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.recruitment_reqs where ref = p_ref and published = true);
+$$;
+
+-- ============================================================
+-- Public (anon) surface — list live jobs + submit an application
+-- ============================================================
+create or replace function public.list_public_jobs()
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(j order by j->>'ref'), '[]'::jsonb) from (
+    select jsonb_build_object(
+      'ref', ref, 'roleTitle', role_title, 'dept', dept, 'location', location,
+      'employmentType', employment_type, 'description', description,
+      'reqSkills', coalesce(req_skills,'[]'::jsonb), 'minYears', min_years,
+      'minEducation', min_education, 'closesAt', closes_at
+    ) as j
+    from public.recruitment_reqs
+    where published = true and state not in ('filled','closed')
+  ) t;
+$$;
+
+create or replace function public.apply_to_job(
+  p_req_ref text, p_name text, p_email text, p_phone text default null,
+  p_years numeric default 0, p_skills jsonb default '[]'::jsonb,
+  p_education text default 'none', p_cv_path text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_req record; v_score int; v_id uuid;
+begin
+  select id, published, state into v_req from public.recruitment_reqs where ref = p_req_ref;
+  if v_req.id is null then raise exception 'Unknown job'; end if;
+  if not v_req.published or v_req.state in ('filled','closed') then
+    raise exception 'This role is not accepting applications';
+  end if;
+  if nullif(trim(coalesce(p_name,'')),'')  is null then raise exception 'Your name is required'; end if;
+  if nullif(trim(coalesce(p_email,'')),'') is null then raise exception 'Your email is required'; end if;
+
+  v_score := public.score_application(v_req.id, coalesce(p_skills,'[]'::jsonb), coalesce(p_years,0), coalesce(p_education,'none'));
+
+  insert into public.candidates(recruitment_id, name, email, phone, years_exp, skills, education, cv_path, source, stage, eligibility)
+  values (v_req.id, trim(p_name), lower(trim(p_email)), nullif(trim(coalesce(p_phone,'')),''),
+          coalesce(p_years,0), coalesce(p_skills,'[]'::jsonb), lower(coalesce(p_education,'none')),
+          nullif(trim(coalesce(p_cv_path,'')),''), 'public', 'applied', v_score)
+  returning id into v_id;
+
+  perform public.audit_write('hr.public_application','recruitment', p_req_ref,
+    jsonb_build_object('name', p_name, 'email', p_email));
+  return jsonb_build_object('ok', true);  -- score is deliberately not returned to the applicant
+end $$;
+
+-- ============================================================
+-- HR surface — edit criteria + publish (HR level 2)
+-- ============================================================
+create or replace function public.update_posting(
+  p_ref text, p_description text default null, p_location text default null,
+  p_employment_type text default 'permanent', p_req_skills jsonb default '[]'::jsonb,
+  p_min_years numeric default 0, p_min_education text default 'none',
+  p_shortlist_size int default 4, p_closes_at date default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_req uuid;
+begin
+  perform public.assert_access('hr', 2);
+  select id into v_req from public.recruitment_reqs where ref = p_ref;
+  if v_req is null then raise exception 'Unknown job: %', p_ref; end if;
+
+  update public.recruitment_reqs set
+    description     = nullif(trim(coalesce(p_description,'')),''),
+    location        = nullif(trim(coalesce(p_location,'')),''),
+    employment_type = coalesce(nullif(trim(p_employment_type),''),'permanent'),
+    req_skills      = coalesce(p_req_skills,'[]'::jsonb),
+    min_years       = greatest(0, coalesce(p_min_years,0)),
+    min_education   = coalesce(nullif(trim(p_min_education),''),'none'),
+    shortlist_size  = greatest(1, coalesce(p_shortlist_size,4)),
+    closes_at       = p_closes_at,
+    updated_at      = now()
+  where id = v_req;
+
+  -- keep the ranking honest when criteria change: re-score public applicants
+  update public.candidates c
+    set eligibility = public.score_application(v_req, c.skills, c.years_exp, c.education), updated_at = now()
+    where c.recruitment_id = v_req and c.source = 'public';
+
+  perform public.audit_write('hr.posting_updated','recruitment', p_ref,
+    jsonb_build_object('skills', p_req_skills, 'minYears', p_min_years, 'minEducation', p_min_education));
+  return jsonb_build_object('ref', p_ref);
+end $$;
+
+create or replace function public.publish_posting(p_ref text, p_published boolean)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_req uuid;
+begin
+  perform public.assert_access('hr', 2);
+  select id into v_req from public.recruitment_reqs where ref = p_ref;
+  if v_req is null then raise exception 'Unknown job: %', p_ref; end if;
+  update public.recruitment_reqs set
+    published    = coalesce(p_published, false),
+    published_at = case when p_published then coalesce(published_at, now()) else published_at end,
+    updated_at   = now()
+  where id = v_req;
+  perform public.audit_write('hr.posting_' || case when p_published then 'published' else 'unpublished' end,
+    'recruitment', p_ref, '{}'::jsonb);
+  return jsonb_build_object('ref', p_ref, 'published', coalesce(p_published, false));
+end $$;
+
+-- ---------- grants ----------
+do $$ begin
+  revoke execute on function public.is_published_job(text) from public;
+  grant  execute on function public.is_published_job(text) to anon, authenticated;
+  revoke execute on function public.list_public_jobs() from public;
+  grant  execute on function public.list_public_jobs() to anon, authenticated;
+  revoke execute on function public.apply_to_job(text,text,text,text,numeric,jsonb,text,text) from public;
+  grant  execute on function public.apply_to_job(text,text,text,text,numeric,jsonb,text,text) to anon, authenticated;
+  revoke execute on function public.update_posting(text,text,text,text,jsonb,numeric,text,int,date) from public, anon;
+  grant  execute on function public.update_posting(text,text,text,text,jsonb,numeric,text,int,date) to authenticated;
+  revoke execute on function public.publish_posting(text,boolean) from public, anon;
+  grant  execute on function public.publish_posting(text,boolean) to authenticated;
+end $$;
+
+-- ============================================================
+-- Storage: private 'job-applications' bucket for CV uploads
+--   path convention  <posting_ref>/<uuid>-<filename>
+--   anon may upload only under a live posting's ref; HR reads all.
+-- ============================================================
+do $$
+begin
+  insert into storage.buckets (id, name, public)
+  values ('job-applications', 'job-applications', false)
+  on conflict (id) do nothing;
+
+  drop policy if exists "job apps anon insert" on storage.objects;
+  drop policy if exists "job apps hr read"     on storage.objects;
+
+  create policy "job apps anon insert" on storage.objects
+    for insert to anon, authenticated with check (
+      bucket_id = 'job-applications' and public.is_published_job(split_part(name, '/', 1)));
+
+  create policy "job apps hr read" on storage.objects
+    for select to authenticated using (
+      bucket_id = 'job-applications' and exists (
+        select 1 from public.user_permissions up
+        join public.app_users u on u.email = up.email
+        where u.auth_id = auth.uid() and up.module = 'hr' and up.level >= 1));
+exception when others then
+  raise notice 'job-applications bucket/policy setup skipped: %', sqlerrm;
+end $$;
+
+-- ============================================================
+-- Demo seed — publish the existing RCR-101 with criteria and a pool of
+-- public applicants of varying fit, so the ranked shortlist demos live.
+-- (Idempotent: only fires while RCR-101 is still unpublished / no public
+--  applicants exist yet.)
+-- ============================================================
+update public.recruitment_reqs set
+  description     = 'Coordinate field data collection across our five focus counties — plan routes, manage enumerators, and quality-assure survey submissions.',
+  location        = 'Nairobi (with county travel)',
+  employment_type = 'fixed_term',
+  req_skills      = '["Data collection","KoboToolbox","Excel","Community engagement"]'::jsonb,
+  min_years       = 3,
+  min_education   = 'diploma',
+  shortlist_size  = 4,
+  closes_at       = (current_date + 30),
+  published       = true,
+  published_at    = coalesce(published_at, now())
+where ref = 'RCR-101' and published = false;
+
+insert into public.candidates(recruitment_id, name, email, phone, years_exp, skills, education, source, stage, eligibility)
+select r.id, v.name, v.email, v.phone, v.years, v.skills::jsonb, v.edu, 'public', 'applied',
+       public.score_application(r.id, v.skills::jsonb, v.years, v.edu)
+from public.recruitment_reqs r
+join (values
+  ('Aisha Otieno',  'aisha.otieno@example.co.ke',   '0700000001', 5, '["Data collection","KoboToolbox","Excel","Community engagement"]', 'degree'),
+  ('Brian Wanjiru', 'brian.wanjiru@example.co.ke',  '0700000002', 4, '["Data collection","KoboToolbox","Excel"]',                       'diploma'),
+  ('Cynthia Kamau', 'cynthia.kamau@example.co.ke',  '0700000003', 3, '["Data collection","Excel"]',                                     'diploma'),
+  ('David Achieng', 'david.achieng@example.co.ke',  '0700000004', 2, '["Community engagement","Excel"]',                                'degree'),
+  ('Esther Njoroge','esther.njoroge@example.co.ke', '0700000005', 1, '["Excel"]',                                                       'certificate'),
+  ('Felix Mutua',   'felix.mutua@example.co.ke',    '0700000006', 6, '["Data collection","KoboToolbox"]',                               'certificate')
+) as v(name, email, phone, years, skills, edu) on r.ref = 'RCR-101'
+where not exists (select 1 from public.candidates where source = 'public');
+
+-- ======== supabase/migrations/0033_cv_ai_screening.sql ========
+-- ============================================================
+-- Jikoni — Recruitment: AI CV screening
+-- Eligibility so far trusts only what the applicant typed into the form.
+-- This adds columns to hold an AI verdict: HR triggers a read of the actual
+-- uploaded CV (via the /api/screen-cv serverless function, which calls Claude),
+-- and the model reports whether the CV genuinely evidences the job's required
+-- skills / experience / education. The verdict is stored here so it shows,
+-- ranked, in the HR Recruitment view. Idempotent.
+-- ============================================================
+
+alter table public.candidates add column if not exists ai_verdict     text
+  check (ai_verdict in ('strong','possible','weak'));
+alter table public.candidates add column if not exists ai_summary     text;
+alter table public.candidates add column if not exists ai_checked     jsonb not null default '[]'::jsonb;  -- [{requirement, evidenced, note}]
+alter table public.candidates add column if not exists ai_concerns    jsonb not null default '[]'::jsonb;  -- [string]
+alter table public.candidates add column if not exists ai_screened_at timestamptz;

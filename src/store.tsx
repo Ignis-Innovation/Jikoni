@@ -48,16 +48,27 @@ export interface StaffRow {
 }
 export interface PayrollItemRow { name: string; gross: number; paye: number; nssf: number; shif: number; housing: number; net: number }
 export interface PayrollRun { ref: string; period: string; state: string; totals: { staff: number; gross: number; net: number } | null; items: PayrollItemRow[] }
-export interface CandidateRow { id: string; name: string; email: string | null; stage: string }
-export interface RecruitmentReq { ref: string; roleTitle: string; dept: string | null; state: string; candidates: CandidateRow[] }
+export interface AiCheck { requirement: string; evidenced: boolean; note: string }
+export interface CandidateRow {
+  id: string; name: string; email: string | null; stage: string;
+  phone: string | null; yearsExp: number; skills: string[]; education: string;
+  cvPath: string | null; source: string; eligibility: number;
+  aiVerdict: string | null; aiSummary: string | null; aiChecked: AiCheck[]; aiConcerns: string[]; aiScreenedAt: string | null;
+}
+export interface RecruitmentReq {
+  ref: string; roleTitle: string; dept: string | null; state: string; candidates: CandidateRow[];
+  description: string | null; location: string | null; employmentType: string;
+  reqSkills: string[]; minYears: number; minEducation: string;
+  shortlistSize: number; published: boolean; closesAt: string | null;
+}
 export interface EnumeratorRow { id: string; name: string; county: string | null; idNo: string | null; dailyRate: number; state: string }
 export interface FieldAssignmentRow { id: string; enumerator: string; county: string | null; project: string | null; period: string | null; days: number; perDiem: number; contractDoc: string | null; state: string }
-export interface AppraisalKpi { k: string; met: boolean }
+export interface AppraisalKpi { k: string; met: boolean; selfMet: boolean }
 export interface AppraisalRow { id: string; appUserId: string; who: string; roleTitle: string | null; reviewer: string; cycle: string; stage: string; kpis: AppraisalKpi[]; created: string }
-export interface CertificationRow { id: string; appUserId: string | null; holder: string; name: string; issuer: string | null; expiry: string | null; state: string }
+export interface CertificationRow { id: string; appUserId: string | null; holder: string; name: string; issuer: string | null; expiry: string | null; state: string; docPath: string | null }
 export interface FeedbackRow { ref: string; author: string | null; category: string | null; body: string; audience: string; state: string; created: string }
-export interface ExitStep { area: string; done: boolean }
-export interface ExitRow { ref: string; appUserId: string | null; person: string; roleTitle: string | null; reason: string | null; finalDay: string | null; clearance: ExitStep[]; state: string }
+export interface ExitStep { area: string; done: boolean; owner: "staff" | "company" }
+export interface ExitRow { ref: string; appUserId: string | null; person: string; roleTitle: string | null; reason: string | null; finalDay: string | null; clearance: ExitStep[]; state: string; clearedAt: string | null; accessUntil: string | null }
 export interface HrData {
   staff: StaffRow[];
   runs: PayrollRun[];
@@ -75,6 +86,7 @@ export type HrModalMode =
   | { kind: "staffProfile"; staff: StaffRow }
   | { kind: "requisition" }
   | { kind: "candidate"; reqRef: string }
+  | { kind: "postingDetail"; ref: string }
   | { kind: "enumerator" }
   | { kind: "assignment" }
   | { kind: "appraisal"; id: string }
@@ -216,27 +228,35 @@ interface AppApi {
   preparePayroll: (period: string) => void;
   approvePayroll: (ref: string) => void;
   postPayroll: (ref: string) => void;
-  createRecruitmentReq: (roleTitle: string, dept: string) => void;
+  createRecruitmentReq: (roleTitle: string, dept: string) => Promise<string | null>;
   addCandidate: (reqRef: string, name: string, email: string, stage: string) => void;
   advanceCandidate: (id: string, stage: string) => void;
+  updatePosting: (ref: string, v: { description: string; location: string; employmentType: string; reqSkills: string[]; minYears: number; minEducation: string; shortlistSize: number; closesAt: string }) => Promise<boolean>;
+  publishPosting: (ref: string, published: boolean) => void;
+  openCandidateCv: (path: string) => Promise<string | null>;
+  screenCandidateCv: (id: string, name: string) => Promise<boolean>;
   createEnumerator: (v: { name: string; county: string; idNo: string }) => void;
   createFieldAssignment: (v: { enumeratorId: string; project: string; period: string; days: number }) => void;
   setFieldAssignmentState: (id: string, state: string) => void;
   updateStaffHrProfile: (v: { staffNo: string; dept: string; contractEnd: string; nextOfKin: KinRow[] | null }) => void;
   startAppraisalCycle: (cycle: string) => void;
   toggleAppraisalKpi: (id: string, idx: number) => void;
+  setAppraisalKpis: (id: string, kpis: string[]) => void;
   advanceAppraisal: (id: string) => void;
-  addCertification: (v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean }) => void;
+  refreshHr: () => Promise<void>;
+  addCertification: (v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean; holderUserId?: string | null }, file?: File | null) => void;
   verifyCertification: (id: string, ok: boolean) => void;
   submitFeedback: (v: { body: string; category: string; audience: string; anonymous: boolean }) => void;
   setFeedbackState: (ref: string, state: string) => void;
   startExit: (v: { person: string; reason: string; finalDay: string; staffNo: string }) => void;
   signExitStep: (ref: string, idx: number) => void;
+  signMyExitStep: (ref: string, idx: number) => void;
+  cancelExit: (ref: string) => void;
   // Staff Portal self-service (me-scoped)
   meEmail: string | null;
   selfAssessKpi: (id: string, idx: number) => void;
   submitSelfAssessment: (id: string) => void;
-  submitMyCertification: (v: { name: string; issuer: string; expiry: string }) => void;
+  submitMyCertification: (v: { name: string; issuer: string; expiry: string }, file?: File | null) => void;
 
   crm: CrmData;
   engFormOpen: boolean;
@@ -496,13 +516,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       supabase.from("staff_files").select("app_user_id, staff_no, kra_pin, nssf_no, shif_no, contract_type, start_date, gross_salary, bank, docs, state, dept, contract_end, next_of_kin, app_users!staff_files_app_user_id_fkey(name, email, role_title, color, two_fa)"),
       supabase.from("leave_balances").select("app_user_id, entitled, used").eq("kind", "annual").eq("year", year),
       supabase.from("payroll_runs").select("ref, period, state, totals, payroll_items(gross, paye, nssf, shif, housing, net, app_users(name))").order("period", { ascending: false }),
-      supabase.from("recruitment_reqs").select("ref, role_title, dept, state, candidates(id, name, email, stage)").order("created_at"),
+      supabase.from("recruitment_reqs").select("ref, role_title, dept, state, description, location, employment_type, req_skills, min_years, min_education, shortlist_size, published, closes_at, candidates(id, name, email, stage, phone, years_exp, skills, education, cv_path, source, eligibility, ai_verdict, ai_summary, ai_checked, ai_concerns, ai_screened_at)").order("created_at"),
       supabase.from("enumerators").select("id, name, county, id_no, daily_rate, state").order("name"),
       supabase.from("field_assignments").select("id, project_name, period, days, per_diem, contract_doc, state, enumerators(name, county)").order("created_at", { ascending: false }),
       supabase.from("appraisals").select("id, app_user_id, cycle, stage, kpis, created_at, subject:app_users!appraisals_app_user_id_fkey(name, role_title), reviewer:app_users!appraisals_reviewer_id_fkey(name)").order("created_at"),
-      supabase.from("certifications").select("id, app_user_id, holder, name, issuer, expiry, state").order("created_at"),
+      supabase.from("certifications").select("id, app_user_id, holder, name, issuer, expiry, state, doc_path").order("created_at"),
       supabase.from("staff_feedback").select("ref, category, body, audience, state, created_at, author:app_users!staff_feedback_author_id_fkey(name)").order("created_at", { ascending: false }),
-      supabase.from("staff_exits").select("ref, app_user_id, person, role_title, reason, final_day, clearance, state").order("ref", { ascending: false }),
+      supabase.from("staff_exits").select("ref, app_user_id, person, role_title, reason, final_day, clearance, state, cleared_at, access_until").order("ref", { ascending: false }),
     ]);
     const err = sf.error || lb.error || pr.error || rc.error || en.error || fa.error || ap.error || ct.error || fb.error || ex.error;
     if (err) { toast("Couldn't load HR records", err.message); return; }
@@ -529,7 +549,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })),
       recruitment: (rc.data as any[]).map((r) => ({
         ref: r.ref, roleTitle: r.role_title, dept: r.dept, state: r.state,
-        candidates: (r.candidates ?? []).map((c: any) => ({ id: c.id, name: c.name, email: c.email, stage: c.stage })),
+        description: r.description ?? null, location: r.location ?? null, employmentType: r.employment_type ?? "permanent",
+        reqSkills: (r.req_skills ?? []) as string[], minYears: Number(r.min_years ?? 0), minEducation: r.min_education ?? "none",
+        shortlistSize: Number(r.shortlist_size ?? 4), published: !!r.published, closesAt: r.closes_at ?? null,
+        candidates: (r.candidates ?? []).map((c: any) => ({
+          id: c.id, name: c.name, email: c.email, stage: c.stage,
+          phone: c.phone ?? null, yearsExp: Number(c.years_exp ?? 0), skills: (c.skills ?? []) as string[],
+          education: c.education ?? "none", cvPath: c.cv_path ?? null, source: c.source ?? "hr", eligibility: Number(c.eligibility ?? 0),
+          aiVerdict: c.ai_verdict ?? null, aiSummary: c.ai_summary ?? null, aiChecked: (c.ai_checked ?? []) as AiCheck[],
+          aiConcerns: (c.ai_concerns ?? []) as string[], aiScreenedAt: c.ai_screened_at ?? null,
+        })),
       })),
       enumerators: (en.data as any[]).map((e) => ({ id: e.id, name: e.name, county: e.county, idNo: e.id_no, dailyRate: Number(e.daily_rate), state: e.state })),
       fieldAssignments: (fa.data as any[]).map((a) => ({
@@ -538,26 +567,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })),
       appraisals: (ap.data as any[]).map((a) => ({
         id: a.id, appUserId: a.app_user_id, who: a.subject?.name ?? "—", roleTitle: a.subject?.role_title ?? null, reviewer: a.reviewer?.name ?? "—",
-        cycle: a.cycle, stage: a.stage, kpis: (a.kpis ?? []) as AppraisalKpi[], created: a.created_at,
+        cycle: a.cycle, stage: a.stage, kpis: ((a.kpis ?? []) as any[]).map((k) => ({ k: k.k, met: !!k.met, selfMet: !!k.self_met })), created: a.created_at,
       })),
-      certifications: (ct.data as any[]).map((c) => ({ id: c.id, appUserId: c.app_user_id, holder: c.holder, name: c.name, issuer: c.issuer, expiry: c.expiry, state: c.state })),
+      certifications: (ct.data as any[]).map((c) => ({ id: c.id, appUserId: c.app_user_id, holder: c.holder, name: c.name, issuer: c.issuer, expiry: c.expiry, state: c.state, docPath: c.doc_path ?? null })),
       feedback: (fb.data as any[]).map((f) => ({
         ref: f.ref, author: f.author?.name ?? null, category: f.category, body: f.body,
         audience: f.audience, state: f.state, created: f.created_at,
       })),
       exits: (ex.data as any[]).map((x) => ({
         ref: x.ref, appUserId: x.app_user_id, person: x.person, roleTitle: x.role_title, reason: x.reason, finalDay: x.final_day,
-        clearance: (x.clearance ?? []) as ExitStep[], state: x.state,
+        clearance: ((x.clearance ?? []) as any[]).map((c) => ({ area: c.area, done: !!c.done, owner: c.owner === "staff" ? "staff" : "company" })),
+        state: x.state, clearedAt: x.cleared_at, accessUntil: x.access_until,
       })),
     });
   }
 
   useEffect(() => {
     if (!session) return;
-    loadFromDb();
-    loadHr();
-    loadLeaveQueue();
-    loadHrModule();
+    (async () => {
+      // sweep due suspensions, then gate: an exited account is signed out
+      // before any module data loads (their exit's 24h grace has passed)
+      const { data: acc } = await supabase.rpc("my_access_state");
+      if (acc?.state === "exited") {
+        toast("This account is closed", "Your exit was finalised — contact HR if you think this is wrong");
+        setTimeout(() => supabase.auth.signOut(), 1200);
+        return;
+      }
+      loadFromDb();
+      loadHr();
+      loadLeaveQueue();
+      loadHrModule();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
@@ -835,12 +875,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadHrModule();
     toast(`${ref} posted — ${data.journal}`, "Payroll journal in the GL; payment file generated; payslips visible in the Staff Portal");
   }
-  async function createRecruitmentReq(roleTitle: string, dept: string) {
+  // Opens a requisition and returns its ref so the caller can attach posting
+  // criteria (update_posting) and optionally publish, all in one flow.
+  async function createRecruitmentReq(roleTitle: string, dept: string): Promise<string | null> {
     const { data, error } = await supabase.rpc("create_recruitment_req", { p_role_title: roleTitle, p_dept: dept || null });
-    if (error) { toast("Requisition not created", error.message); return; }
-    setHrModal(null);
+    if (error) { toast("Requisition not created", error.message); return null; }
     await loadHrModule();
-    toast(`${data.id} opened`, `${roleTitle}${dept ? " · " + dept : ""} — add candidates to the pipeline`);
+    return (data as any)?.id ?? null;
   }
   async function addCandidate(reqRef: string, name: string, email: string, stage: string) {
     const { error } = await supabase.rpc("add_candidate", { p_req_ref: reqRef, p_name: name, p_email: email || null, p_stage: stage });
@@ -854,6 +895,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { toast("Couldn't move candidate", error.message); return; }
     await loadHrModule();
     toast("Candidate moved", `Now at "${stage}"`);
+  }
+  async function updatePosting(ref: string, v: {
+    description: string; location: string; employmentType: string; reqSkills: string[];
+    minYears: number; minEducation: string; shortlistSize: number; closesAt: string;
+  }) {
+    const { error } = await supabase.rpc("update_posting", {
+      p_ref: ref, p_description: v.description || null, p_location: v.location || null,
+      p_employment_type: v.employmentType, p_req_skills: v.reqSkills, p_min_years: v.minYears,
+      p_min_education: v.minEducation, p_shortlist_size: v.shortlistSize, p_closes_at: v.closesAt || null,
+    });
+    if (error) { toast("Posting not saved", error.message); return false; }
+    await loadHrModule();
+    return true;
+  }
+  async function publishPosting(ref: string, published: boolean) {
+    const { error } = await supabase.rpc("publish_posting", { p_ref: ref, p_published: published });
+    if (error) { toast("Couldn't update posting", error.message); return; }
+    await loadHrModule();
+    toast(published ? `${ref} published to careers` : `${ref} unpublished`,
+      published ? "Live on the public careers page — applications open" : "Removed from the public careers page");
+  }
+  // CV scan — reads the actual CV text and checks it against the job criteria.
+  // Runs server-side (/api/screen-cv, no external AI key needed); returns true on success.
+  async function screenCandidateCv(id: string, name: string): Promise<boolean> {
+    try {
+      const res = await fetch("/api/screen-cv", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+        body: JSON.stringify({ candidateId: id }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { toast("Couldn't scan CV", j.error || `Error ${res.status}`); return false; }
+      await loadHrModule();
+      const v = j.verdict as string;
+      toast(`${name}: ${v === "strong" ? "Strong match" : v === "possible" ? "Possible match" : "Weak match"}`, j.summary || "CV scan complete");
+      return true;
+    } catch (e: any) {
+      toast("Couldn't scan CV", e.message || "Network error");
+      return false;
+    }
+  }
+  // Signed URL for a candidate's uploaded CV (HR read via storage RLS).
+  async function openCandidateCv(path: string) {
+    const { data, error } = await supabase.storage.from("job-applications").createSignedUrl(path, 120);
+    if (error) { toast("Couldn't open CV", error.message); return null; }
+    return data.signedUrl;
   }
   async function createEnumerator(v: { name: string; county: string; idNo: string }) {
     const { error } = await supabase.rpc("create_enumerator", { p_name: v.name, p_county: v.county || null, p_id_no: v.idNo || null });
@@ -901,6 +988,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { toast("KPI not updated", error.message); return; }
     await loadHrModule();
   }
+  async function setAppraisalKpis(id: string, kpis: string[]) {
+    const { error } = await supabase.rpc("set_appraisal_kpis", { p_id: id, p_kpis: kpis.map((k) => ({ k })) });
+    if (error) { toast("KPIs not saved", error.message); return; }
+    await loadHrModule();
+    toast("KPIs agreed", "They lock the moment self-assessment opens");
+  }
   async function advanceAppraisal(id: string) {
     const { data, error } = await supabase.rpc("advance_appraisal", { p_id: id });
     if (error) { toast("Couldn't advance review", error.message); return; }
@@ -908,14 +1001,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const msg: Record<string, string> = {
       self: "Self-assessment open — the employee scores their own KPIs first",
       manager: "With the manager for review",
-      signed_off: "Signed off — both parties see the same KPIs and scores; the review is locked",
+      signed_off: "Signed off — the employee now sees both ratings; the review is locked",
     };
     toast(`Review ${data.stage === "signed_off" ? "signed off" : "advanced"}`, msg[data.stage as string] ?? "");
   }
-  async function addCertification(v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean }) {
+  // Upload a certificate file into the holder's own staff-documents prefix.
+  // Staff write their own prefix; HR (level ≥ 2) may write any prefix (0031 policy).
+  async function uploadCertFile(file: File, holderUserId: string): Promise<string | null> {
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${holderUserId}/certifications/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("staff-documents").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Certificate upload failed", up.error.message); return null; }
+    return up.data.path;
+  }
+  async function addCertification(v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean; holderUserId?: string | null }, file?: File | null) {
+    let docPath: string | null = null;
+    if (file && v.holderUserId) { docPath = await uploadCertFile(file, v.holderUserId); if (docPath === null) return; }
     const { error } = await supabase.rpc("add_certification", {
       p_holder: v.holder, p_name: v.name, p_issuer: v.issuer || null, p_expiry: v.expiry || null,
-      p_staff_no: v.staffNo || null, p_verified: v.verified,
+      p_staff_no: v.staffNo || null, p_verified: v.verified, p_doc_path: docPath,
     });
     if (error) { toast("Certification not added", error.message); return; }
     setHrModal(null);
@@ -960,7 +1064,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const { data, error } = await supabase.rpc("sign_exit_step", { p_ref: ref, p_idx: idx });
     if (error) { toast("Couldn't sign off", error.message); return; }
     await loadHrModule();
-    if (data.state === "cleared") toast(`${ref} fully cleared`, "Certificate of service issued; the staff file is marked exited");
+    if (data.state === "cleared") toast(`${ref} fully cleared`, "Certificate of service issued; their access closes automatically in 24 hours");
+  }
+  async function cancelExit(ref: string) {
+    const { data, error } = await supabase.rpc("cancel_exit", { p_ref: ref });
+    if (error) { toast("Couldn't remove the exit", error.message); return; }
+    setHrModal(null);
+    await loadHrModule();
+    toast(`${ref} removed`, data.reinstated
+      ? `${data.person} is reinstated and can log in again — re-grant module access in User Management`
+      : `${data.person} is back to active — nothing else was changed`);
+  }
+  async function signMyExitStep(ref: string, idx: number) {
+    const { data, error } = await supabase.rpc("sign_my_exit_step", { p_ref: ref, p_idx: idx });
+    if (error) { toast("Couldn't tick that off", error.message); return; }
+    await loadHrModule();
+    if (data.state === "cleared") toast("Exit fully cleared", "Your documents are released below — your access closes in 24 hours");
   }
 
   /* ---------- Staff Portal self-service: me-scoped RPCs (no HR access needed) ---------- */
@@ -975,14 +1094,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadHrModule();
     toast("Self-assessment submitted", "Your review is with your manager — their rating is independent of yours");
   }
-  async function submitMyCertification(v: { name: string; issuer: string; expiry: string }) {
+  async function submitMyCertification(v: { name: string; issuer: string; expiry: string }, file?: File | null) {
+    let docPath: string | null = null;
+    if (file) {
+      const authId = session?.user?.id;
+      const { data: me } = authId ? await supabase.from("app_users").select("id").eq("auth_id", authId).single() : { data: null };
+      if (!me) { toast("No staff record", "Your login isn't linked to a staff file"); return; }
+      docPath = await uploadCertFile(file, me.id);
+      if (docPath === null) return;
+    }
     const { error } = await supabase.rpc("submit_my_certification", {
-      p_name: v.name, p_issuer: v.issuer || null, p_expiry: v.expiry || null,
+      p_name: v.name, p_issuer: v.issuer || null, p_expiry: v.expiry || null, p_doc_path: docPath,
     });
     if (error) { toast("Certification not submitted", error.message); return; }
     setHrModal(null);
     await loadHrModule();
-    toast(`${v.name} submitted`, "With HR for verification — it joins your file once checked");
+    toast(`${v.name} submitted`, file ? "Certificate uploaded — with HR for verification" : "With HR for verification — it joins your file once checked");
   }
 
   /* ---------- Partnerships CRM: create-forms insert via SECURITY DEFINER RPCs
@@ -1302,9 +1429,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     hrLeaveQueue, hrBalances, decideLeave,
     hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
     addEmployee, preparePayroll, approvePayroll, postPayroll,
-    createRecruitmentReq, addCandidate, advanceCandidate, createEnumerator, createFieldAssignment, setFieldAssignmentState,
-    updateStaffHrProfile, startAppraisalCycle, toggleAppraisalKpi, advanceAppraisal,
-    addCertification, verifyCertification, submitFeedback, setFeedbackState, startExit, signExitStep,
+    createRecruitmentReq, addCandidate, advanceCandidate, updatePosting, publishPosting, openCandidateCv, screenCandidateCv, createEnumerator, createFieldAssignment, setFieldAssignmentState,
+    updateStaffHrProfile, startAppraisalCycle, toggleAppraisalKpi, setAppraisalKpis, advanceAppraisal, refreshHr: loadHrModule,
+    addCertification, verifyCertification, submitFeedback, setFeedbackState, startExit, signExitStep, signMyExitStep, cancelExit,
     meEmail: session?.user?.email ?? null, selfAssessKpi, submitSelfAssessment, submitMyCertification,
     crm,
     engFormOpen, openEngForm: () => setEngFormOpen(true), closeEngForm: () => setEngFormOpen(false), createEngagement,

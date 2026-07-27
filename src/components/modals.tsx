@@ -4,10 +4,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { budgetLines, kes, reqRouting, reqBudgetState, engStages, engChannels } from "../data";
 
-export function ModalShell({ open, onClose, width, children }: { open: boolean; onClose: () => void; width?: number; children: React.ReactNode }) {
+export function ModalShell({ open, onClose, width, className, children }: { open: boolean; onClose: () => void; width?: number; className?: string; children: React.ReactNode }) {
   return (
     <div className={`modal-bg ${open ? "show" : ""}`} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" style={width ? { width } : undefined}>{children}</div>
+      <div className={`modal${className ? ` ${className}` : ""}`} style={width ? { width } : undefined}>
+        <button className="modal-x" onClick={onClose} aria-label="Close">×</button>
+        {children}
+      </div>
     </div>
   );
 }

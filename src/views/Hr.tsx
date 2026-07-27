@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { useApp, StaffRow } from "../store";
+import { useApp, StaffRow, ExitStep } from "../store";
 import { Pulse, Note } from "../components/ui";
 import { Donut, ChartLegend, StaticBars } from "../components/charts";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
-import { kes, contractTypes, hrDepartments, candidateStages, kenyaLocations } from "../data";
+import { kes, contractTypes, hrDepartments, candidateStages, kenyaLocations, employmentTypes, educationLevels, educationLabel, employmentLabel } from "../data";
 import { Crumb } from "../nav";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -98,54 +98,72 @@ function StaffDetailModal() {
     if (url) window.open(url, "_blank", "noopener");
   }
   return (
-    <ModalShell open={open} onClose={closeHrModal} width={520}>
+    <ModalShell open={open} onClose={closeHrModal} className="pcard">
       {s && (
         <>
-          <div className="mh" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div className="av-sm" style={{ background: avColor(s), width: 40, height: 40, fontSize: 16 }}>{s.name[0]}</div>
-            <div>
-              <h3 style={{ margin: 0 }}>{s.name}</h3>
-              <p style={{ margin: 0 }}>{s.roleTitle || "—"} · {s.staffNo} · <span className={`tag ${s.contractType === "permanent" ? "std" : "view"}`} style={{ textTransform: "none" }}>{contractLabel(s.contractType)}</span></p>
+          <div className="pcard-h">
+            <div className="av-lg" style={{ background: avColor(s) }}>{s.name[0]}</div>
+            <div style={{ minWidth: 0 }}>
+              <h3>{s.name}</h3>
+              <div className="sub">{s.roleTitle || "—"} · <span className="mono">{s.staffNo}</span></div>
+              <div className="chips">
+                <span className={`tag ${s.contractType === "permanent" ? "std" : "view"}`} style={{ textTransform: "none" }}>{contractLabel(s.contractType)}</span>
+                <span className={`pill ${missingIds(s) === 0 ? "done" : "today"}`} style={{ textTransform: "none" }}>{missingIds(s) === 0 ? "File complete" : `${missingIds(s)} IDs missing`}</span>
+                <span className={`pill ${s.twoFa ? "done" : "over"}`} style={{ textTransform: "none" }}>{s.twoFa ? "2FA enrolled" : "2FA not enrolled"}</span>
+              </div>
             </div>
           </div>
-          <div className="mb">
-            <div className="panel-h" style={{ padding: "4px 0" }}><h3 style={{ fontSize: 12.5 }}>Employment</h3></div>
-            <div className="recon"><span>Work email</span><span className="mono">{s.email || "—"}</span></div>
-            <div className="recon"><span>Department</span><span className="mono">{s.dept || "—"}</span></div>
-            <div className="recon"><span>Start date</span><span className="mono">{s.startDate ? new Date(s.startDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
-            <div className="recon"><span>Contract ends</span><span className="mono">{s.contractEnd ? new Date(s.contractEnd + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
-            <div className="recon"><span>Gross salary</span><span className="mono">{kes(s.grossSalary)} / month</span></div>
-            <div className="recon"><span>Bank</span><span className="mono">{s.bank || "—"}</span></div>
+          <div className="pcard-b">
+            <div className="pcard-sec">
+              <div className="sec-h"><h4>Employment</h4></div>
+              <div className="recon"><span>Work email</span><span className="mono">{s.email || "—"}</span></div>
+              <div className="recon"><span>Department</span><span className="mono">{s.dept || "—"}</span></div>
+              <div className="recon"><span>Start date</span><span className="mono">{s.startDate ? new Date(s.startDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+              <div className="recon"><span>Contract ends</span><span className="mono">{s.contractEnd ? new Date(s.contractEnd + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+              <div className="recon"><span>Gross salary</span><span className="mono">{kes(s.grossSalary)} / month</span></div>
+              <div className="recon"><span>Bank</span><span className="mono">{s.bank || "—"}</span></div>
+            </div>
 
-            <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>Next of kin</h3></div>
-            {s.nextOfKin.length
-              ? s.nextOfKin.map((k) => (
-                  <div className="recon" key={k.name}><span>{k.name}<span className="meta" style={{ marginLeft: 8 }}>{k.relationship}{k.phone ? ` · ${k.phone}` : ""}</span></span><span className="rcv ok">{k.cover || "emergency"}</span></div>
-                ))
-              : <div className="recon"><span>Next of kin</span><span className="rcv no">missing</span></div>}
+            <div className="pcard-sec">
+              <div className="sec-h"><h4>Statutory IDs</h4></div>
+              {idRow("KRA PIN", s.kraPin)}
+              {idRow("NSSF no.", s.nssfNo)}
+              {idRow("SHIF no.", s.shifNo)}
+            </div>
 
-            <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>Statutory IDs</h3></div>
-            {idRow("KRA PIN", s.kraPin)}
-            {idRow("NSSF no.", s.nssfNo)}
-            {idRow("SHIF no.", s.shifNo)}
+            <div className="pcard-sec">
+              <div className="sec-h"><h4>Next of kin</h4></div>
+              {s.nextOfKin.length
+                ? s.nextOfKin.map((k) => (
+                    <div className="recon" key={k.name}><span>{k.name}<span className="meta" style={{ marginLeft: 8 }}>{k.relationship}{k.phone ? ` · ${k.phone}` : ""}</span></span><span className="rcv ok">{k.cover || "emergency"}</span></div>
+                  ))
+                : <div className="recon"><span>Next of kin</span><span className="rcv no">missing</span></div>}
+            </div>
 
-            <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>Leave &amp; security</h3></div>
-            <div className="recon"><span>Annual leave</span><span className="mono">{s.annualEntitled - s.annualUsed} of {s.annualEntitled} left</span></div>
-            <div className="recon"><span>Two-factor</span><span className={`pill ${s.twoFa ? "done" : "over"}`} style={{ textTransform: "none" }}>{s.twoFa ? "Enrolled" : "Not enrolled"}</span></div>
-            <div className="recon"><span>File status</span><span className={`pill ${missingIds(s) === 0 ? "done" : "today"}`} style={{ textTransform: "none" }}>{missingIds(s) === 0 ? "Complete" : `${missingIds(s)} missing`}</span></div>
+            <div className="pcard-sec">
+              <div className="sec-h"><h4>Leave &amp; security</h4></div>
+              <div className="recon"><span>Annual leave</span><span className="mono">{s.annualEntitled - s.annualUsed} of {s.annualEntitled} left</span></div>
+              <div className="recon"><span>Two-factor</span><span className={`pill ${s.twoFa ? "done" : "over"}`} style={{ textTransform: "none" }}>{s.twoFa ? "Enrolled" : "Not enrolled"}</span></div>
+              <div className="recon"><span>File status</span><span className={`pill ${missingIds(s) === 0 ? "done" : "today"}`} style={{ textTransform: "none" }}>{missingIds(s) === 0 ? "Complete" : `${missingIds(s)} missing`}</span></div>
+            </div>
 
-            <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>Documents</h3><span className="meta">{s.docs.length ? `${s.docs.length} attached` : "personal file"}</span></div>
-            {s.docs.length
-              ? s.docs.map((d) => (
-                  <div className="recon" key={d.name + d.version}>
-                    <span>{d.name}<span className="meta" style={{ marginLeft: 8 }}>v{d.version}{d.category ? ` · ${d.category}` : ""}{d.leaveRef ? ` · ${d.leaveRef}` : ""}</span></span>
-                    {d.path
-                      ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(d.path!)}>View</button>
-                      : <span className="rcv ok">on file</span>}
-                  </div>
-                ))
-              : <div className="recon"><span>No documents attached</span><span className="mono">—</span></div>}
-            <Note>This staff file is visible only to HR and the employee. Widening access is a super-admin action in User Management.</Note>
+            <div className="pcard-sec span">
+              <div className="sec-h"><h4>Documents</h4><span className="meta">{s.docs.length ? `${s.docs.length} attached` : "personal file"}</span></div>
+              {s.docs.length
+                ? s.docs.map((d) => (
+                    <div className="recon" key={d.name + d.version}>
+                      <span>{d.name}<span className="meta" style={{ marginLeft: 8 }}>v{d.version}{d.category ? ` · ${d.category}` : ""}{d.leaveRef ? ` · ${d.leaveRef}` : ""}</span></span>
+                      {d.path
+                        ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(d.path!)}>View</button>
+                        : <span className="rcv ok">on file</span>}
+                    </div>
+                  ))
+                : <div className="recon"><span>No documents attached</span><span className="mono">—</span></div>}
+            </div>
+
+            <div style={{ gridColumn: "1 / -1" }}>
+              <Note>This staff file is visible only to HR and the employee. Widening access is a super-admin action in User Management.</Note>
+            </div>
           </div>
           <div className="mf">
             <button className="btn" onClick={() => openHrModal({ kind: "staffProfile", staff: s })}>Edit HR details</button>
@@ -158,24 +176,216 @@ function StaffDetailModal() {
 }
 
 function RequisitionModal() {
-  const { hrModal, closeHrModal, createRecruitmentReq, toast } = useApp();
+  const { hrModal, closeHrModal, createRecruitmentReq, updatePosting, publishPosting, toast } = useApp();
   const open = hrModal?.kind === "requisition";
   const [role, setRole] = useState(""); const [dept, setDept] = useState("");
-  useEffect(() => { if (open) { setRole(""); setDept(""); } }, [open]);
-  function submit() { if (!role.trim()) { toast("Role title is required", "Name the vacancy"); return; } createRecruitmentReq(role.trim(), dept); }
+  const [description, setDescription] = useState(""); const [location, setLocation] = useState("");
+  const [employmentType, setEmploymentType] = useState("permanent");
+  const [skills, setSkills] = useState(""); const [minYears, setMinYears] = useState("0");
+  const [minEducation, setMinEducation] = useState("none"); const [shortlistSize, setShortlistSize] = useState("4");
+  const [closesAt, setClosesAt] = useState(""); const [publishNow, setPublishNow] = useState(true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setRole(""); setDept(""); setDescription(""); setLocation(""); setEmploymentType("permanent");
+      setSkills(""); setMinYears("0"); setMinEducation("none"); setShortlistSize("4"); setClosesAt(""); setPublishNow(true); setBusy(false);
+    }
+  }, [open]);
+
+  async function submit() {
+    if (!role.trim()) { toast("Role title is required", "Name the vacancy"); return; }
+    setBusy(true);
+    const ref = await createRecruitmentReq(role.trim(), dept);
+    if (!ref) { setBusy(false); return; }
+    const reqSkills = skills.split(",").map((s) => s.trim()).filter(Boolean);
+    const ok = await updatePosting(ref, {
+      description, location, employmentType, reqSkills,
+      minYears: Number(minYears) || 0, minEducation, shortlistSize: Number(shortlistSize) || 4, closesAt,
+    });
+    if (!ok) { setBusy(false); return; }
+    if (publishNow) { await publishPosting(ref, true); }
+    else { toast(`${ref} saved as draft`, "Publish it from the openings list when you're ready to advertise"); }
+    setBusy(false);
+    closeHrModal();
+  }
+
   return (
-    <ModalShell open={open} onClose={closeHrModal} width={480}>
-      <div className="mh"><h3>New job opening</h3><p>Post a job opening — add candidates to its pipeline once it's open.</p></div>
+    <ModalShell open={open} onClose={closeHrModal} width={560}>
+      <div className="mh"><h3>New job opening</h3><p>Set the role and the eligibility criteria — applicants are auto-scored and ranked against them.</p></div>
       <div className="mb">
-        <div><label>Role title</label><input className="field" placeholder="Field Operations Coordinator" value={role} onChange={(e) => setRole(e.target.value)} /></div>
-        <div><label>Department</label>
-          <select className="field" value={dept} onChange={(e) => setDept(e.target.value)}>
-            <option value="">— select —</option>
-            {hrDepartments.map((d) => <option key={d}>{d}</option>)}
+        <div className="mrow c2">
+          <div><label>Role title</label><input className="field" placeholder="Field Operations Coordinator" value={role} onChange={(e) => setRole(e.target.value)} /></div>
+          <div><label>Department</label>
+            <select className="field" value={dept} onChange={(e) => setDept(e.target.value)}>
+              <option value="">— select —</option>
+              {hrDepartments.map((d) => <option key={d}>{d}</option>)}
+            </select>
+          </div>
+        </div>
+        <div><label>Description</label><textarea className="field" rows={3} placeholder="What the role involves — shown on the public careers page." value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+        <div className="mrow c2">
+          <div><label>Location</label>
+            <input className="field" list="ke-locations" placeholder="Nairobi" value={location} onChange={(e) => setLocation(e.target.value)} />
+            <datalist id="ke-locations">{kenyaLocations.map((l) => <option key={l} value={l} />)}</datalist>
+          </div>
+          <div><label>Employment type</label>
+            <select className="field" value={employmentType} onChange={(e) => setEmploymentType(e.target.value)}>
+              {employmentTypes.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div><label>Required skills <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>· comma-separated (55% of the score)</span></label>
+          <input className="field" placeholder="Data collection, KoboToolbox, Excel" value={skills} onChange={(e) => setSkills(e.target.value)} /></div>
+        <div className="mrow c2">
+          <div><label>Minimum years <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>· 30%</span></label>
+            <input className="field" type="number" min={0} value={minYears} onChange={(e) => setMinYears(e.target.value)} /></div>
+          <div><label>Minimum education <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>· 15%</span></label>
+            <select className="field" value={minEducation} onChange={(e) => setMinEducation(e.target.value)}>
+              {educationLevels.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="mrow c2">
+          <div><label>Shortlist size</label><input className="field" type="number" min={1} value={shortlistSize} onChange={(e) => setShortlistSize(e.target.value)} /></div>
+          <div><label>Closes on</label><input className="field" type="date" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} /></div>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, marginTop: 4 }}>
+          <input type="checkbox" checked={publishNow} onChange={(e) => setPublishNow(e.target.checked)} />
+          Publish to the public careers page now
+        </label>
+      </div>
+      <div className="mf"><button className="btn" onClick={closeHrModal} disabled={busy}>Cancel</button><button className="btn primary" onClick={submit} disabled={busy}>{busy ? "Posting…" : publishNow ? "Post & publish" : "Save draft"}</button></div>
+    </ModalShell>
+  );
+}
+
+// Auto-ranked applicant pool for one posting — total count + top-N shortlist.
+function PostingDetailModal() {
+  const { hrModal, closeHrModal, hrData, advanceCandidate, publishPosting, openCandidateCv, screenCandidateCv, toast } = useApp();
+  const open = hrModal?.kind === "postingDetail";
+  const ref = hrModal?.kind === "postingDetail" ? hrModal.ref : "";
+  const [showAll, setShowAll] = useState(false);
+  const [screening, setScreening] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  useEffect(() => { if (open) { setShowAll(false); setScreening(new Set()); setBulkBusy(false); } }, [open, ref]);
+  async function runScreen(id: string, name: string) {
+    setScreening((s) => new Set(s).add(id));
+    await screenCandidateCv(id, name);
+    setScreening((s) => { const n = new Set(s); n.delete(id); return n; });
+  }
+  const posting = (hrData?.recruitment ?? []).find((r) => r.ref === ref);
+  if (!open || !posting) return <ModalShell open={open} onClose={closeHrModal} width={640}><div className="mb" /></ModalShell>;
+
+  const ranked = [...posting.candidates].sort((a, b) => b.eligibility - a.eligibility);
+  const shortlist = ranked.slice(0, posting.shortlistSize);
+  const rest = ranked.slice(posting.shortlistSize);
+  const reqSet = new Set(posting.reqSkills.map((s) => s.toLowerCase().trim()));
+
+  async function viewCv(path: string) { const u = await openCandidateCv(path); if (u) window.open(u, "_blank"); }
+  const eligColor = (n: number) => (n >= 80 ? "var(--green)" : n >= 55 ? "var(--ember)" : "var(--ink-soft)");
+  const verdictStyle = (v: string) => v === "strong"
+    ? { background: "var(--green-soft)", color: "var(--green)", label: "Strong match" }
+    : v === "possible" ? { background: "var(--ember-soft)", color: "var(--ember)", label: "Possible match" }
+    : { background: "var(--red-soft)", color: "var(--red)", label: "Weak match" };
+
+  function Card({ c, rank, short }: { c: typeof ranked[number]; rank: number; short?: boolean }) {
+    const matched = c.skills.filter((s) => reqSet.has(s.toLowerCase().trim()));
+    const busy = screening.has(c.id);
+    return (
+      <div className={`appcard${short ? " short" : ""}`}>
+        <div className="appcard-top">
+          <span className="appcard-rank">{short ? "★" : ""}{rank}</span>
+          <div className="av-sm" style={{ background: avColor({ color: null, name: c.name }) }}>{c.name[0]}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="appcard-name">
+              {c.name}
+              {c.source === "public" && <span className="pill today" style={{ textTransform: "none" }}>Applied online</span>}
+              {c.aiVerdict && <span className="pill" style={{ ...verdictStyle(c.aiVerdict), textTransform: "none" }}>★ {verdictStyle(c.aiVerdict).label}</span>}
+            </div>
+            <div className="appcard-meta">
+              {c.email || "—"} · {c.yearsExp}y exp · {educationLabel(c.education)}
+              {posting!.reqSkills.length > 0 && <> · skills {matched.length}/{posting!.reqSkills.length}</>}
+            </div>
+          </div>
+          <div className="appcard-elig" style={{ color: eligColor(c.eligibility) }}>{c.eligibility}%<small>eligible</small></div>
+        </div>
+        <div className="appcard-actions">
+          {c.cvPath
+            ? <a href="#" className={`lnk${busy ? " busy" : ""}`} onClick={(e) => { e.preventDefault(); busy || runScreen(c.id, c.name); }}>{busy ? "Reading CV…" : c.aiVerdict ? "Re-scan CV" : "Scan CV"}</a>
+            : <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>no CV attached</span>}
+          {c.cvPath && <a href="#" className="lnk" onClick={(e) => { e.preventDefault(); viewCv(c.cvPath!); }}>View CV</a>}
+          <div style={{ flex: 1 }} />
+          <select className="field" style={{ width: 132, padding: "5px 8px", fontSize: 12 }} value={c.stage} onChange={(e) => advanceCandidate(c.id, e.target.value)}>
+            {candidateStages.map((s) => <option key={s} value={s}>{cap(s)}</option>)}
           </select>
         </div>
+        {c.aiVerdict && (
+          <div className="appcard-verdict">
+            <div style={{ fontSize: 12.5, color: "var(--ink)", marginBottom: c.aiChecked.length || c.aiConcerns.length ? 8 : 0 }}>{c.aiSummary}</div>
+            {c.aiChecked.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {c.aiChecked.map((r, i) => (
+                  <span key={i} className="appcard-chip" title={r.note}
+                    style={{ background: r.evidenced ? "var(--green-soft)" : "var(--red-soft)", color: r.evidenced ? "var(--green)" : "var(--red)" }}>
+                    {r.evidenced ? "✓" : "✗"} {r.requirement}
+                  </span>
+                ))}
+              </div>
+            )}
+            {c.aiConcerns.length > 0 && <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 8 }}>⚠ {c.aiConcerns.join(" · ")}</div>}
+          </div>
+        )}
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Post job opening</button></div>
+    );
+  }
+
+  return (
+    <ModalShell open={open} onClose={closeHrModal} width={680}>
+      <div className="mh" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h3>{posting.roleTitle} <span className="mono" style={{ color: "var(--ink-soft)", fontSize: 13 }}>{posting.ref}</span></h3>
+          <p>{posting.dept || "—"}{posting.location ? ` · ${posting.location}` : ""} · {employmentLabel(posting.employmentType)}</p>
+        </div>
+        <span className={`pill ${posting.published ? "done" : ""}`} style={{ textTransform: "none" }}>{posting.published ? "Published" : "Draft"}</span>
+      </div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 12, fontSize: 12.5, color: "var(--ink-soft)" }}>
+          <div><strong style={{ color: "var(--ink)", fontSize: 20 }}>{ranked.length}</strong> applicant{ranked.length === 1 ? "" : "s"}</div>
+          <div style={{ alignSelf: "center" }}>Requires: {posting.reqSkills.length ? posting.reqSkills.join(", ") : "no specific skills"} · {posting.minYears}+ yrs · {educationLabel(posting.minEducation)}</div>
+        </div>
+
+        {ranked.length === 0 && <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>No applications yet. {posting.published ? "The role is live on the careers page." : "Publish it to start receiving applications."}</div>}
+
+        {ranked.length > 0 && (
+          <>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--flame)", marginBottom: 8 }}>★ Shortlist — top {Math.min(posting.shortlistSize, ranked.length)} by eligibility</div>
+            {shortlist.map((c, i) => <Card key={c.id} c={c} rank={i + 1} short />)}
+            {rest.length > 0 && !showAll && (
+              <a href="#" onClick={(e) => { e.preventDefault(); setShowAll(true); }} style={{ display: "inline-block", marginTop: 4, color: "var(--flame)", textDecoration: "none", fontSize: 12.5, fontWeight: 600 }}>view all {ranked.length} applicants ↓</a>
+            )}
+            {showAll && rest.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink-soft)", marginBottom: 8 }}>Everyone else</div>
+                {rest.map((c, i) => <Card key={c.id} c={c} rank={posting.shortlistSize + i + 1} />)}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={() => {
+          navigator.clipboard?.writeText(`${window.location.origin}/careers?job=${posting.ref}`);
+          toast("Careers link copied", "Share it — applications land back here, auto-ranked");
+        }}>Copy careers link</button>
+        {shortlist.some((c) => c.cvPath) && (
+          <button className="btn" disabled={bulkBusy} onClick={async () => {
+            setBulkBusy(true);
+            for (const c of shortlist.filter((x) => x.cvPath)) await runScreen(c.id, c.name);
+            setBulkBusy(false);
+          }}>{bulkBusy ? "Scanning…" : "Scan shortlist CVs"}</button>
+        )}
+        <button className="btn primary" onClick={() => publishPosting(posting.ref, !posting.published)}>{posting.published ? "Unpublish" : "Publish"}</button>
+      </div>
     </ModalShell>
   );
 }
@@ -270,20 +480,40 @@ function AssignmentModal() {
   );
 }
 
-// Open review: KPI checklist (click to toggle) + stage machine → sign-off locks it.
+// Open review. While not started, HR agrees the KPI list (editable); once
+// self-assessment opens the list locks and each KPI carries two independent
+// ratings — the employee's (self_met, read-only chip here) and the manager's
+// (met, click to toggle). Sign-off locks everything.
 function AppraisalModal() {
-  const { hrModal, closeHrModal, hrData, toggleAppraisalKpi, advanceAppraisal } = useApp();
+  const { hrModal, closeHrModal, hrData, toggleAppraisalKpi, setAppraisalKpis, advanceAppraisal, toast } = useApp();
   const open = hrModal?.kind === "appraisal";
   const a = open ? hrData?.appraisals.find((x) => x.id === (hrModal as { id: string }).id) : undefined;
+  const editable = a?.stage === "not_started";
+  const [draft, setDraft] = useState<string[]>([]);
+  useEffect(() => { if (open && a) setDraft(a.kpis.map((k) => k.k)); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, a?.id]);
   const stages = ["not_started", "self", "manager", "signed_off"];
-  const stageLabels = ["Not started", "Self-assessment", "Manager review", "Signed off"];
-  const advanceLabel: Record<string, string> = { not_started: "Open self-assessment", self: "To manager review", manager: "Sign off" };
+  const stageLabels = ["KPIs agreed", "Self-assessment", "Manager review", "Signed off"];
+  const advanceLabel: Record<string, string> = { not_started: "Open self-assessment", self: "Skip to manager review", manager: "Sign off" };
   const met = a ? a.kpis.filter((k) => k.met).length : 0;
+  const agree = a ? a.kpis.filter((k) => k.met === k.selfMet).length : 0;
+  function saveKpis() {
+    if (!a) return;
+    const list = draft.map((s) => s.trim()).filter(Boolean);
+    if (!list.length) { toast("A review needs at least one KPI", "Add one before saving"); return; }
+    if (new Set(list.map((s) => s.toLowerCase())).size !== list.length) { toast("Duplicate KPI names", "Each KPI needs a distinct name"); return; }
+    setAppraisalKpis(a.id, list);
+  }
   return (
     <ModalShell open={open} onClose={closeHrModal} width={520}>
       {a && (
         <>
-          <div className="mh"><h3>{a.who} — {a.cycle}</h3><p>{a.roleTitle || "—"} · reviewer: {a.reviewer} · KPIs met: {met} / {a.kpis.length}</p></div>
+          <div className="mh">
+            <h3>{a.who} — {a.cycle}</h3>
+            <p>{a.roleTitle || "—"} · reviewer: {a.reviewer}
+              {!editable && <> · KPIs met: {met} / {a.kpis.length}</>}
+              {(a.stage === "manager" || a.stage === "signed_off") && <> · agrees with self on {agree} / {a.kpis.length}</>}
+            </p>
+          </div>
           <div className="mb">
             <div className="steps" style={{ marginBottom: 14 }}>
               {stageLabels.map((l, i) => (
@@ -293,14 +523,39 @@ function AppraisalModal() {
                 </span>
               ))}
             </div>
-            {a.kpis.map((k, i) => (
-              <div key={k.k} onClick={() => a.stage !== "signed_off" && toggleAppraisalKpi(a.id, i)} style={{ cursor: a.stage === "signed_off" ? "default" : "pointer" }}>
-                <Check done={k.met}>{k.k}</Check>
-              </div>
-            ))}
-            <Note>{a.stage === "signed_off"
-              ? "Signed off — the review is locked. Both parties see the same KPIs and scores."
-              : "Click a KPI to mark it met. Both parties see the same KPIs and scores."}</Note>
+            {editable ? (
+              <>
+                {draft.map((k, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    <input className="field" style={{ flex: 1 }} placeholder="e.g. Delivery against plan" value={k}
+                      onChange={(e) => setDraft((p) => p.map((x, j) => (j === i ? e.target.value : x)))} />
+                    <button className="btn" style={{ padding: "6px 12px" }} disabled={draft.length <= 1}
+                      onClick={() => setDraft((p) => p.filter((_, j) => j !== i))}>✕</button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn" disabled={draft.length >= 12} onClick={() => setDraft((p) => [...p, ""])}><PlusI />Add KPI</button>
+                  <button className="btn primary" onClick={saveKpis}>Save KPIs</button>
+                </div>
+                <Note>Agree the KPIs now — they lock the moment self-assessment opens. Everyone starts from the standard four; tailor them to the role here.</Note>
+              </>
+            ) : (
+              <>
+                {a.kpis.map((k, i) => (
+                  <div key={k.k} onClick={() => a.stage !== "signed_off" && toggleAppraisalKpi(a.id, i)} style={{ cursor: a.stage === "signed_off" ? "default" : "pointer" }}>
+                    <Check done={k.met}>
+                      <span style={{ flex: 1, minWidth: 0 }}>{k.k}</span>
+                      {a.stage === "self"
+                        ? <span className="meta" style={{ flexShrink: 0 }}>self-rating…</span>
+                        : <StatChip ok={k.selfMet} l="Self" />}
+                    </Check>
+                  </div>
+                ))}
+                <Note>{a.stage === "signed_off"
+                  ? "Signed off — locked. Both ratings are now visible to the employee."
+                  : "Click a KPI to set your rating. It's independent of the self-rating and stays hidden from the employee until sign-off."}</Note>
+              </>
+            )}
           </div>
           <div className="mf">
             <button className="btn" onClick={closeHrModal}>Close</button>
@@ -317,13 +572,16 @@ function CertificationModal() {
   const open = hrModal?.kind === "certification";
   const staff = hrData?.staff ?? [];
   const [f, setF] = useState({ staffNo: "", holder: "", name: "", issuer: "", expiry: "", verified: true });
-  useEffect(() => { if (open) setF({ staffNo: staff[0]?.staffNo ?? "", holder: "", name: "", issuer: "", expiry: "", verified: true }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+  const [file, setFile] = useState<File | null>(null);
+  useEffect(() => { if (open) { setF({ staffNo: staff[0]?.staffNo ?? "", holder: "", name: "", issuer: "", expiry: "", verified: true }); setFile(null); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
   const set = (k: string, v: string | boolean) => setF((p) => ({ ...p, [k]: v }));
   function submit() {
     if (!f.name.trim()) { toast("Certification name is required", "e.g. Carbon markets & MRV"); return; }
-    const holder = f.staffNo ? staff.find((s) => s.staffNo === f.staffNo)?.name ?? "" : f.holder.trim();
+    const picked = f.staffNo ? staff.find((s) => s.staffNo === f.staffNo) : null;
+    const holder = picked ? picked.name : f.holder.trim();
     if (!holder) { toast("Who holds this certification?", "Pick an employee or name the holder"); return; }
-    addCertification({ holder, name: f.name.trim(), issuer: f.issuer, expiry: f.expiry, staffNo: f.staffNo, verified: f.verified });
+    if (file && !picked) { toast("Pick an employee to attach a file", "The certificate file goes onto a staff member's file"); return; }
+    addCertification({ holder, name: f.name.trim(), issuer: f.issuer, expiry: f.expiry, staffNo: f.staffNo, verified: f.verified, holderUserId: picked?.appUserId ?? null }, file);
   }
   return (
     <ModalShell open={open} onClose={closeHrModal} width={520}>
@@ -348,6 +606,11 @@ function CertificationModal() {
             <option value="verified">Verified — certificate checked by HR</option>
             <option value="pending">Send to the verification queue</option>
           </select>
+        </div>
+        <div>
+          <label>Certificate file <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· PDF or image · optional</span></label>
+          <input className="field" type="file" accept=".pdf,image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — uploads to the employee's file; they see it in My Certificates</div>}
         </div>
       </div>
       <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Add certification</button></div>
@@ -433,28 +696,75 @@ function ExitStartModal() {
   );
 }
 
-// Clearance drawer: each area signed off by the function that owns it.
+// The employee's four-stage exit journey, derived from the clearance
+// checklist (areas 0–3 = handover & property, 4 = exit interview, 5–6 = final
+// clearance). Shared with the Staff Portal's My Exit tab so both sides always
+// show the same picture.
+export function ExitSteps({ exit }: { exit: { clearance: ExitStep[]; state: string } }) {
+  const done = exit.clearance.filter((c) => c.done).length;
+  const cleared = exit.state === "cleared";
+  return (
+    <div className="steps">
+      <div className="step done"><span className="sdot">✓</span>Notice given</div><div className="step-arrow" />
+      <div className={`step ${cleared || done >= 4 ? "done" : "now"}`}><span className="sdot">2</span>Handover &amp; property</div><div className="step-arrow" />
+      <div className={`step ${cleared || done >= 5 ? "done" : done >= 4 ? "now" : ""}`}><span className="sdot">3</span>Exit interview</div><div className="step-arrow" />
+      <div className={`step ${cleared ? "done" : done >= 5 ? "now" : ""}`}><span className="sdot">4</span>Final clearance</div>
+    </div>
+  );
+}
+
+// Clearance drawer: each area signed off by the function that owns it. Shows
+// the same journey and document status the employee sees in My Exit.
 function ExitDetailModal() {
-  const { hrModal, closeHrModal, hrData, signExitStep } = useApp();
+  const { hrModal, closeHrModal, hrData, signExitStep, cancelExit } = useApp();
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  useEffect(() => { if (hrModal?.kind === "exitDetail") setConfirmRemove(false); }, [hrModal]);
   const open = hrModal?.kind === "exitDetail";
   const x = open ? hrData?.exits.find((e) => e.ref === (hrModal as { ref: string }).ref) : undefined;
   const done = x ? x.clearance.filter((c) => c.done).length : 0;
+  const docRow = (l: string) => (
+    <div className="recon" style={{ padding: "8px 0" }}>
+      <span>{l}</span>
+      {x?.state === "cleared" ? <span className="rcv ok">released</span> : <span className="rcv no">pending clearance</span>}
+    </div>
+  );
   return (
     <ModalShell open={open} onClose={closeHrModal} width={520}>
       {x && (
         <>
           <div className="mh"><h3>{x.ref} — {x.person}</h3><p>{x.roleTitle || "—"} · {x.reason || "—"}{x.finalDay ? ` · final day ${fmtD(x.finalDay)}` : ""} · {done} of {x.clearance.length} cleared</p></div>
           <div className="mb">
+            <div style={{ marginBottom: 14 }}><ExitSteps exit={x} /></div>
             {x.clearance.map((c, i) => (
               <div key={c.area} onClick={() => x.state !== "cleared" && signExitStep(x.ref, i)} style={{ cursor: x.state === "cleared" ? "default" : "pointer" }}>
-                <Check done={c.done}>{c.area}</Check>
+                <Check done={c.done}>
+                  <span style={{ flex: 1, minWidth: 0 }}>{c.area}</span>
+                  {c.owner === "staff" && (
+                    <span style={{
+                      fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 600, padding: "2px 6px", borderRadius: 5, flexShrink: 0, whiteSpace: "nowrap",
+                      background: "var(--flame-soft)", color: "var(--flame)",
+                    }}>
+                      employee ticks
+                    </span>
+                  )}
+                </Check>
               </div>
             ))}
+            <div className="panel-h" style={{ padding: "10px 0 4px" }}><h3 style={{ fontSize: 12.5 }}>What {x.person.split(" ")[0]} sees in My Exit</h3><span className="meta">released on final clearance</span></div>
+            {docRow("Certificate of service")}
+            {docRow("Final payslip")}
+            {docRow("P9 tax form")}
             <Note>{x.state === "cleared"
-              ? "Fully cleared — the certificate of service has been issued and the staff file is marked exited."
-              : "Click an area to sign it off. The certificate of service is issued automatically on final approval."}</Note>
+              ? <>Fully cleared — the certificate of service has been issued and the staff file is marked exited.{x.accessUntil ? <> <strong>Access closes {new Date(x.accessUntil).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</strong> — the account is suspended automatically after that.</> : null}</>
+              : "Click an area to sign it off — the employee ticks their own two from My Exit. On final approval the certificate of service is issued and their access closes 24 hours later."}</Note>
           </div>
-          <div className="mf"><button className="btn primary" onClick={closeHrModal}>Close</button></div>
+          <div className="mf">
+            <button className="btn" style={{ marginRight: "auto", color: "var(--red)", borderColor: confirmRemove ? "var(--red)" : undefined }}
+              onClick={() => (confirmRemove ? cancelExit(x.ref) : setConfirmRemove(true))}>
+              {confirmRemove ? "Click again to confirm — removes the exit" : "Remove from exit"}
+            </button>
+            <button className="btn primary" onClick={closeHrModal}>Close</button>
+          </div>
         </>
       )}
     </ModalShell>
@@ -525,8 +835,12 @@ function StaffProfileModal() {
 
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState } = useApp();
+  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl } = useApp();
   const tab = tabs.hr;
+  async function openCertDoc(path: string) { const url = await staffDocUrl(path); if (url) window.open(url, "_blank", "noopener"); }
+  // the other side of an appraisal/exit/cert acts from the Staff Portal, and job applicants
+  // apply from the public careers page — pull fresh state each time these tabs open
+  useEffect(() => { if (tab === "h-appraisals" || tab === "h-exit" || tab === "h-certs" || tab === "h-recruit") refreshHr(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
   const [empFilter, setEmpFilter] = useState("all");
   const staff = hrData?.staff ?? [];
   const runs = hrData?.runs ?? [];
@@ -675,7 +989,10 @@ export default function HrView() {
             <button className="btn primary" onClick={() => openHrModal({ kind: "exitStart" })}><PlusI />Start an exit</button>
           )}
           {tab === "h-recruit" && (
-            <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New job opening</button>
+            <>
+              <button className="btn" onClick={() => { refreshHr(); toast("Pipeline refreshed", "Pulled the latest applications from the careers page"); }}>Refresh</button>
+              <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New job opening</button>
+            </>
           )}
           {tab === "h-field" && (
             <>
@@ -879,14 +1196,14 @@ export default function HrView() {
                       <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "appraisal", id: a.id })}>
                         <td><strong>{a.who}</strong><br /><small style={{ color: "var(--ink-soft)" }}>{a.roleTitle || "—"}</small></td>
                         <td>{a.reviewer}</td>
-                        <td className="mono">{a.kpis.filter((k) => k.met).length} / {a.kpis.length}</td>
+                        <td className="mono">{a.stage === "not_started" || a.stage === "self" ? "—" : `${a.kpis.filter((k) => k.met).length} / ${a.kpis.length}`}</td>
                         <td><span className={`pill ${stagePill[a.stage]?.cls ?? "week"}`} style={{ textTransform: "none" }}>{stagePill[a.stage]?.l ?? a.stage}</span></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
-              <Note>Cycle: self-assessment → manager review → sign-off. Both parties see the same KPIs and scores.</Note>
+              <Note>Cycle: agree KPIs → self-assessment → manager review → sign-off. Self and manager ratings are independent; the employee sees the manager rating at sign-off.</Note>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>KPI attainment</h3><span className="meta">{latestCycle ?? "no cycle"} · per review</span></div>
@@ -918,12 +1235,13 @@ export default function HrView() {
                 <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nothing on the register yet — use Add certification above.</div>
               ) : (
                 <table className="tbl">
-                  <thead><tr><th>Employee</th><th>Certification</th><th>Issuer</th><th>Expiry</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Employee</th><th>Certification</th><th>Issuer</th><th>Expiry</th><th>Certificate</th><th>Status</th></tr></thead>
                   <tbody>
                     {certRegister.map((c) => (
                       <tr key={c.id}>
                         <td>{c.holder}</td><td>{c.name}</td><td>{c.issuer || "—"}</td>
                         <td className="mono">{c.expiry ? new Date(c.expiry + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—"}</td>
+                        <td>{c.docPath ? <button className="btn" style={{ padding: "3px 9px", fontSize: 11 }} onClick={() => openCertDoc(c.docPath!)}>View</button> : <span className="meta">no file</span>}</td>
                         <td>{certExpiring(c) ? <span className="rcv no">expiring</span> : <span className="rcv ok">verified</span>}</td>
                       </tr>
                     ))}
@@ -938,7 +1256,8 @@ export default function HrView() {
               {certQueue.map((c) => (
                 <div className="task" key={c.id} style={{ cursor: "default" }}>
                   <span className="id" style={{ color: "var(--ember)" }}>NEW</span>
-                  <span className="txt">{c.holder} — {c.name}<small>{c.issuer || "—"}</small></span>
+                  <span className="txt">{c.holder} — {c.name}<small>{c.issuer || "—"}{c.docPath ? " · certificate attached" : " · no file"}</small></span>
+                  {c.docPath && <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => openCertDoc(c.docPath!)}>View</button>}
                   <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => verifyCertification(c.id, true)}>Verify</button>
                   <button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => verifyCertification(c.id, false)}>Reject</button>
                 </div>
@@ -1203,18 +1522,24 @@ export default function HrView() {
                 <span className="meta">{recruitment.length} roles</span>
               </div>
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Role</th><th>Dept</th><th>Candidates</th><th></th></tr></thead>
+                <thead><tr><th>Ref</th><th>Role</th><th>Status</th><th>Applicants</th><th></th></tr></thead>
                 <tbody>
                   {recruitment.length === 0 && <tr><td colSpan={5} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No job openings yet.</td></tr>}
-                  {recruitment.map((r) => (
-                    <tr key={r.ref}>
-                      <td className="mono">{r.ref}</td>
-                      <td><strong>{r.roleTitle}</strong><div style={{ fontSize: 11 }}><span className={`pill ${r.state === "filled" ? "done" : r.state === "closed" ? "over" : "today"}`} style={{ textTransform: "none" }}>{cap(r.state)}</span></div></td>
-                      <td style={{ fontSize: 12 }}>{r.dept || "—"}</td>
-                      <td className="mono">{r.candidates.length}</td>
-                      <td style={{ textAlign: "right" }}><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "candidate", reqRef: r.ref }); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>+ Candidate</a></td>
-                    </tr>
-                  ))}
+                  {recruitment.map((r) => {
+                    const top = Math.max(0, ...r.candidates.map((c) => c.eligibility));
+                    return (
+                      <tr key={r.ref} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "postingDetail", ref: r.ref })}>
+                        <td className="mono">{r.ref}</td>
+                        <td><strong>{r.roleTitle}</strong><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{r.dept || "—"}</div></td>
+                        <td><span className={`pill ${r.published ? "done" : ""}`} style={{ textTransform: "none" }}>{r.published ? "Published" : "Draft"}</span></td>
+                        <td className="mono">{r.candidates.length}{r.candidates.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}> · top {top}%</span>}</td>
+                        <td style={{ textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+                          <a href="#" onClick={(e) => { e.preventDefault(); publishPosting(r.ref, !r.published); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12, marginRight: 10 }}>{r.published ? "Unpublish" : "Publish"}</a>
+                          <a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "candidate", reqRef: r.ref }); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>+ Candidate</a>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1302,6 +1627,7 @@ export default function HrView() {
       <StaffDetailModal />
       <StaffProfileModal />
       <RequisitionModal />
+      <PostingDetailModal />
       <CandidateModal />
       <EnumeratorModal />
       <AssignmentModal />
