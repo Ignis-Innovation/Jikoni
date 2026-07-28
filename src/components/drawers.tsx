@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../store";
 import {
-  findEng, engDetails, engStages, vendorDetails, users, roleMeta, superAdmins,
+  findEng, engDetails, engStages, vendorDetails, roleMeta,
   accessModules, lvlName, lvlClass, roleTemplates, Perms,
 } from "../data";
 import { XI, LockI, EyeI, PlusI, ExportI } from "./icons";
@@ -492,13 +492,13 @@ export function ProjectDrawer() {
 
 /* ================= ACCESS ================= */
 export function AccessDrawer() {
-  const { accessEmail, closeAccess, perms, saveAccess, toast } = useApp();
-  const u = accessEmail ? users.find((x) => x.e === accessEmail) : null;
+  const { accessEmail, closeAccess, perms, saveAccess, toast, members } = useApp();
+  const u = accessEmail ? members.find((x) => x.email === accessEmail) : null;
   const [draft, setDraft] = useState<Perms>({});
 
   useEffect(() => {
     if (!accessEmail || !u) return;
-    const base = { ...(perms[accessEmail] || roleTemplates[u.role] || {}) };
+    const base = { ...(perms[accessEmail] || roleTemplates[u.roleKey] || {}) };
     accessModules.forEach((m) => { if (base[m.k] == null) base[m.k] = 0; });
     setDraft(base);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -522,11 +522,11 @@ export function AccessDrawer() {
       onClose={closeAccess}
       header={
         <div className="dt">
-          <div className="av-sm" style={{ width: 38, height: 38, fontSize: 15, background: u?.c }}>{u ? u.n[0] : "—"}</div>
+          <div className="av-sm" style={{ width: 38, height: 38, fontSize: 15, background: u?.color ?? undefined }}>{u ? u.name[0] : "—"}</div>
           <div>
-            <h3>{u ? u.n : "—"}</h3>
+            <h3>{u ? u.name : "—"}</h3>
             <div className="sub">
-              {u ? u.rt + " · " + roleMeta[u.role][1] + (superAdmins.includes(u.e) ? " · super admin" : "") : "—"}
+              {u ? (u.roleTitle ?? roleMeta[u.roleKey]?.[1] ?? "Member") + " · " + (roleMeta[u.roleKey]?.[1] ?? u.roleKey) + (perms[u.email]?.users === 3 ? " · super admin" : "") : "—"}
             </div>
           </div>
         </div>
@@ -582,8 +582,8 @@ export function AccessDrawer() {
             <h4><EyeI /> What they'll see</h4>
             <div className="pv-sub">
               {visible.length
-                ? `${u.n} will see ${visible.length} module${visible.length > 1 ? "s" : ""} in the sidebar. Everything else stays hidden.`
-                : `${u.n} will see no modules. Grant at least one above.`}
+                ? `${u.name} will see ${visible.length} module${visible.length > 1 ? "s" : ""} in the sidebar. Everything else stays hidden.`
+                : `${u.name} will see no modules. Grant at least one above.`}
             </div>
             <div>
               {visible.map((m) => {

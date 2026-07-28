@@ -130,26 +130,8 @@ export const crmData: Record<"up" | "down", { title: string; meta: string; rows:
   },
 };
 
-export interface User {
-  n: string;
-  e: string;
-  role: string;
-  rt: string;
-  two: boolean;
-  st: string;
-  sl: string;
-  c: string;
-}
-
-export const users: User[] = [
-  { n: "Dennis", e: "dennis@ignis.africa", role: "admin", rt: "Managing Director", two: true, st: "active", sl: "Active now", c: "#E2632A" },
-  { n: "Brian", e: "brian@ignis.africa", role: "admin", rt: "Platform / Tech", two: true, st: "active", sl: "12 min ago", c: "#12A3BE" },
-  { n: "Joan", e: "joan@ignis.africa", role: "fin", rt: "Operations", two: true, st: "active", sl: "40 min ago", c: "#3C8A5E" },
-  { n: "Wilson", e: "wilson@ignis.africa", role: "std", rt: "BD — Upstream CRM", two: true, st: "away", sl: "2 h ago", c: "#6D28D9" },
-  { n: "Elizabeth", e: "elizabeth@ignis.africa", role: "std", rt: "Partnerships — Downstream", two: false, st: "away", sl: "Yesterday", c: "#B91C1C" },
-  { n: "Wanjiku", e: "wanjiku@ignis.africa", role: "admin", rt: "Chief of Staff", two: true, st: "active", sl: "Active now", c: "#0e7d91" },
-  { n: "Lily", e: "lily@ignis.africa", role: "view", rt: "Communications", two: false, st: "off", sl: "3 days ago", c: "#A16207" },
-];
+// The member roster is no longer hardcoded — User Management reads it live from
+// public.app_users (see store.tsx loadFromDb / Member). Invite people to populate it.
 
 export const roleMeta: Record<string, [string, string]> = {
   admin: ["admin", "Admin"],
@@ -189,8 +171,8 @@ export const roleTemplates: Record<string, Perms> = {
   view: { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 0, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
 };
 
-// the super admins who can assign rights — Wanjiku is signed in as one
-export const superAdmins = ["dennis@ignis.africa", "wanjiku@ignis.africa"];
+// Super admin = anyone whose live grant gives full (level 3) access to the "users"
+// module. Derived from perms at read time (see Users.tsx / AccessDrawer), not a list.
 
 // least-privilege grants, set per person (not just by role)
 export const initialPerms: Record<string, Perms> = {

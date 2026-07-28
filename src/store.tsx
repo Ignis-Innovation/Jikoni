@@ -10,7 +10,7 @@ import { LoginGate, SetPassword } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
-  findEng, users, kes,
+  findEng, kes,
 } from "./data";
 
 export interface Toast { id: number; title: string; sub?: string }
@@ -121,6 +121,18 @@ export interface ComplianceData {
   risks: RiskRow[]; contracts: ContractRow[];
 }
 
+// a real member row from public.app_users (replaces the old hardcoded demo list)
+export interface Member {
+  name: string;
+  email: string;
+  roleKey: string;
+  roleTitle: string | null;
+  twoFa: boolean;
+  status: string;   // active | away | off
+  state: string;    // active | invited | ...
+  color: string | null;
+}
+
 interface AppApi {
   view: string;
   tabs: Record<string, string>;
@@ -162,6 +174,8 @@ interface AppApi {
 
   perms: Record<string, Perms>;
   saveAccess: (email: string, p: Perms) => void;
+
+  members: Member[];
 
   inviteOpen: boolean;
   setInviteOpen: (b: boolean) => void;
@@ -354,6 +368,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [accessEmail, setAccessEmail] = useState<string | null>(null);
 
   const [perms, setPerms] = useState(initialPerms);
+  const [members, setMembers] = useState<Member[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
 
   const [reqOpen, setReqOpen] = useState(false);
@@ -427,6 +442,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNewPOs(data.pos as NewPO[]);
     setNewInvoices(data.salesInvoices as NewInvoice[]);
     setPerms({ ...initialPerms, ...(data.perms as Record<string, Perms>) });
+    // User Management runs off the live app_users table (no hardcoded roster) — invited
+    // people appear as soon as invite_user inserts them, since sendInvite re-runs loadFromDb.
+    const { data: memberRows } = await supabase
+      .from("app_users")
+      .select("name, email, role_key, role_title, two_fa, status, state, color")
+      .order("created_at");
+    setMembers(((memberRows ?? []) as any[]).map((m) => ({
+      name: m.name, email: m.email, roleKey: m.role_key, roleTitle: m.role_title,
+      twoFa: !!m.two_fa, status: m.status, state: m.state, color: m.color,
+    })));
     setProjectDetails(data.projects as Record<string, ProjectDetail>);
     setExtraProjects(data.extraProjects as { name: string; funder: string }[]);
     setEngToProject(data.engToProject as Record<string, string>);
@@ -648,12 +673,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function saveAccessFn(email: string, p: Perms) {
-    const u = users.find((x) => x.e === email);
+    const u = members.find((x) => x.email === email);
     const { error } = await supabase.rpc("save_access", { p_email: email, p_perms: p });
     if (error) { toast("Access not saved", error.message); return; }
     setPerms((prev) => ({ ...prev, [email]: { ...p } }));
     setAccessEmail(null);
-    toast("Access updated for " + (u?.n || email), "Recorded in the audit log with your name and time");
+    toast("Access updated for " + (u?.name || email), "Recorded in the audit log with your name and time");
   }
 
   /* ---------- requisition → PO chain (budget commit + routing + audit in the DB) ---------- */
@@ -1411,6 +1436,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openAccess: (e) => setAccessEmail(e), closeAccess: () => setAccessEmail(null),
     xEng, xProject, xTab, xView, openRecord,
     perms, saveAccess: saveAccessFn,
+    members,
     inviteOpen, setInviteOpen, sendInvite,
     reqOpen, openReq: () => setReqOpen(true), closeReq: () => setReqOpen(false),
     reqs, submitReq, approvePR,
