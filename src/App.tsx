@@ -4,7 +4,7 @@ import { flagColors } from "./data";
 import { moduleLabels, subnavs } from "./nav";
 import {
   BrandMark, ChevDown, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
-  ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI, BoxI,
+  ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI, BoxI, LogoutI,
 } from "./components/icons";
 import { Toasts } from "./components/ui";
 import HomeView from "./views/Home";
@@ -76,7 +76,8 @@ function NavModule({ v, icon, badge, badgeCls, collapsed, setCollapsed }: {
 }
 
 function Sidebar() {
-  const { view, entity, cycleEntity } = useApp();
+  const { view, entity, cycleEntity, me, signOut } = useApp();
+  const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
   // per-module "collapsed" override so an active module can be folded shut
   const [collapsedFor, setCollapsedFor] = useState<string | null>(null);
   const collapsed = (v: string) => collapsedFor === v;
@@ -134,18 +135,22 @@ function Sidebar() {
       </nav>
 
       <div className="me">
-        <div className="av">W</div>
+        <div className="av">{initial}</div>
         <div className="info">
-          <div className="n">Wanjiku</div>
-          <div className="r">Chief of Staff</div>
+          <div className="n">{me?.name || "…"}</div>
+          <div className="r">{me?.roleTitle || "Member"}</div>
         </div>
+        <button className="logout" title="Log out" aria-label="Log out" onClick={() => signOut()}>
+          <LogoutI />
+        </button>
       </div>
     </aside>
   );
 }
 
 function Topbar() {
-  const { toast, openTask } = useApp();
+  const { toast, openTask, me } = useApp();
+  const firstName = (me?.name || "").trim().split(/\s+/)[0] || "there";
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const iv = setInterval(() => setNow(new Date()), 1000);
@@ -161,7 +166,7 @@ function Topbar() {
   return (
     <div className="topbar">
       <div className="greeting">
-        <div className="g">{greet}, Wanjiku</div>
+        <div className="g">{greet}, {firstName}</div>
         <div className="d">{dateline}</div>
       </div>
       <div className="live"><span className="dot" /> Live</div>

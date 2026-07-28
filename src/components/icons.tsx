@@ -46,6 +46,7 @@ export const FlameGlyphI = (p: P) => S(p, 2, <path d="M12 2c1 3-1 4-1 6 0 1.5 1 
 export const LockI = (p: P) => S({ width: 16, height: 16, ...p }, 1.8, <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>);
 export const LockSmI = (p: P) => S({ style: { width: 14, height: 14 }, ...p }, 1.8, <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>);
 export const XI = (p: P) => S({ width: 16, height: 16, ...p }, 2, <path d="M18 6 6 18M6 6l12 12" />);
+export const LogoutI = (p: P) => S({ width: 16, height: 16, ...p }, 2, <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" strokeLinecap="round" strokeLinejoin="round" />);
 export const CheckI = (p: P) => S({ width: 14, height: 14, ...p }, 2.5, <path d="M20 6 9 17l-5-5" />);
 export const CheckBoldI = (p: P) => S({ width: 12, height: 12, ...p }, 3, <path d="M20 6 9 17l-5-5" />);
 export const EyeI = (p: P) => (

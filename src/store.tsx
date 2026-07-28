@@ -121,6 +121,9 @@ export interface ComplianceData {
   risks: RiskRow[]; contracts: ContractRow[];
 }
 
+// the signed-in person (from bootstrap's `me`, keyed off the JWT email)
+export interface Me { name: string; email: string; roleTitle: string | null }
+
 // a real member row from public.app_users (replaces the old hardcoded demo list)
 export interface Member {
   name: string;
@@ -175,6 +178,8 @@ interface AppApi {
   perms: Record<string, Perms>;
   saveAccess: (email: string, p: Perms) => void;
 
+  me: Me | null;
+  signOut: () => void;
   members: Member[];
 
   inviteOpen: boolean;
@@ -368,6 +373,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [accessEmail, setAccessEmail] = useState<string | null>(null);
 
   const [perms, setPerms] = useState(initialPerms);
+  const [me, setMe] = useState<Me | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
 
@@ -437,6 +443,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   async function loadFromDb(): Promise<boolean> {
     const { data, error } = await supabase.rpc("bootstrap");
     if (error) { toast("Couldn't load records", error.message); return false; }
+    setMe((data.me as Me) ?? null);   // who's actually signed in — drives the sidebar identity
     setMyWeek(data.tasks as WeekTask[]);
     setReqs(data.reqs as Req[]);
     setNewPOs(data.pos as NewPO[]);
@@ -1436,6 +1443,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openAccess: (e) => setAccessEmail(e), closeAccess: () => setAccessEmail(null),
     xEng, xProject, xTab, xView, openRecord,
     perms, saveAccess: saveAccessFn,
+    me,
+    signOut: async () => { await supabase.auth.signOut(); setMe(null); setMembers([]); },
     members,
     inviteOpen, setInviteOpen, sendInvite,
     reqOpen, openReq: () => setReqOpen(true), closeReq: () => setReqOpen(false),

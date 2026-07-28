@@ -74,6 +74,9 @@
   .me .info{line-height:1.25;min-width:0}
   .me .info .n{font-size:12.5px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .me .info .r{font-size:10px;color:#7d8794}
+  .me .logout{margin-left:auto;flex-shrink:0;width:30px;height:30px;border-radius:8px;border:1px solid #343b46;
+    background:transparent;color:#9aa4b1;display:grid;place-items:center;cursor:pointer;transition:all .15s}
+  .me .logout:hover{background:#343b46;color:#fff;border-color:#4a5361}
 
   /* ---------- MAIN ---------- */
   .main{flex:1;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
