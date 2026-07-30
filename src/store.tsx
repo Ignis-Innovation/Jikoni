@@ -10,7 +10,7 @@ import { LoginGate, SetPassword } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
-  findEng, kes,
+  kes,
 } from "./data";
 
 export interface Toast { id: number; title: string; sub?: string }
@@ -670,12 +670,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const xTab = (v: string, t: string) => { closeAllDrawers(); goTab(v, t); };
   const xView = (v: string) => { closeAllDrawers(); go(v); };
 
+  // Look an engagement up in the live CRM read model (DB-backed) — the drawer,
+  // My Week records and won-deal → project flow all resolve engagements here.
+  const liveEng = (id: string) => [...crm.engUp, ...crm.engDown].find((e) => e.id === id) || null;
+
   function openEng(id: string) {
-    if (!findEng(id)) { toast(id, "Engagement detail"); return; }
+    if (!liveEng(id)) { toast(id, "Engagement detail"); return; }
     setEngId(id);
   }
   function openRecord(id: string) {
-    if (findEng(id)) { openEng(id); return; }
+    if (liveEng(id)) { openEng(id); return; }
     toast(id, "Opens the item with its history");
   }
 
@@ -737,7 +741,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   /* ---------- won deal → project ---------- */
   async function createProjectFromEng(id: string) {
-    const b = findEng(id);
+    const b = liveEng(id);
     if (!b) return;
     const { data, error } = await supabase.rpc("create_project_from_eng", { p_eng_ref: id });
     if (error) { toast("Project not created", error.message); return; }

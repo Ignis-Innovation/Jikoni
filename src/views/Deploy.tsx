@@ -1,16 +1,6 @@
 import { useApp } from "../store";
 import { Pulse } from "../components/ui";
-import { Bars } from "../components/charts";
 import { DocI } from "../components/icons";
-
-const pulse = [
-  { k: "Cookers deployed", tick: "t-blue", v: "1,840", d: "+212 this month", dc: "up" as const },
-  { k: "Institutions live", tick: "t-blue", v: "47", d: "across 5 counties", dc: "up" as const },
-  { k: "tCO₂e reduced", tick: "t-green", v: "3,120", d: "this quarter", dc: "up" as const },
-  { k: "Credits in pipeline", tick: "t-ember", v: "2,640", d: "awaiting verification", dc: "flat" as const },
-  { k: "Avg daily usage", tick: "t-blue", v: "4.1h", d: "per cooker", dc: "up" as const },
-  { k: "Uptime", tick: "t-blue", v: "96%", d: "fleet", dc: "flat" as const },
-];
 
 export default function DeployView() {
   const { toast } = useApp();
@@ -27,31 +17,15 @@ export default function DeployView() {
           </button>
         </div>
       </div>
-      <Pulse data={pulse} />
+      <Pulse data={[]} />
       <div className="grid g-2">
         <div className="panel">
-          <div className="panel-h"><h3>Assets deployed by county</h3><span className="meta">live · 5 counties</span></div>
-          <div className="pad">
-            <Bars rows={[
-              { l: "Kiambu", n: "520", w: 100, c: "var(--flame)" },
-              { l: "Machakos", n: "410", w: 79, c: "var(--flame)" },
-              { l: "Makueni", n: "355", w: 68, c: "var(--flame)" },
-              { l: "Nakuru", n: "310", w: 60, c: "var(--flame)" },
-              { l: "Kajiado", n: "245", w: 47, c: "var(--flame)" },
-            ]} />
-          </div>
+          <div className="panel-h"><h3>Assets deployed by county</h3><span className="meta">by county</span></div>
+          <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>No deployments recorded yet.</div>
         </div>
         <div className="panel">
-          <div className="panel-h"><h3>Carbon chain — this quarter</h3><span className="meta">tonnes CO₂e</span></div>
-          <div className="pad">
-            <Bars rows={[
-              { l: "Deployed", n: "1,840", w: 100, c: "#12A3BE" },
-              { l: "Active use", n: "1,766", w: 96, c: "#1597b8" },
-              { l: "Fuel displaced", n: "3,440 t", w: 88, c: "#3C8A5E" },
-              { l: "CO₂e reduced", n: "3,120 t", w: 82, c: "#3C8A5E" },
-              { l: "Verified", n: "480 t", w: 15, c: "var(--ember)" },
-            ]} />
-          </div>
+          <div className="panel-h"><h3>Carbon chain</h3><span className="meta">tonnes CO₂e</span></div>
+          <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>No carbon data yet.</div>
         </div>
       </div>
     </>

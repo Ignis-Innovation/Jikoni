@@ -6,6 +6,13 @@ import { CheckI } from "./icons";
 
 export function Pulse({ data }: { data: PulseStat[] }) {
   const { toast } = useApp();
+  if (!data.length) {
+    return (
+      <div className="pulse-empty" style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--ink-soft)", border: "1px dashed var(--hairline)", borderRadius: 10, marginBottom: 18 }}>
+        No metrics yet — they’ll populate as real records are entered.
+      </div>
+    );
+  }
   return (
     <div className="pulse">
       {data.map((s, i) => (

@@ -2,25 +2,8 @@ import { useState } from "react";
 import { useApp } from "../store";
 import { crmData } from "../data";
 import { Pulse } from "../components/ui";
-import { Donut, ChartLegend, Bars } from "../components/charts";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
-
-const pulse = [
-  { k: "Active engagements", tick: "t-blue", v: "29", d: "upstream + down", dc: "up" as const },
-  { k: "Critical", tick: "t-ember", v: "8", d: "need action", dc: "flat" as const },
-  { k: "Overdue follow-ups", tick: "t-red", v: "4", d: "across owners", dc: "down" as const },
-  { k: "Stalled 14d+", tick: "t-ember", v: "5", d: "no recent touch", dc: "flat" as const },
-  { k: "Upstream committed", tick: "t-blue", v: "$1.35M", d: "of $3M", dc: "up" as const },
-  { k: "Downstream EOIs", tick: "t-blue", v: "38", d: "converting", dc: "up" as const },
-];
-const mix = [
-  { l: "Institutions", v: 63, c: "#12A3BE", d: "63" },
-  { l: "Funders", v: 9, c: "#E2632A", d: "9" },
-  { l: "Investors", v: 5, c: "#6D28D9", d: "5" },
-  { l: "Distributors / EPC", v: 6, c: "#3C8A5E", d: "6" },
-  { l: "Gov / TA", v: 7, c: "#A89C8E", d: "7" },
-];
 
 export default function CrmView() {
   const { tabs, openEng, crm, openEngForm, openPartnerForm, openOppForm } = useApp();
@@ -57,63 +40,25 @@ export default function CrmView() {
 
       {tab === "cr-over" && (
         <div className="crm-panel active">
-          <Pulse data={pulse} />
+          <Pulse data={[]} />
           <div className="grid g-2">
             <div className="panel">
               <div className="panel-h"><h3>Engagements by relationship</h3><span className="meta">who's in the book</span></div>
-              <div className="pad" style={{ display: "flex", alignItems: "center", gap: 24 }}>
-                <Donut segs={mix} big="90" small="partners" />
-                <div style={{ flex: 1 }}><ChartLegend segs={mix} /></div>
-              </div>
+              <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>No engagements yet — add one from the Engagements tab.</div>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Upstream funnel</h3><span className="meta">capital pipeline · by stage</span></div>
-              <div className="pad">
-                <Bars rows={[
-                  { l: "Discovery", n: "9", w: 100, c: "var(--flame)" },
-                  { l: "Materials", n: "6", w: 66, c: "var(--flame)" },
-                  { l: "Negotiation", n: "4", w: 44, c: "var(--ember)" },
-                  { l: "Term sheet", n: "2", w: 22, c: "var(--ember)" },
-                  { l: "Close", n: "1", w: 11, c: "var(--green)" },
-                ]} />
-              </div>
+              <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>No pipeline data yet.</div>
             </div>
           </div>
           <div className="grid g-2" style={{ marginTop: 18 }}>
             <div className="panel">
               <div className="panel-h"><h3>Needs attention</h3><span className="meta">critical · overdue · stalled</span></div>
-              <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("ENG-002")}>
-                <span className="id" style={{ color: "var(--red)" }}>ENG-002</span>
-                <span className="txt">IEA — DSA + dataset overdue<small>Wilson</small></span>
-                <span className="pill over">Overdue</span>
-              </div>
-              <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("ENG-026")}>
-                <span className="id" style={{ color: "var(--red)" }}>ENG-026</span>
-                <span className="txt">SEforALL — Ethiopia brief overdue<small>Wilson</small></span>
-                <span className="pill over">Overdue</span>
-              </div>
-              <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("DST-018")}>
-                <span className="id" style={{ color: "var(--ember)" }}>DST-018</span>
-                <span className="txt">Kiambu cluster — site visit slipping<small>Elizabeth</small></span>
-                <span className="pill today">Stalled 16d</span>
-              </div>
-              <div className="task" style={{ cursor: "pointer" }} onClick={() => openEng("ENG-019")}>
-                <span className="id" style={{ color: "var(--ember)" }}>ENG-019</span>
-                <span className="txt">Cygnum — no touch in 14 days<small>Wilson</small></span>
-                <span className="pill today">Stalled</span>
-              </div>
+              <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>Nothing needs attention yet.</div>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Downstream conversion</h3><span className="meta">institutions · by stage</span></div>
-              <div className="pad">
-                <Bars rows={[
-                  { l: "Identification", n: "61", w: 100, c: "var(--flame)" },
-                  { l: "EOI", n: "38", w: 62, c: "var(--flame)" },
-                  { l: "Site visit", n: "19", w: 31, c: "var(--ember)" },
-                  { l: "Contracting", n: "11", w: 18, c: "var(--ember)" },
-                  { l: "Deployed", n: "7", w: 11, c: "var(--green)" },
-                ]} />
-              </div>
+              <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>No conversion data yet.</div>
             </div>
           </div>
         </div>

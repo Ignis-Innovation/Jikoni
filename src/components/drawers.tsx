@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../store";
 import {
-  findEng, engDetails, engStages, vendorDetails, roleMeta,
+  engDetails, engStages, vendorDetails, roleMeta,
   accessModules, lvlName, lvlClass, roleTemplates, Perms,
 } from "../data";
 import { XI, LockI, EyeI, PlusI, ExportI } from "./icons";
@@ -61,11 +61,14 @@ export function EngDrawer() {
     engId, closeEng, toast, engToProject, xProject, createProjectFromEng, openTask,
     crm, openEngUpdate, setEngagementPartners, engDocUrl,
   } = useApp();
-  const b = engId ? findEng(engId) : null;
-  const det = (engId && engDetails[engId]) || {};
-  const up = b?.pipeline === "up";
-  // live engagement (DB): current stage + persisted updates log
+  // Engagement comes straight from the live CRM read model (DB) — the header,
+  // stage ribbon, updates log and links all read from it.
+  const up = engId ? crm.engUp.some((e) => e.id === engId) : false;
   const live = engId ? [...crm.engUp, ...crm.engDown].find((e) => e.id === engId) : null;
+  const b = live
+    ? { id: live.id, n: live.n, st: live.st, o: live.o, pl: live.pl, plt: live.plt, pipeline: (up ? "up" : "down") as "up" | "down" }
+    : null;
+  const det = (engId && engDetails[engId]) || {};
   const stage = live?.st || b?.st || "";
   const updates = live?.updates ?? det.updates ?? [];
   const ladder = engStages[up ? "up" : "down"];

@@ -1,14 +1,8 @@
-import { useEffect, useState } from "react";
 import { useApp } from "../store";
 import { funders } from "../data";
 
 export default function RaiseView() {
-  const { toast, go } = useApp();
-  const [animated, setAnimated] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setAnimated(true), 80);
-    return () => clearTimeout(t);
-  }, []);
+  const { go } = useApp();
 
   return (
     <>
@@ -23,20 +17,8 @@ export default function RaiseView() {
       </div>
       <div className="panel" style={{ marginBottom: 18 }}>
         <div className="panel-h"><h3>Progress to target</h3><span className="meta">USD · committed vs target</span></div>
-        <div className="raise">
-          <div className="top">
-            <div className="big">$1.35M</div>
-            <div className="of">committed of $3.0M target</div>
-          </div>
-          <div className="meter">
-            <div className="seg" style={{ background: "var(--flame)", width: animated ? "18%" : 0 }}>Equity</div>
-            <div className="seg" style={{ background: "var(--ember)", width: animated ? "27%" : 0 }}>Concessional</div>
-          </div>
-          <div className="legend">
-            <span><i style={{ background: "var(--flame)" }} /> Equity committed · $0.55M</span>
-            <span><i style={{ background: "var(--ember)" }} /> Concessional committed · $0.80M</span>
-            <span><i style={{ background: "#F1EDE5" }} /> Remaining · $1.65M</span>
-          </div>
+        <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "30px 20px", textAlign: "center" }}>
+          No commitments recorded yet — the raise progress will show here.
         </div>
       </div>
       <div className="panel">
@@ -44,8 +26,10 @@ export default function RaiseView() {
         <table className="tbl">
           <thead><tr><th>Funder</th><th>Type</th><th>Stage</th><th>Indicative</th></tr></thead>
           <tbody>
-            {funders.map((f) => (
-              <tr key={f.n} onClick={() => toast(f.n, "Opens the engagement, materials and next action")} style={{ cursor: "pointer" }}>
+            {funders.length === 0 ? (
+              <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No funders in the pipeline yet.</td></tr>
+            ) : funders.map((f) => (
+              <tr key={f.n}>
                 <td><strong>{f.n}</strong></td>
                 <td>{f.ty}</td>
                 <td><span className={`pill ${f.stc === "blue" ? "week" : f.stc === "ember" ? "today" : "over"}`} style={{ textTransform: "none" }}>{f.st}</span></td>

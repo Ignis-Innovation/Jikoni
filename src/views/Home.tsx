@@ -1,18 +1,13 @@
+import type { ReactNode } from "react";
 import { useApp } from "../store";
-import { pulseData, burners, teamColors } from "../data";
+import { pulseData, teamColors } from "../data";
 import { Pulse } from "../components/ui";
-import { Donut, ChartLegend, VBars } from "../components/charts";
-import { ExportI, CheckSqI, FlameGlyphI, PlusI, BurnerFlame } from "../components/icons";
+import { ExportI, CheckSqI, FlameGlyphI, PlusI } from "../components/icons";
 
-const raiseSegs = [
-  { l: "Equity committed", v: 0.55, c: "#12A3BE", d: "$0.55M" },
-  { l: "Concessional", v: 0.8, c: "#E2632A", d: "$0.80M" },
-  { l: "Remaining", v: 1.65, c: "#EDE8DF", d: "$1.65M" },
-];
-const trend = [
-  { l: "Jan", v: 980 }, { l: "Feb", v: 1160 }, { l: "Mar", v: 1340 },
-  { l: "Apr", v: 1520 }, { l: "May", v: 1690 }, { l: "Jun", v: 1840 },
-];
+// Panels with no live data source yet render a placeholder until they're wired.
+function EmptyPad({ children }: { children: ReactNode }) {
+  return <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>{children}</div>;
+}
 
 export default function HomeView() {
   const { entity, toast, myWeek, taskFilter, setTaskFilter, openTask, openRecord } = useApp();
@@ -39,14 +34,11 @@ export default function HomeView() {
       <div className="grid g-2">
         <div className="panel">
           <div className="panel-h"><h3>Capital raised</h3><span className="meta">toward $3.0M target</span></div>
-          <div className="pad" style={{ display: "flex", alignItems: "center", gap: 24 }}>
-            <Donut segs={raiseSegs} big="45%" small="of $3M" />
-            <div style={{ flex: 1 }}><ChartLegend segs={raiseSegs} /></div>
-          </div>
+          <EmptyPad>No fundraise recorded yet.</EmptyPad>
         </div>
         <div className="panel">
           <div className="panel-h"><h3>Cookstoves deployed</h3><span className="meta">last 6 months · cumulative</span></div>
-          <div className="pad"><VBars items={trend} color="#12A3BE" /></div>
+          <EmptyPad>No deployment data yet.</EmptyPad>
         </div>
       </div>
 
@@ -98,17 +90,9 @@ export default function HomeView() {
             <h3><span className="glyph blue"><FlameGlyphI /></span> Status Board</h3>
             <span className="meta">where things stand</span>
           </div>
-          <div className="burners">
-            {burners.map((b, i) => (
-              <div className="burner" key={i} onClick={() => toast(b.t, "Opens the status detail and history")}>
-                <div className={`ring ${b.ring}`}><BurnerFlame ring={b.ring} /></div>
-                <div className="b-txt">
-                  <div className="b-t">{b.t}</div>
-                  <div className="b-s">{b.s}</div>
-                </div>
-                <span className={`b-stat ${b.st}`}>{b.pl}</span>
-              </div>
-            ))}
+          <div className="empty" style={{ padding: "34px 20px" }}>
+            <div className="e-t">Nothing on the board yet</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>Key items across the business will surface here.</div>
           </div>
         </div>
       </div>
