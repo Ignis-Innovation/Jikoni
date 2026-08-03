@@ -1192,9 +1192,12 @@ export function ContractModal() {
   );
 }
 
-/* ================= NEW PROJECT ================= */
+/* ================= NEW / EDIT PROJECT ================= */
 export function ProjectModal() {
-  const { projectFormOpen, closeProjectForm, createProject, crm, toast } = useApp();
+  const { projectFormOpen, closeProjectForm, createProject, projectEdit, closeProjectEdit, updateProject, projectDetails, crm, toast } = useApp();
+  const editing = projectEdit != null;
+  const open = projectFormOpen || editing;
+  const onClose = editing ? closeProjectEdit : closeProjectForm;
   const [name, setName] = useState("");
   const [funder, setFunder] = useState("");
   const [budget, setBudget] = useState("");
@@ -1202,27 +1205,45 @@ export function ProjectModal() {
   const [endDate, setEndDate] = useState("");
   const [team, setTeam] = useState("");
   const [status, setStatus] = useState("Setup");
+  const [location, setLocation] = useState("");
   useEffect(() => {
-    if (projectFormOpen) { setName(""); setFunder(""); setBudget(""); setStartDate(""); setEndDate(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); }
-  }, [projectFormOpen, crm.teamNames]);
+    if (!open) return;
+    if (editing) {
+      const p = projectDetails[projectEdit!];
+      setName(projectEdit!); setFunder(p?.funder && p.funder !== "—" ? p.funder : "");
+      setBudget(p?.budgetAmount ? String(p.budgetAmount) : "");
+      setStartDate(p?.startDate ?? ""); setEndDate(p?.endDate ?? "");
+      setStatus(p?.status || "Setup"); setTeam(p?.team ?? ""); setLocation(p?.location ?? "");
+    } else {
+      setName(""); setFunder(""); setBudget(""); setStartDate(""); setEndDate(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); setLocation("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing, projectEdit]);
 
   function save() {
     if (!name.trim()) { toast("Name the project", "What's the project called?"); return; }
     const budgetAmount = parseFloat(budget) || 0;
     if (budgetAmount <= 0) { toast("Budget is required", "Enter the total budget in KES — milestones draw against it"); return; }
     if (startDate && endDate && endDate < startDate) { toast("Check the dates", "The end date can't be before the start date"); return; }
-    createProject({ name: name.trim(), funder: funder.trim(), budgetAmount, startDate, endDate, team, status });
+    if (editing) {
+      const id = projectDetails[projectEdit!]?.id;
+      if (!id) { toast("Project not found", "Reload and try again"); return; }
+      updateProject(id, { funder: funder.trim(), budgetAmount, startDate, endDate, team, status, location: location.trim() });
+    } else {
+      createProject({ name: name.trim(), funder: funder.trim(), budgetAmount, startDate, endDate, team, status, location: location.trim() });
+    }
   }
 
   return (
-    <ModalShell open={projectFormOpen} onClose={closeProjectForm} width={520}>
-      <div className="mh"><h3>New project</h3><p>Creates a project on its own code — budget, milestones, drawdowns and field activity track against it.</p></div>
+    <ModalShell open={open} onClose={onClose} width={520}>
+      <div className="mh"><h3>{editing ? "Edit project" : "New project"}</h3><p>{editing ? "Update this project's budget, dates, owner and location." : "Creates a project on its own code — budget, milestones, drawdowns and field activity track against it."}</p></div>
       <div className="mb">
-        <div><label>Project name</label><input className="field" placeholder="e.g. Makueni VTC rollout" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div><label>Project name</label><input className="field" placeholder="e.g. Makueni VTC rollout" value={name} onChange={(e) => setName(e.target.value)} disabled={editing} /></div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><label>Funder <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. Charm Impact" value={funder} onChange={(e) => setFunder(e.target.value)} /></div>
           <div style={{ width: 180 }}><label>Budget (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" placeholder="e.g. 3200000" value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
         </div>
+        <div><label>Location <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· where the work happens</span></label><input className="field" placeholder="e.g. Makueni County" value={location} onChange={(e) => setLocation(e.target.value)} /></div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><label>Start date</label><input className="field" style={{ width: "100%" }} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></div>
           <div style={{ flex: 1 }}><label>End date</label><input className="field" style={{ width: "100%" }} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
@@ -1238,8 +1259,8 @@ export function ProjectModal() {
         </div>
       </div>
       <div className="mf">
-        <button className="btn" onClick={closeProjectForm}>Cancel</button>
-        <button className="btn primary" onClick={save}>Create project</button>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" onClick={save}>{editing ? "Save changes" : "Create project"}</button>
       </div>
     </ModalShell>
   );

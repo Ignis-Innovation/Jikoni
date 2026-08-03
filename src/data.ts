@@ -175,6 +175,8 @@ export interface ProjectDetail {
   endDate?: string;
   timeline: string;
   team: string;
+  location?: string;       // free-text site/location; feeds the field-activity email
+  createdByMe?: boolean;   // caller created this project (or has full projects access) → can edit/delete
   milestones: { id?: string; t: string; s: "done" | "now" | "todo"; amount?: number; start?: string; end?: string }[];
   drawdowns: { id?: string; t: string; v: string; s: string }[];
   reporting: string;

@@ -1,6 +1,6 @@
 import { useApp } from "../store";
 import { Pulse, Note } from "../components/ui";
-import { Donut, ChartLegend, Bars, StaticBars } from "../components/charts";
+import { Bars, StaticBars } from "../components/charts";
 import { Crumb } from "../nav";
 import { PlusI } from "../components/icons";
 import type { ProjectDetail } from "../data";
@@ -33,7 +33,7 @@ const ddPill = (s: string) =>
   /received/i.test(s) ? "done" : /request|pending|due/i.test(s) ? "today" : "week";
 
 export default function ProjectsView() {
-  const { tabs, goTab, openProject, projectDetails, openProjectForm, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
+  const { tabs, goTab, openProject, projectDetails, openProjectForm, openProjectEdit, deleteProject, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
   const tab = tabs.projects;
 
   // one source of truth: every project the backend returns, keyed by name
@@ -69,7 +69,6 @@ export default function ProjectsView() {
     { k: "Reports due", tick: reportsDue.length ? "t-red" : "t-blue", v: String(reportsDue.length), d: "funder obligations", dc: "flat" as const },
     { k: "Field activities", tick: "t-blue", v: String(fieldActivities.length), d: "assigned", dc: "flat" as const },
   ];
-  const donutSegs = budgeted.map((p) => ({ l: p.short, v: budgetOf(p), c: p.c, d: p.budget || "TBD" }));
   // budget-vs-spent per project: the bar fills to burn %, labelled "spent / budget"
   const burnRows = budgeted.map((p) => ({ l: p.short, n: `${fmtKes(spentOf(p))} / ${fmtKes(budgetOf(p))}`, w: burnOf(p), c: burnOf(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
 
@@ -90,17 +89,25 @@ export default function ProjectsView() {
       {tab === "pr-over" && (
         <div className="proj-panel active">
           <Pulse data={pulse} />
-          <div className="grid g-2">
-            <div className="panel">
-              <div className="panel-h"><h3>Portfolio budget by project</h3><span className="meta">allocation</span></div>
-              <div className="pad" style={{ display: "flex", alignItems: "center", gap: 24 }}>
-                <Donut segs={donutSegs} big={fmtKes(budgetTotal)} small="budget" />
-                <div style={{ flex: 1 }}><ChartLegend segs={donutSegs} /></div>
+          <div className="panel">
+            <div className="panel-h"><h3>Portfolio budget by project</h3><span className="meta">budget, spend & burn across the portfolio</span></div>
+            <div className="pad">
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: burnRows.length ? 20 : 0 }}>
+                {[
+                  { k: "Portfolio budget", v: fmtKes(budgetTotal), c: "var(--ink)" },
+                  { k: "Spent to date", v: fmtKes(spentTotal), c: "var(--ember)" },
+                  { k: "Remaining", v: fmtKes(remaining), c: "var(--flame)" },
+                  { k: "Burn", v: `${burnPct}%`, c: burnPct >= 80 ? "var(--red)" : "var(--ink)" },
+                ].map((s) => (
+                  <div key={s.k} style={{ flex: "1 1 140px", padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)" }}>
+                    <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--ink-soft)" }}>{s.k}</div>
+                    <div className="mono" style={{ fontSize: 20, fontWeight: 600, color: s.c, marginTop: 4 }}>{s.v}</div>
+                  </div>
+                ))}
               </div>
-            </div>
-            <div className="panel">
-              <div className="panel-h"><h3>Budget vs spent by project</h3><span className="meta">spent as % of budget</span></div>
-              <div className="pad">{burnRows.length ? <Bars rows={burnRows} /> : <Note>No budgeted projects yet.</Note>}</div>
+              {burnRows.length
+                ? <Bars rows={burnRows} />
+                : <Note>No budgeted projects yet — add a budget on a project to see its burn here.</Note>}
             </div>
           </div>
           <div className="panel" style={{ marginTop: 18 }}>
@@ -138,18 +145,28 @@ export default function ProjectsView() {
           <div className="panel">
             <div className="panel-h"><h3>Project registry</h3><span className="meta">click a project for the full record</span></div>
             <table className="tbl">
-              <thead><tr><th>Project</th><th>Funder</th><th>Budget</th><th>Spent</th><th>Status</th></tr></thead>
+              <thead><tr><th>Project</th><th>Funder</th><th>Location</th><th>Budget</th><th>Spent</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {list.map((p) => (
                   <tr key={p.name} style={{ cursor: "pointer" }} onClick={() => openProject(p.name)}>
                     <td><strong>{p.name}</strong></td>
                     <td>{p.funder || "—"}</td>
+                    <td>{p.location || "—"}</td>
                     <td className="mono">{p.budget || "TBD"}</td>
                     <td className="mono">{p.spent || "0"}</td>
                     <td><span className={`pill ${statusPill(p.status)}`}>{p.status || "Setup"}</span></td>
+                    <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                      {p.createdByMe && (
+                        <>
+                          <button className="btn" style={{ padding: "5px 10px", fontSize: 12 }} onClick={() => openProjectEdit(p.name)}>Edit</button>{" "}
+                          <button className="btn" style={{ padding: "5px 10px", fontSize: 12, color: "var(--red)" }}
+                            onClick={() => { if (confirm(`Delete "${p.name}"? This removes its milestones, drawdowns and field activity. This can't be undone.`)) deleteProject(p.name); }}>Delete</button>
+                        </>
+                      )}
+                    </td>
                   </tr>
                 ))}
-                {!list.length && <tr><td colSpan={5}><Note>No projects yet — click <strong>+ New project</strong>, or convert a won CRM engagement to create one.</Note></td></tr>}
+                {!list.length && <tr><td colSpan={7}><Note>No projects yet — click <strong>+ New project</strong>, or convert a won CRM engagement to create one.</Note></td></tr>}
               </tbody>
             </table>
           </div>

@@ -279,7 +279,12 @@ interface AppApi {
   projectFormOpen: boolean;
   openProjectForm: () => void;
   closeProjectForm: () => void;
-  createProject: (v: { name: string; funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string }) => void;
+  createProject: (v: { name: string; funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string; location: string }) => void;
+  projectEdit: string | null;
+  openProjectEdit: (name: string) => void;
+  closeProjectEdit: () => void;
+  updateProject: (id: string, v: { funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string; location: string }) => void;
+  deleteProject: (name: string) => void;
   addMilestone: (projectId: string, title: string, amount: number, startDate: string, endDate: string, status?: string) => void;
   setMilestoneStatus: (milestoneId: string, status: string) => void;
   addDrawdown: (projectId: string, title: string, amount: string, status?: string) => void;
@@ -485,6 +490,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [engToProject, setEngToProject] = useState(initialEngToProject);
   const [projectToEng, setProjectToEng] = useState(initialProjectToEng);
   const [projectFormOpen, setProjectFormOpen] = useState(false);
+  const [projectEdit, setProjectEdit] = useState<string | null>(null);  // name of project being edited, or null
   const [fieldActivities, setFieldActivities] = useState<FieldActivity[]>([]);
   const [fieldActivityOpen, setFieldActivityOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -1138,11 +1144,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- standalone new project (not from a CRM engagement) ---------- */
-  async function createProject(v: { name: string; funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string }) {
+  async function createProject(v: { name: string; funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string; location: string }) {
     const { data, error } = await supabase.rpc("create_project", {
       p_name: v.name, p_funder: v.funder || null, p_budget_amount: v.budgetAmount || 0,
       p_start_date: v.startDate || null, p_end_date: v.endDate || null,
-      p_team: v.team || null, p_status: v.status || null,
+      p_team: v.team || null, p_status: v.status || null, p_location: v.location || null,
     });
     if (error) { toast("Project not created", error.message); return; }
     const name = data.name as string;
@@ -1152,6 +1158,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setProjectFormOpen(false);
     toast(name + " created", "New project — budget, milestones and drawdowns track here");
     xProject(name);
+  }
+  // Edit a project you created (or any project if you have full projects access).
+  async function updateProject(id: string, v: { funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string; location: string }) {
+    const { data, error } = await supabase.rpc("update_project", {
+      p_id: id, p_funder: v.funder || null, p_budget_amount: v.budgetAmount || 0,
+      p_start_date: v.startDate || null, p_end_date: v.endDate || null,
+      p_team: v.team || null, p_status: v.status || null, p_location: v.location || null,
+    });
+    if (error) { toast("Couldn't save changes", error.message); return; }
+    const name = data.name as string;
+    setProjectDetails((prev) => ({ ...prev, [name]: data.detail as ProjectDetail }));
+    setProjectEdit(null);
+    toast(name + " updated", "Changes saved");
+  }
+  // Delete a project you created (or any project if you have full projects access).
+  async function deleteProject(name: string) {
+    const id = projectDetails[name]?.id;
+    if (!id) { toast("Project not found", "Reload and try again"); return; }
+    const { error } = await supabase.rpc("delete_project", { p_id: id });
+    if (error) { toast("Couldn't delete project", error.message); return; }
+    setProjectDetails((prev) => { const next = { ...prev }; delete next[name]; return next; });
+    setExtraProjects((prev) => prev.filter((p) => p.name !== name));
+    if (projectName === name) setProjectName(null);
+    toast(name + " deleted", "The project and its records were removed");
   }
 
   /* ---------- project drawer mutations: RPC → upsert one project's detail → toast ---------- */
@@ -1180,14 +1210,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   async function createFieldActivity(v: { projectName: string; assignee: string; phone: string; email: string; date: string; note: string }) {
     const projectId = projectDetails[v.projectName]?.id;
     if (!projectId) { toast("Pick a project", "Choose which project this field activity is for"); return; }
-    const { error } = await supabase.rpc("create_field_activity", {
+    const { data, error } = await supabase.rpc("create_field_activity", {
       p_project_id: projectId, p_assignee: v.assignee, p_phone: v.phone || null,
       p_email: v.email || null, p_activity_on: v.date || null, p_note: v.note || null,
     });
     if (error) { toast("Field activity not saved", error.message); return; }
     setFieldActivityOpen(false);
+    // Email the assignee that they've been assigned (in-app bell already written by the RPC for
+    // staff). Best-effort — a mail failure never blocks the save. Mirrors createEngagement's notify.
+    if (v.email) {
+      const proj = data?.project ?? v.projectName;
+      const where = data?.location ? ` in ${data.location}` : "";
+      const by = data?.by ?? me?.name ?? "A teammate";
+      const when = v.date ? new Date(v.date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+      const taskLine = v.note ? `\n\nTask: ${v.note}` : "";
+      try {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+          body: JSON.stringify({
+            to: v.email,
+            subject: `You've been assigned a field task — ${proj}`,
+            text: `Hi ${v.assignee},\n\n${by} has assigned you a field task on ${proj}${where}${when ? ` (${when})` : ""}.${taskLine}\n\nOpen Jikoni Tool → Projects & Programmes → Field activity to see the details.`,
+            html: `<p>Hi ${v.assignee},</p><p><strong>${by}</strong> has assigned you a field task on <strong>${proj}</strong>${where}${when ? ` (${when})` : ""}.</p>${v.note ? `<p><strong>Task:</strong> ${v.note}</p>` : ""}<p>Open <strong>Jikoni Tool → Projects &amp; Programmes → Field activity</strong> to see the details.</p>`,
+          }),
+        });
+      } catch { /* email is best-effort; the in-app notification still lands for staff */ }
+    }
     await loadFromDb();
-    toast("Field activity assigned", `${v.assignee} · ${v.projectName}`);
+    toast("Field activity assigned", `${v.assignee} · ${v.projectName}${v.email ? " · emailed" : ""}`);
   }
   const setProjectState = (projectId: string, state: string) =>
     projectRpc("set_project_state", { p_project_id: projectId, p_new_state: state }, "Project status updated", state);
@@ -1899,6 +1950,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     appConfig, setAppConfig, audit,
     projectDetails, extraProjects, engToProject, projectToEng, createProjectFromEng,
     projectFormOpen, openProjectForm: () => setProjectFormOpen(true), closeProjectForm: () => setProjectFormOpen(false), createProject,
+    projectEdit, openProjectEdit: (name: string) => setProjectEdit(name), closeProjectEdit: () => setProjectEdit(null), updateProject, deleteProject,
     addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
     fieldActivities,
     fieldActivityOpen, openFieldActivity: () => setFieldActivityOpen(true), closeFieldActivity: () => setFieldActivityOpen(false), createFieldActivity,
