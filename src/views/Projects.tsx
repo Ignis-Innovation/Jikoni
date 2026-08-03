@@ -1,6 +1,6 @@
 import { useApp } from "../store";
 import { Pulse, Note } from "../components/ui";
-import { StaticBars } from "../components/charts";
+import { StaticBars, Donut, ChartLegend, GroupedBars } from "../components/charts";
 import { useUsdKesRate } from "../lib/fx";
 import { useState } from "react";
 import { Crumb } from "../nav";
@@ -48,6 +48,12 @@ export default function ProjectsView() {
     if (usd) return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n).toLocaleString()}`;
     return fmtKes(kes);
   };
+  const moneyShort = (kes: number) => {                       // compact label for chart bars/legend
+    const n = conv(kes), sym = usd ? "$" : "";
+    return n >= 1e6 ? `${sym}${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${sym}${Math.round(n / 1e3)}k` : `${sym}${Math.round(n)}`;
+  };
+  // which chart the user wants under the KPI strip — "bars" (utilisation) is the clean default
+  const [graph, setGraph] = useState<"bars" | "grouped" | "donut">("bars");
 
   // one source of truth: every project the backend returns, keyed by name
   const list = Object.entries(projectDetails).map(([name, d], i) => ({
@@ -105,8 +111,15 @@ export default function ProjectsView() {
           <div className="panel">
             <div className="panel-h">
               <h3>Portfolio budget by project</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span className="meta">{usd ? `1 USD = KES ${rate!.toFixed(2)}` : "budget, spend & burn"}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {usd && <span className="meta">1 USD = KES {rate!.toFixed(2)}</span>}
+                <div style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+                  {([["bars", "Utilisation"], ["grouped", "Budget vs spent"], ["donut", "Allocation"]] as const).map(([g, lbl]) => (
+                    <button key={g} onClick={() => setGraph(g)}
+                      style={{ padding: "5px 11px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                        background: graph === g ? "var(--ink)" : "transparent", color: graph === g ? "#fff" : "var(--ink-soft)" }}>{lbl}</button>
+                  ))}
+                </div>
                 <div style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
                   {(["KES", "USD"] as const).map((c) => (
                     <button key={c} onClick={() => setView(c)} disabled={c === "USD" && !rate}
@@ -130,7 +143,9 @@ export default function ProjectsView() {
                   </div>
                 ))}
               </div>
-              {budgeted.length ? (
+              {!budgeted.length ? (
+                <Note>No budgeted projects yet — add a budget on a project to see it here.</Note>
+              ) : graph === "bars" ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
                   {budgeted.map((p) => {
                     const pct = burnOf(p);
@@ -148,7 +163,20 @@ export default function ProjectsView() {
                     );
                   })}
                 </div>
-              ) : <Note>No budgeted projects yet — add a budget on a project to see it here.</Note>}
+              ) : graph === "grouped" ? (
+                <>
+                  <GroupedBars groups={budgeted.map((p) => ({ l: p.short, a: budgetOf(p), b: spentOf(p) }))} fmt={moneyShort} />
+                  <div style={{ display: "flex", gap: 20, justifyContent: "center", marginTop: 6, fontSize: 12.5 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--flame)" }} />Budget</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--ember)" }} />Spent</span>
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
+                  <Donut segs={budgeted.map((p) => ({ l: p.short, v: budgetOf(p), c: p.c, d: moneyShort(budgetOf(p)) }))} big={money(budgetTotal)} small="budget" />
+                  <div style={{ flex: 1, minWidth: 200 }}><ChartLegend segs={budgeted.map((p) => ({ l: p.name, v: budgetOf(p), c: p.c, d: moneyShort(budgetOf(p)) }))} /></div>
+                </div>
+              )}
             </div>
           </div>
           <div className="panel" style={{ marginTop: 18 }}>
