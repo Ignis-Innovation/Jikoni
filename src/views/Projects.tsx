@@ -1,6 +1,8 @@
 import { useApp } from "../store";
 import { Pulse, Note } from "../components/ui";
 import { Bars, StaticBars, GroupedBars } from "../components/charts";
+import { useUsdKesRate } from "../lib/fx";
+import { useState } from "react";
 import { Crumb } from "../nav";
 import { PlusI } from "../components/icons";
 import type { ProjectDetail } from "../data";
@@ -36,6 +38,21 @@ export default function ProjectsView() {
   const { tabs, goTab, openProject, projectDetails, openProjectForm, openProjectEdit, deleteProject, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
   const tab = tabs.projects;
 
+  // Overview currency toggle: money is stored in KES; USD view converts at the live rate.
+  const [view, setView] = useState<"KES" | "USD">("KES");
+  const rate = useUsdKesRate();
+  const usd = view === "USD" && rate ? rate : 0;              // 0 → show KES
+  const conv = (kes: number) => (usd ? kes / usd : kes);      // KES → view currency
+  const money = (kes: number) => {                            // full label in the view currency
+    const n = conv(kes);
+    if (usd) return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n).toLocaleString()}`;
+    return fmtKes(kes);
+  };
+  const moneyShort = (kes: number) => {                       // compact label for graph bars
+    const n = conv(kes), sym = usd ? "$" : "";
+    return n >= 1e6 ? `${sym}${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${sym}${Math.round(n / 1e3)}k` : `${sym}${Math.round(n)}`;
+  };
+
   // one source of truth: every project the backend returns, keyed by name
   const list = Object.entries(projectDetails).map(([name, d], i) => ({
     name, ...d, c: COLORS[i % COLORS.length], short: short(name),
@@ -69,12 +86,10 @@ export default function ProjectsView() {
     { k: "Reports due", tick: reportsDue.length ? "t-red" : "t-blue", v: String(reportsDue.length), d: "funder obligations", dc: "flat" as const },
     { k: "Field activities", tick: "t-blue", v: String(fieldActivities.length), d: "assigned", dc: "flat" as const },
   ];
-  // budget-vs-spent per project: the bar fills to burn %, labelled "spent / budget"
-  const burnRows = budgeted.map((p) => ({ l: p.short, n: `${fmtKes(spentOf(p))} / ${fmtKes(budgetOf(p))}`, w: burnOf(p), c: burnOf(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
-  // grouped bar graph: budget vs spent (absolute KES) for each budgeted project
+  // budget-vs-spent per project: the bar fills to burn %, labelled "spent / budget" (in the view currency)
+  const burnRows = budgeted.map((p) => ({ l: p.short, n: `${money(spentOf(p))} / ${money(budgetOf(p))}`, w: burnOf(p), c: burnOf(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
+  // grouped bar graph: budget vs spent (stored KES) for each budgeted project
   const budgetGroups = budgeted.map((p) => ({ l: p.short, a: budgetOf(p), b: spentOf(p) }));
-  // compact money for the graph's bar labels: "12.0M" / "850k" / "0"
-  const fmtShort = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n));
 
   return (
     <>
@@ -94,13 +109,25 @@ export default function ProjectsView() {
         <div className="proj-panel active">
           <Pulse data={pulse} />
           <div className="panel">
-            <div className="panel-h"><h3>Portfolio budget by project</h3><span className="meta">budget, spend & burn across the portfolio</span></div>
+            <div className="panel-h">
+              <h3>Portfolio budget by project</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span className="meta">{usd ? `1 USD = KES ${rate!.toFixed(2)}` : "budget, spend & burn"}</span>
+                <div style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+                  {(["KES", "USD"] as const).map((c) => (
+                    <button key={c} onClick={() => setView(c)} disabled={c === "USD" && !rate}
+                      style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: c === "USD" && !rate ? "wait" : "pointer",
+                        background: view === c ? "var(--flame)" : "transparent", color: view === c ? "#fff" : "var(--ink-soft)" }}>{c}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
             <div className="pad">
               <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: burnRows.length ? 20 : 0 }}>
                 {[
-                  { k: "Portfolio budget", v: fmtKes(budgetTotal), c: "var(--ink)" },
-                  { k: "Spent to date", v: fmtKes(spentTotal), c: "var(--ember)" },
-                  { k: "Remaining", v: fmtKes(remaining), c: "var(--flame)" },
+                  { k: "Portfolio budget", v: money(budgetTotal), c: "var(--ink)" },
+                  { k: "Spent to date", v: money(spentTotal), c: "var(--ember)" },
+                  { k: "Remaining", v: money(remaining), c: "var(--flame)" },
                   { k: "Burn", v: `${burnPct}%`, c: burnPct >= 80 ? "var(--red)" : "var(--ink)" },
                 ].map((s) => (
                   <div key={s.k} style={{ flex: "1 1 140px", padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)" }}>
@@ -116,9 +143,9 @@ export default function ProjectsView() {
           </div>
           {budgetGroups.length > 0 && (
             <div className="panel" style={{ marginTop: 18 }}>
-              <div className="panel-h"><h3>Budget vs spent by project</h3><span className="meta">KES per project</span></div>
+              <div className="panel-h"><h3>Budget vs spent by project</h3><span className="meta">{view} per project</span></div>
               <div className="pad">
-                <GroupedBars groups={budgetGroups} fmt={fmtShort} />
+                <GroupedBars groups={budgetGroups} fmt={moneyShort} />
                 <div style={{ display: "flex", gap: 20, justifyContent: "center", marginTop: 6, fontSize: 12.5 }}>
                   <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--flame)" }} />Budget</span>
                   <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--ember)" }} />Spent</span>

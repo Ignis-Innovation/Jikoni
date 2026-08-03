@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { budgetLines, kes, reqRouting, reqBudgetState, engStages, engChannels } from "../data";
+import { useUsdKesRate, getUsdKesRate, FALLBACK_USD_KES } from "../lib/fx";
 
 export function ModalShell({ open, onClose, width, className, children }: { open: boolean; onClose: () => void; width?: number; className?: string; children: React.ReactNode }) {
   return (
@@ -1206,6 +1207,8 @@ export function ProjectModal() {
   const [team, setTeam] = useState("");
   const [status, setStatus] = useState("Setup");
   const [location, setLocation] = useState("");
+  const [currency, setCurrency] = useState<"KES" | "USD">("KES");
+  const rate = useUsdKesRate();
   useEffect(() => {
     if (!open) return;
     if (editing) {
@@ -1213,18 +1216,24 @@ export function ProjectModal() {
       setName(projectEdit!); setFunder(p?.funder && p.funder !== "—" ? p.funder : "");
       setBudget(p?.budgetAmount ? String(p.budgetAmount) : "");
       setStartDate(p?.startDate ?? ""); setEndDate(p?.endDate ?? "");
-      setStatus(p?.status || "Setup"); setTeam(p?.team ?? ""); setLocation(p?.location ?? "");
+      setStatus(p?.status || "Setup"); setTeam(p?.team ?? ""); setLocation(p?.location ?? ""); setCurrency("KES");
     } else {
-      setName(""); setFunder(""); setBudget(""); setStartDate(""); setEndDate(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); setLocation("");
+      setName(""); setFunder(""); setBudget(""); setStartDate(""); setEndDate(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); setLocation(""); setCurrency("KES");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing, projectEdit]);
 
-  function save() {
+  async function save() {
     if (!name.trim()) { toast("Name the project", "What's the project called?"); return; }
-    const budgetAmount = parseFloat(budget) || 0;
-    if (budgetAmount <= 0) { toast("Budget is required", "Enter the total budget in KES — milestones draw against it"); return; }
+    const entered = parseFloat(budget) || 0;
+    if (entered <= 0) { toast("Budget is required", `Enter the total budget in ${currency} — milestones draw against it`); return; }
     if (startDate && endDate && endDate < startDate) { toast("Check the dates", "The end date can't be before the start date"); return; }
+    // money is stored in KES (the base currency); convert a USD budget at the current rate
+    let budgetAmount = entered;
+    if (currency === "USD") {
+      const r = rate ?? await getUsdKesRate();
+      budgetAmount = Math.round(entered * r);
+    }
     if (editing) {
       const id = projectDetails[projectEdit!]?.id;
       if (!id) { toast("Project not found", "Reload and try again"); return; }
@@ -1241,8 +1250,19 @@ export function ProjectModal() {
         <div><label>Project name</label><input className="field" placeholder="e.g. Makueni VTC rollout" value={name} onChange={(e) => setName(e.target.value)} disabled={editing} /></div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><label>Funder <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. Charm Impact" value={funder} onChange={(e) => setFunder(e.target.value)} /></div>
-          <div style={{ width: 180 }}><label>Budget (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" placeholder="e.g. 3200000" value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
+          <div style={{ width: 96 }}>
+            <label>Currency</label>
+            <select className="field" style={{ width: "100%" }} value={currency} onChange={(e) => setCurrency(e.target.value as "KES" | "USD")}>
+              <option value="KES">KES</option><option value="USD">USD</option>
+            </select>
+          </div>
+          <div style={{ width: 150 }}><label>Budget ({currency})</label><input className="field" style={{ width: "100%" }} type="number" min="0" placeholder={currency === "USD" ? "e.g. 25000" : "e.g. 3200000"} value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
         </div>
+        {currency === "USD" && (parseFloat(budget) || 0) > 0 && (
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: -6 }}>
+            ≈ KES {Math.round((parseFloat(budget) || 0) * (rate ?? FALLBACK_USD_KES)).toLocaleString()} at 1 USD = KES {(rate ?? FALLBACK_USD_KES).toFixed(2)}{rate ? " (live)" : ""} · stored in KES
+          </div>
+        )}
         <div><label>Location <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· where the work happens</span></label><input className="field" placeholder="e.g. Makueni County" value={location} onChange={(e) => setLocation(e.target.value)} /></div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><label>Start date</label><input className="field" style={{ width: "100%" }} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></div>
