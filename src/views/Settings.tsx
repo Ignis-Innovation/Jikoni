@@ -1,27 +1,91 @@
-import { useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useApp } from "../store";
 import { OrgI, BellI, CheckSqThinI, LinkI, LockI } from "../components/icons";
 
-function Toggle({ initial, disabled, onOn }: { initial: boolean; disabled?: boolean; onOn?: () => void }) {
-  const [on, setOn] = useState(initial);
+/* ---------- config-bound controls: every one persists to app_config ---------- */
+
+// Read a boolean out of app_config (jsonb true / "true" both count).
+function cfgBool(v: unknown) { return v === true || v === "true"; }
+
+function ConfigToggle({ configKey, disabled }: { configKey: string; disabled?: boolean }) {
+  const { appConfig, setAppConfig } = useApp();
+  const on = cfgBool(appConfig[configKey]);
   return (
     <button
       className={`toggle ${on ? "on" : ""}`}
       style={disabled ? { opacity: 0.6, cursor: "not-allowed" } : undefined}
-      onClick={() => {
-        if (disabled) return;
-        setOn(!on);
-        if (!on && onOn) onOn();
-      }}
+      onClick={() => { if (!disabled) setAppConfig(configKey, !on); }}
     />
   );
 }
 
-// A numeric rule bound to app_config — saves on Enter or blur (Settings → Approval & Matching Rules).
+// An immutable, always-on toggle (e.g. the audit log) — can't be switched off.
+function LockedToggle() {
+  return <button className="toggle on" style={{ opacity: 0.6, cursor: "not-allowed" }} />;
+}
+
+function ConfigText({ configKey, placeholder, style }: { configKey: string; placeholder?: string; style?: CSSProperties }) {
+  const { appConfig, setAppConfig } = useApp();
+  const current = String(appConfig[configKey] ?? "");
+  const [val, setVal] = useState(current);
+  useEffect(() => { setVal(current); }, [current]);
+  const commit = () => { if (val.trim() !== current) setAppConfig(configKey, val.trim()); };
+  return (
+    <input className="field" style={style} placeholder={placeholder} value={val}
+      onChange={(e) => setVal(e.target.value)} onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+  );
+}
+
+function ConfigSelect({ configKey, options, style }: { configKey: string; options: { v: string; l: string }[]; style?: CSSProperties }) {
+  const { appConfig, setAppConfig } = useApp();
+  const current = String(appConfig[configKey] ?? options[0]?.v ?? "");
+  return (
+    <select className="field" style={style} value={current} onChange={(e) => setAppConfig(configKey, e.target.value)}>
+      {options.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+    </select>
+  );
+}
+
+function ConfigSeg({ configKey, options }: { configKey: string; options: string[] }) {
+  const { appConfig, setAppConfig } = useApp();
+  const current = String(appConfig[configKey] ?? options[0]);
+  return (
+    <div className="seg-ctl">
+      {options.map((o) => (
+        <button key={o} className={current === o ? "on" : ""} onClick={() => setAppConfig(configKey, o)}>{o}</button>
+      ))}
+    </div>
+  );
+}
+
+// Currency amount (stored as a plain number) with a KES prefix and thousands separators.
+function ConfigMoney({ configKey }: { configKey: string }) {
+  const { appConfig, setAppConfig } = useApp();
+  const current = Number(appConfig[configKey] ?? 0);
+  const [val, setVal] = useState(current.toLocaleString());
+  useEffect(() => { setVal(current.toLocaleString()); }, [current]);
+  const commit = () => {
+    const n = parseFloat(val.replace(/[^0-9.]/g, "")) || 0;
+    if (n !== current) setAppConfig(configKey, n);
+    setVal((n || current).toLocaleString());
+  };
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>KES</span>
+      <input className="field" style={{ minWidth: 130, textAlign: "right" }} value={val}
+        onChange={(e) => setVal(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+    </span>
+  );
+}
+
+// A numeric rule bound to app_config — saves on Enter or blur (Approval & Matching Rules).
 function RuleInput({ configKey, suffix }: { configKey: string; suffix?: string }) {
   const { appConfig, setAppConfig } = useApp();
   const current = String(appConfig[configKey] ?? "");
   const [val, setVal] = useState(current);
+  useEffect(() => { setVal(current); }, [current]);
   const commit = () => { const n = parseFloat(val); if (!isNaN(n) && String(n) !== current) setAppConfig(configKey, n); };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -43,16 +107,26 @@ const tabsDef = [
   { id: "s-sec", l: "Security & data", icon: <LockI width={16} height={16} /> },
 ];
 
+const integrations = [
+  { key: "integ_mpesa", bg: "#16A34A", ch: "M", nm: "M-Pesa Daraja", ds: "Payments & collections" },
+  { key: "integ_etims", bg: "#B91C1C", ch: "K", nm: "KRA eTIMS", ds: "Sales e-invoicing compliance" },
+  { key: "integ_email", bg: "#12A3BE", ch: "G", nm: "Email (Gmail Workspace)", ds: "Transactional & digest email" },
+  { key: "integ_sms", bg: "#E2632A", ch: "A", nm: "Africa's Talking", ds: "SMS to field & approvers" },
+  { key: "integ_claude", bg: "#6D28D9", ch: "C", nm: "Claude API", ds: "Receipt OCR · concept drafting · board narrative" },
+  { key: "integ_ura", bg: "#7C2D12", ch: "U", nm: "URA EFRIS", ds: "Uganda e-invoicing — for Q4 entry" },
+];
+
 export default function SettingsView() {
-  const { toast } = useApp();
+  const { toast, appConfig, members } = useApp();
   const [tab, setTab] = useState("s-org");
+  const notEnrolled = members.filter((m) => !m.twoFa && m.state !== "invited").length;
 
   return (
     <>
       <div className="vhead">
         <div>
           <h1>Settings</h1>
-          <p>Workspace configuration for Ignis. Changes are logged to the audit trail with your name and time.</p>
+          <p>Workspace configuration for Ignis. Changes are saved live and logged to the audit trail with your name and time.</p>
         </div>
       </div>
       <div className="set-wrap">
@@ -69,22 +143,22 @@ export default function SettingsView() {
             <div className="set-panel active">
               <div className="set-card">
                 <div className="sh"><h3>Organisation profile</h3><p>How Ignis presents across the workspace and on generated documents.</p></div>
-                <div className="row"><div className="rl">Legal name</div><input className="field" defaultValue="Ignis Innovation Limited" /></div>
+                <div className="row"><div className="rl">Legal name</div><ConfigText configKey="org_legal_name" placeholder="Ignis Innovation Limited" /></div>
                 <div className="row">
                   <div className="rl">Primary entity<small>The default ledger for new records. Switch any record to Uganda from its own screen.</small></div>
-                  <div className="seg-ctl"><button className="on">Kenya</button><button>Uganda</button><button>Consolidated</button></div>
+                  <ConfigSeg configKey="primary_entity" options={["Kenya", "Uganda", "Consolidated"]} />
                 </div>
                 <div className="row"><div className="rl">Base reporting currency</div>
-                  <select className="field"><option>KES — Kenyan Shilling</option><option>USD — US Dollar</option><option>UGX — Ugandan Shilling</option></select>
+                  <ConfigSelect configKey="base_currency" options={[{ v: "KES", l: "KES — Kenyan Shilling" }, { v: "USD", l: "USD — US Dollar" }, { v: "UGX", l: "UGX — Ugandan Shilling" }]} />
                 </div>
                 <div className="row"><div className="rl">Fiscal year start</div>
-                  <select className="field"><option>January</option><option>July</option></select>
+                  <ConfigSelect configKey="fiscal_year_start" options={[{ v: "January", l: "January" }, { v: "July", l: "July" }]} />
                 </div>
               </div>
               <div className="set-card">
                 <div className="sh"><h3>Multi-country</h3><p>Each entity keeps its own tax codes, mobile-money rails and statutory calendar.</p></div>
                 <div className="row"><div className="rl">Kenya<small>KRA eTIMS · M-Pesa Daraja · NSSF / SHIF</small></div><span className="conn yes">Active</span></div>
-                <div className="row"><div className="rl">Uganda<small>URA EFRIS · MTN / Airtel Money · NSSF Uganda — onboarding for Q4 entry</small></div><span className="conn no">Setup pending</span></div>
+                <div className="row"><div className="rl">Uganda<small>URA EFRIS · MTN / Airtel Money · NSSF Uganda — onboarding for Q4 entry</small></div><span className={`conn ${cfgBool(appConfig.integ_ura) ? "yes" : "no"}`}>{cfgBool(appConfig.integ_ura) ? "Active" : "Setup pending"}</span></div>
               </div>
             </div>
           )}
@@ -94,11 +168,11 @@ export default function SettingsView() {
           {tab === "s-notif" && (
             <div className="set-panel active">
               <div className="set-card">
-                <div className="sh"><h3>How you're notified</h3><p>Applies to your account only. Channels route through Resend and Africa's Talking.</p></div>
-                <div className="row"><div className="rl">In-app<small>The bell in the top bar and live badges</small></div><Toggle initial /></div>
-                <div className="row"><div className="rl">Email digest<small>A morning summary of what's on your burners</small></div><Toggle initial /></div>
-                <div className="row"><div className="rl">SMS for overdue approvals<small>Sent when something has waited on you over 24h</small></div><Toggle initial={false} /></div>
-                <div className="row"><div className="rl">Stalled engagement alerts<small>An engagement with no touch in 14 days surfaces to its owner</small></div><Toggle initial /></div>
+                <div className="sh"><h3>How you're notified</h3><p>Applies to this workspace. Email routes through Gmail Workspace; SMS through Africa's Talking.</p></div>
+                <div className="row"><div className="rl">In-app<small>The bell in the top bar and live badges</small></div><ConfigToggle configKey="notif_in_app" /></div>
+                <div className="row"><div className="rl">Email digest<small>A morning summary of what's on your burners</small></div><ConfigToggle configKey="notif_email_digest" /></div>
+                <div className="row"><div className="rl">SMS for overdue approvals<small>Sent when something has waited on you over 24h</small></div><ConfigToggle configKey="notif_sms_overdue" /></div>
+                <div className="row"><div className="rl">Stalled engagement alerts<small>An engagement with no touch in 14 days surfaces to its owner</small></div><ConfigToggle configKey="notif_stalled_eng" /></div>
               </div>
             </div>
           )}
@@ -107,10 +181,10 @@ export default function SettingsView() {
             <div className="set-panel active">
               <div className="set-card">
                 <div className="sh"><h3>Approval thresholds</h3><p>Who must sign off, by amount. Requisitions above a band route up automatically.</p></div>
-                <div className="row"><div className="rl">Auto-approve below<small>Routine spend clears without a signature</small></div><input className="field" style={{ minWidth: 140 }} defaultValue="KES 5,000" /></div>
-                <div className="row"><div className="rl">Single approver up to</div><input className="field" style={{ minWidth: 140 }} defaultValue="KES 100,000" /></div>
-                <div className="row"><div className="rl">Dual approval up to</div><input className="field" style={{ minWidth: 140 }} defaultValue="KES 500,000" /></div>
-                <div className="row"><div className="rl">MD sign-off above<small>Routes to Dennis</small></div><input className="field" style={{ minWidth: 140 }} defaultValue="KES 500,000" /></div>
+                <div className="row"><div className="rl">Auto-approve below<small>Routine spend clears without a signature</small></div><ConfigMoney configKey="approve_auto_below" /></div>
+                <div className="row"><div className="rl">Single approver up to</div><ConfigMoney configKey="single_approver_max" /></div>
+                <div className="row"><div className="rl">Dual approval up to</div><ConfigMoney configKey="dual_approval_max" /></div>
+                <div className="row"><div className="rl">MD sign-off above<small>Routes to the Managing Director</small></div><ConfigMoney configKey="md_signoff_above" /></div>
               </div>
               <div className="set-card">
                 <div className="sh"><h3>Matching &amp; amendment rules</h3><p>Live controls the procure-to-pay chain reads. Changes take effect on the next match, amendment or reminder — and are logged.</p></div>
@@ -128,13 +202,18 @@ export default function SettingsView() {
           {tab === "s-integ" && (
             <div className="set-panel active">
               <div className="set-card">
-                <div className="sh"><h3>Connected services</h3><p>The rails Jikoni reads and writes through. Keys are held in the vault, never shown.</p></div>
-                <div className="integ"><div className="ic" style={{ background: "#16A34A" }}>M</div><div className="it"><div className="nm">M-Pesa Daraja</div><div className="ds">Payments &amp; collections</div></div><span className="conn yes">Connected</span></div>
-                <div className="integ"><div className="ic" style={{ background: "#B91C1C" }}>K</div><div className="it"><div className="nm">KRA eTIMS</div><div className="ds">Sales e-invoicing compliance</div></div><span className="conn yes">Connected</span></div>
-                <div className="integ"><div className="ic" style={{ background: "#12A3BE" }}>R</div><div className="it"><div className="nm">Resend</div><div className="ds">Transactional &amp; digest email</div></div><span className="conn yes">Connected</span></div>
-                <div className="integ"><div className="ic" style={{ background: "#E2632A" }}>A</div><div className="it"><div className="nm">Africa's Talking</div><div className="ds">SMS to field &amp; approvers</div></div><span className="conn yes">Connected</span></div>
-                <div className="integ"><div className="ic" style={{ background: "#6D28D9" }}>C</div><div className="it"><div className="nm">Claude API</div><div className="ds">Receipt OCR · concept drafting · board narrative</div></div><span className="conn yes">Connected</span></div>
-                <div className="integ"><div className="ic" style={{ background: "#7C2D12" }}>U</div><div className="it"><div className="nm">URA EFRIS</div><div className="ds">Uganda e-invoicing — for Q4 entry</div></div><span className="conn no">Not connected</span></div>
+                <div className="sh"><h3>Connected services</h3><p>The rails Jikoni reads and writes through. Toggle a service on or off — keys are held in the vault, never shown.</p></div>
+                {integrations.map((ig) => {
+                  const on = cfgBool(appConfig[ig.key]);
+                  return (
+                    <div className="integ" key={ig.key}>
+                      <div className="ic" style={{ background: ig.bg }}>{ig.ch}</div>
+                      <div className="it"><div className="nm">{ig.nm}</div><div className="ds">{ig.ds}</div></div>
+                      <span className={`conn ${on ? "yes" : "no"}`} style={{ marginRight: 12 }}>{on ? "Connected" : "Not connected"}</span>
+                      <ConfigToggle configKey={ig.key} />
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -143,10 +222,10 @@ export default function SettingsView() {
             <div className="set-panel active">
               <div className="set-card">
                 <div className="sh"><h3>Security &amp; data</h3><p>The controls that make Jikoni defensible under diligence.</p></div>
-                <div className="row"><div className="rl">Require two-factor for everyone<small>2 of 7 members not yet enrolled</small></div><Toggle initial /></div>
-                <div className="row"><div className="rl">Immutable audit log<small>Every write recorded with who, what and when. Cannot be disabled.</small></div><Toggle initial disabled /></div>
+                <div className="row"><div className="rl">Require two-factor for everyone<small>{notEnrolled} of {members.length} member{members.length === 1 ? "" : "s"} not yet enrolled</small></div><ConfigToggle configKey="require_2fa" /></div>
+                <div className="row"><div className="rl">Immutable audit log<small>Every write recorded with who, what and when. Cannot be disabled.</small></div><LockedToggle /></div>
                 <div className="row"><div className="rl">Data-room mode<small>Read-only, watermarked, audit-logged view for investors and auditors</small></div>
-                  <Toggle initial={false} onOn={() => toast("Data-room mode", "A controlled investor view is now shareable by link")} />
+                  <ConfigToggle configKey="dataroom_mode" />
                 </div>
                 <div className="row"><div className="rl">Export all data<small>Full workspace export — you own the data and can move it any time</small></div>
                   <button className="btn" onClick={() => toast("Export queued", "We'll email you a download link when it's ready")}>Request export</button>
