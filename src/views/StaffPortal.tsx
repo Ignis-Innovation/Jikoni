@@ -86,7 +86,7 @@ export default function StaffPortalView() {
   const tab = tabs.staffportal;
   // HR may have opened a cycle, signed off a review or cleared an exit area
   // since last look — pull fresh state each time one of these tabs opens
-  useEffect(() => { if (tab === "sp-perf" || tab === "sp-exit" || tab === "sp-certs") refreshHr(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
+  useEffect(() => { if (tab === "sp-perf" || tab === "sp-exit" || tab === "sp-files") refreshHr(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [docCat, setDocCat] = useState("other");
   const [fileFilter, setFileFilter] = useState("all");
@@ -153,9 +153,9 @@ export default function StaffPortalView() {
           <p>Your own view of yourself — pay, leave, performance, certifications and documents. Nobody else sees this page.</p>
         </div>
         <div className="actions">
-          {(tab === "sp-me" || tab === "sp-leave") && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
+          {tab === "sp-leave" && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
           {tab === "sp-perf" && selfOpen && <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>}
-          {tab === "sp-certs" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
+          {tab === "sp-files" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
           {tab === "sp-fb" && <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />New feedback</button>}
         </div>
       </div>
@@ -326,7 +326,31 @@ export default function StaffPortalView() {
       {tab === "sp-files" && (
         <div className="hr-panel active">
           <div className="panel" style={{ marginBottom: 18 }}>
-            <div className="panel-h"><h3>My files</h3><span className="meta">{docs.length} on file · visible to you and HR only</span></div>
+            <div className="panel-h"><h3>Certificates</h3><span className="meta">{myCerts.length} on file · you upload, HR verifies</span></div>
+            {myCerts.length === 0 ? (
+              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No certificates yet — click <strong>Add certification</strong> above to upload one. HR verifies it onto your file, and any certificate HR adds for you shows up here too.</div>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Certification</th><th>Issuer</th><th>Expiry</th><th>Certificate</th><th>Status</th></tr></thead>
+                <tbody>
+                  {myCerts.map((c) => (
+                    <tr key={c.id}>
+                      <td><strong>{c.name}</strong></td>
+                      <td style={{ fontSize: 12.5 }}>{c.issuer || "—"}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{c.expiry ? `${fmtD(c.expiry)} ${c.expiry.slice(0, 4)}` : "—"}</td>
+                      <td>{c.docPath
+                        ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(c.docPath!)}>View</button>
+                        : <span className="meta">no file</span>}</td>
+                      <td>{c.state === "verified" ? <span className="rcv ok">verified</span> : c.state === "pending" ? <span className="pill today" style={{ textTransform: "none" }}>Awaiting HR</span> : <span className="rcv no">rejected</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <Note>Upload the actual certificate — HR opens the file to verify it. Verified certifications join skills coverage and show in HR's register. Certificates HR uploads for you appear here automatically.</Note>
+          </div>
+          <div className="panel" style={{ marginBottom: 18 }}>
+            <div className="panel-h"><h3>Files</h3><span className="meta">{docs.length} on file · visible to you and HR only</span></div>
             <div style={{ padding: "10px 18px 4px", display: "flex", gap: 7, flexWrap: "wrap" }}>
               {fileFilters.map((f) => (
                 <button key={f.v} className={`btn ${fileFilter === f.v ? "primary" : ""}`} style={{ padding: "4px 11px", fontSize: 11.5 }} onClick={() => setFileFilter(f.v)}>{f.l}</button>
@@ -365,35 +389,6 @@ export default function StaffPortalView() {
               </span>
             </div>
             <Note>What you pick as the <strong>file type</strong> decides what happens next — a certificate goes for verification, a statutory document unblocks payroll, a sick note attaches to a leave request. Nothing here is visible to anyone but you and HR.</Note>
-          </div>
-        </div>
-      )}
-
-      {tab === "sp-certs" && (
-        <div className="hr-panel active">
-          <div className="panel">
-            <div className="panel-h"><h3>My certificates</h3><span className="meta">{myCerts.length} on file · you upload, HR verifies</span></div>
-            {myCerts.length === 0 ? (
-              <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No certificates yet — click <strong>Add certification</strong> above to upload one. HR verifies it onto your file, and any certificate HR adds for you shows up here too.</div>
-            ) : (
-              <table className="tbl">
-                <thead><tr><th>Certification</th><th>Issuer</th><th>Expiry</th><th>Certificate</th><th>Status</th></tr></thead>
-                <tbody>
-                  {myCerts.map((c) => (
-                    <tr key={c.id}>
-                      <td><strong>{c.name}</strong></td>
-                      <td style={{ fontSize: 12.5 }}>{c.issuer || "—"}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{c.expiry ? `${fmtD(c.expiry)} ${c.expiry.slice(0, 4)}` : "—"}</td>
-                      <td>{c.docPath
-                        ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openDoc(c.docPath!)}>View</button>
-                        : <span className="meta">no file</span>}</td>
-                      <td>{c.state === "verified" ? <span className="rcv ok">verified</span> : c.state === "pending" ? <span className="pill today" style={{ textTransform: "none" }}>Awaiting HR</span> : <span className="rcv no">rejected</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <Note>Upload the actual certificate — HR opens the file to verify it. Verified certifications join skills coverage and show in HR's register. Certificates HR uploads for you appear here automatically.</Note>
           </div>
         </div>
       )}

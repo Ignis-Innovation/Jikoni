@@ -1,11 +1,11 @@
 // Inventory & Assets — the one net-new module (PRD Phase 2). Screens reuse the
 // existing design system: Pulse, panel/tbl/pill/rcv classes, ModalShell, Crumb.
 import { useEffect, useRef, useState } from "react";
-import { useApp, StockItem, DispatchRow } from "../store";
+import { useApp, StockItem, DispatchRow, AssetRow } from "../store";
 import { Pulse } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { PlusI, ExportI, DocI, CheckI } from "../components/icons";
-import { kes, budgetLines, kenyaLocations, assetCategories } from "../data";
+import { kes, kenyaLocations, assetCategories } from "../data";
 import { Crumb } from "../nav";
 import { supabase } from "../lib/supabase";
 
@@ -182,17 +182,26 @@ function ItemModal() {
   const [unitCost, setUnitCost] = useState("");
   const [reorderLevel, setReorderLevel] = useState("");
   const [reorderQty, setReorderQty] = useState("");
-  const [budgetCode, setBudgetCode] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [supOpen, setSupOpen] = useState(false);      // supplier typeahead dropdown
+  const [vendors, setVendors] = useState<string[]>([]);
   useEffect(() => {
     if (!itemModal) return;
     if (editing) {
       setName(editing.name); setCategory(editing.category || ""); setUnit(editing.unit || "unit");
-      setUnitCost(String(editing.unitCost)); setReorderLevel(String(editing.reorderLevel)); setReorderQty(""); setBudgetCode("");
+      setUnitCost(String(editing.unitCost)); setReorderLevel(String(editing.reorderLevel)); setReorderQty(""); setSupplier(""); setSupOpen(false);
     } else {
-      setName(""); setCategory(""); setUnit("unit"); setUnitCost(""); setReorderLevel(""); setReorderQty(""); setBudgetCode("");
+      setName(""); setCategory(""); setUnit("unit"); setUnitCost(""); setReorderLevel(""); setReorderQty(""); setSupplier(""); setSupOpen(false);
+      // suggest existing Procurement vendors as suppliers; a new name is stored free-text
+      supabase.from("vendors").select("name").then(({ data }) =>
+        setVendors([...new Set(((data ?? []) as { name: string }[]).map((v) => v.name).filter(Boolean))].sort()));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemModal]);
+
+  const supQuery = supplier.trim().toLowerCase();
+  const supMatches = (supQuery ? vendors.filter((v) => v.toLowerCase().includes(supQuery)) : vendors)
+    .filter((v) => v.toLowerCase() !== supQuery).slice(0, 8);
 
   function submit() {
     const cost = parseFloat(unitCost) || 0;
@@ -200,7 +209,8 @@ function ItemModal() {
     const rq = parseFloat(reorderQty) || 0;
     if (editing) { updateStockItem(editing.sku, rl, rq, cost); return; }
     if (!name.trim()) { toast("Name is required", "Give the item a name — a code is assigned automatically"); return; }
-    createStockItem({ name: name.trim(), category: category.trim(), unit: unit.trim() || "unit", unitCost: cost, reorderLevel: rl, reorderQty: rq, budgetCode });
+    // Budget code is auto-assigned (Operations) so auto-requisitions stay coded.
+    createStockItem({ name: name.trim(), category: category.trim(), unit: unit.trim() || "unit", unitCost: cost, reorderLevel: rl, reorderQty: rq, budgetCode: "Operations", supplier: supplier.trim() });
   }
 
   return (
@@ -243,12 +253,27 @@ function ItemModal() {
           </div>
         </div>
         {!editing && (
-          <div>
-            <label>Budget code (for auto-requisitions)</label>
-            <select className="field" value={budgetCode} onChange={(e) => setBudgetCode(e.target.value)}>
-              <option value="">— none —</option>
-              {Object.keys(budgetLines).map((c) => <option key={c}>{c}</option>)}
-            </select>
+          <div style={{ position: "relative" }}>
+            <label>Supplier <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>· pick an existing one or type a new name</span></label>
+            <input
+              className="field" style={{ width: "100%" }} autoComplete="off"
+              placeholder="Start typing — e.g. an existing vendor, or a new supplier"
+              value={supplier}
+              onChange={(e) => { setSupplier(e.target.value); setSupOpen(true); }}
+              onFocus={() => setSupOpen(true)}
+              onBlur={() => setTimeout(() => setSupOpen(false), 120)}
+            />
+            {supOpen && supMatches.length > 0 && (
+              <div className="ac-menu">
+                {supMatches.map((v) => (
+                  <div
+                    key={v} className="ac-item"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { setSupplier(v); setSupOpen(false); }}
+                  >{v}</div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -260,70 +285,101 @@ function ItemModal() {
   );
 }
 
-// Register a fixed asset for the depreciation register.
+// Register a company asset (laptop, vehicle, …) — tracked by count, not depreciation.
 function AssetModal() {
   const { assetOpen, closeAssetForm, registerAsset, toast } = useApp();
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
-  const [cost, setCost] = useState("");
-  const [lifeMonths, setLifeMonths] = useState("");
-  const [salvage, setSalvage] = useState("");
+  const [qtyStr, setQtyStr] = useState("1");
   const [acquired, setAcquired] = useState(new Date().toISOString().slice(0, 10));
   useEffect(() => {
-    if (assetOpen) { setName(""); setCategory(""); setCost(""); setLifeMonths(""); setSalvage(""); setAcquired(new Date().toISOString().slice(0, 10)); }
+    if (assetOpen) { setName(""); setCategory(""); setQtyStr("1"); setAcquired(new Date().toISOString().slice(0, 10)); }
   }, [assetOpen]);
 
   function submit() {
-    const c = parseFloat(cost) || 0;
-    const life = parseInt(lifeMonths, 10) || 0;
-    if (!name.trim()) { toast("Add a name", "Name the asset"); return; }
-    if (c <= 0) { toast("Add a cost", "Cost must be greater than zero"); return; }
-    if (life <= 0) { toast("Add a useful life", "Life in months must be greater than zero"); return; }
-    registerAsset({ name: name.trim(), category: category.trim(), cost: c, lifeMonths: life, acquired, salvage: parseFloat(salvage) || 0 });
+    const qty = parseInt(qtyStr, 10) || 0;
+    if (!name.trim()) { toast("Add a name", "Name the asset — e.g. Dell laptop"); return; }
+    if (qty <= 0) { toast("Add a quantity", "Quantity must be at least 1"); return; }
+    if (!acquired) { toast("Add a date received", "When did the asset arrive?"); return; }
+    registerAsset({ name: name.trim(), category: category.trim(), quantity: qty, acquired });
   }
 
   return (
     <ModalShell open={assetOpen} onClose={closeAssetForm} width={520}>
       <div className="mh">
-        <h3>Register asset</h3>
-        <p>Adds the asset to the register. Straight-line depreciation posts to the GL when you run the monthly depreciation.</p>
+        <h3>Add asset</h3>
+        <p>Registers a company asset — laptops, vehicles, equipment — so you can track quantities and assign them to staff.</p>
       </div>
       <div className="mb">
         <div>
-          <label>Name</label>
-          <input className="field" placeholder="Toyota Hilux — field vehicle" value={name} onChange={(e) => setName(e.target.value)} />
+          <label>Item name</label>
+          <input className="field" placeholder="e.g. Dell Latitude laptop" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
-        <div className="mrow c2">
+        <div className="mrow c3">
           <div>
-            <label>Category</label>
+            <label>Category <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>· optional</span></label>
             <select className="field" value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="">— select —</option>
               {assetCategories.map((c) => <option key={c}>{c}</option>)}
             </select>
           </div>
           <div>
-            <label>Acquired on</label>
+            <label>Quantity</label>
+            <input className="field" type="number" min="1" placeholder="1" value={qtyStr} onChange={(e) => setQtyStr(e.target.value)} />
+          </div>
+          <div>
+            <label>Date received</label>
             <input className="field" type="date" value={acquired} onChange={(e) => setAcquired(e.target.value)} />
-          </div>
-        </div>
-        <div className="mrow c3">
-          <div>
-            <label>Cost (KES)</label>
-            <input className="field" type="number" min="0" placeholder="0" value={cost} onChange={(e) => setCost(e.target.value)} />
-          </div>
-          <div>
-            <label>Salvage (KES)</label>
-            <input className="field" type="number" min="0" placeholder="0" value={salvage} onChange={(e) => setSalvage(e.target.value)} />
-          </div>
-          <div>
-            <label>Life (months)</label>
-            <input className="field" type="number" min="1" placeholder="60" value={lifeMonths} onChange={(e) => setLifeMonths(e.target.value)} />
           </div>
         </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeAssetForm}>Cancel</button>
-        <button className="btn primary" onClick={submit}>Register</button>
+        <button className="btn primary" onClick={submit}>Add asset</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// Assign an asset to an employee so the team can track who holds what.
+function AssignAssetModal({ open, asset, onClose }: { open: boolean; asset: AssetRow | null; onClose: () => void }) {
+  const { assignAsset, members, toast } = useApp();
+  const [employee, setEmployee] = useState("");
+  const [qtyStr, setQtyStr] = useState("1");
+  useEffect(() => { if (open) { setEmployee(""); setQtyStr("1"); } }, [open]);
+  const people = members.filter((m) => m.state !== "removed").map((m) => m.name).filter(Boolean);
+  function submit() {
+    const qty = parseInt(qtyStr, 10) || 0;
+    if (!asset) return;
+    if (!employee.trim()) { toast("Pick an employee", "Choose who the asset goes to"); return; }
+    if (qty <= 0) { toast("Add a quantity", "Assign at least 1"); return; }
+    assignAsset(asset.id, employee.trim(), qty);
+    onClose();
+  }
+  return (
+    <ModalShell open={open} onClose={onClose} width={480}>
+      <div className="mh">
+        <h3>Assign asset to employee</h3>
+        <p>{asset ? <>Hand out <strong>{asset.name}</strong> ({asset.id}) — records who holds it and how many.</> : ""}</p>
+      </div>
+      <div className="mb">
+        <div className="mrow c2">
+          <div>
+            <label>Employee</label>
+            <select className="field" value={employee} onChange={(e) => setEmployee(e.target.value)}>
+              <option value="">— select —</option>
+              {people.map((p) => <option key={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label>Quantity</label>
+            <input className="field" type="number" min="1" placeholder="1" value={qtyStr} onChange={(e) => setQtyStr(e.target.value)} />
+          </div>
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" onClick={submit}>Assign</button>
       </div>
     </ModalShell>
   );
@@ -395,19 +451,34 @@ export default function InventoryView() {
   const movements = inventory?.movements ?? [];
   const dispatches = inventory?.dispatches ?? [];
   const assets = inventory?.assets ?? [];
+  const assetAssignments = inventory?.assetAssignments ?? [];
+  const [itemSearch, setItemSearch] = useState("");
+  const [moveSearch, setMoveSearch] = useState("");
+  const [assignFor, setAssignFor] = useState<AssetRow | null>(null);
+
+  const iq = itemSearch.trim().toLowerCase();
+  const filteredItems = iq
+    ? items.filter((i) => `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(iq))
+    : items;
+  const mq = moveSearch.trim().toLowerCase();
+  const filteredMovements = mq
+    ? movements.filter((m) => `${m.when} ${m.sku} ${m.type} ${m.source ?? ""} ${m.note ?? ""} ${m.from ?? ""} ${m.to ?? ""}`.toLowerCase().includes(mq))
+    : movements;
+  // count of assets assigned out (by asset ref) for the register's "Assigned to" column
+  const assignedByAsset = assetAssignments.reduce((m, a) => { m[a.assetRef] = (m[a.assetRef] || 0) + a.qty; return m; }, {} as Record<string, number>);
 
   const below = items.filter((i) => i.onHand < i.reorderLevel);
   const enRoute = dispatches.filter((d) => d.state === "dispatched");
   const awaitingReceipt = dispatches.filter((d) => d.state === "delivered" && !d.receipt);
   const attentionCount = below.length + enRoute.length + awaitingReceipt.length;
   const stockValue = items.reduce((s, i) => s + i.onHand * i.unitCost, 0);
-  const nbv = assets.reduce((s, a) => s + a.nbv, 0);
+  const assetUnits = assets.filter((a) => a.state !== "disposed").reduce((s, a) => s + (a.quantity || 1), 0);
   const pulse = [
     { k: "Stock items", tick: "t-blue", v: String(items.length), d: "active SKUs", dc: "flat" as const },
     { k: "Stock value", tick: "t-blue", v: kes(stockValue), d: "at cost", dc: "flat" as const },
     { k: "Below reorder", tick: below.length ? "t-red" : "t-green", v: String(below.length), d: below.length ? "auto-req in flight" : "all healthy", dc: "flat" as const },
     { k: "Open dispatches", tick: "t-ember", v: String(dispatches.filter((d) => d.state === "dispatched").length), d: "en route to sites", dc: "flat" as const },
-    { k: "Assets (NBV)", tick: "t-blue", v: kes(nbv), d: assets.length + " on register", dc: "flat" as const },
+    { k: "Assets", tick: "t-blue", v: String(assetUnits), d: assets.length + " on register", dc: "flat" as const },
     { k: "Movements", tick: "t-blue", v: String(movements.length), d: "recent ledger entries", dc: "flat" as const },
   ];
 
@@ -500,14 +571,16 @@ export default function InventoryView() {
             <div className="panel-h">
               <h3>Stock items</h3>
               <span className="meta" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {items.length} SKUs · valued {kes(stockValue)}
+                <input className="field" style={{ width: 200, padding: "5px 9px", fontSize: 12 }} placeholder="Search name, code, category…" value={itemSearch} onChange={(e) => setItemSearch(e.target.value)} />
+                {filteredItems.length} of {items.length} SKUs · valued {kes(stockValue)}
                 <button className="btn" onClick={() => openItemModal("new")}><PlusI width={13} height={13} /> Add stock item</button>
               </span>
             </div>
             <table className="tbl">
               <thead><tr><th>SKU</th><th>Item</th><th>Category</th><th>On hand</th><th>Reorder at</th><th>Unit cost</th><th>Status</th><th></th></tr></thead>
               <tbody>
-                {items.map((i) => (
+                {filteredItems.length === 0 && <tr><td colSpan={8} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No stock items match “{itemSearch}”.</td></tr>}
+                {filteredItems.map((i) => (
                   <tr key={i.sku}>
                     <td className="mono">{i.sku}</td>
                     <td><strong>{i.name}</strong></td>
@@ -531,15 +604,17 @@ export default function InventoryView() {
         <div className="proc-panel active">
           <div className="panel">
             <div className="panel-h">
-              <h3>Movement ledger</h3>
-              <span className="meta">
+              <h3>Moved stock</h3>
+              <span className="meta" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <input className="field" style={{ width: 200, padding: "5px 9px", fontSize: 12 }} placeholder="Search date, item, type…" value={moveSearch} onChange={(e) => setMoveSearch(e.target.value)} />
                 <a href="#" onClick={(e) => { e.preventDefault(); exportMovements(toast); }} style={{ color: "var(--flame)", textDecoration: "none" }}><ExportI width={12} height={12} /> Export CSV</a>
               </span>
             </div>
             <table className="tbl">
               <thead><tr><th>When</th><th>Item</th><th>Type</th><th>Qty</th><th>From</th><th>To</th><th>Source / note</th></tr></thead>
               <tbody>
-                {movements.map((m, idx) => (
+                {filteredMovements.length === 0 && <tr><td colSpan={7} style={{ color: "var(--ink-soft)", fontSize: 13 }}>{movements.length === 0 ? "No stock movements yet." : `No movements match “${moveSearch}”.`}</td></tr>}
+                {filteredMovements.map((m, idx) => (
                   <tr key={idx}>
                     <td className="mono" style={{ fontSize: 11.5 }}>{m.when}</td>
                     <td className="mono">{m.sku}</td>
@@ -572,31 +647,54 @@ export default function InventoryView() {
 
       {tab === "i-assets" && (
         <div className="proc-panel active">
-          <div className="panel">
+          <div className="panel" style={{ marginBottom: 18 }}>
             <div className="panel-h">
               <h3>Asset register</h3>
               <span className="meta" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                straight-line depreciation posts to the GL monthly
-                <button className="btn" onClick={openAssetForm}><PlusI width={13} height={13} /> Register asset</button>
+                company assets — laptops, vehicles, equipment
+                <button className="btn" onClick={openAssetForm}><PlusI width={13} height={13} /> Add asset</button>
               </span>
             </div>
             <table className="tbl">
-              <thead><tr><th>Ref</th><th>Asset</th><th>Category</th><th>Acquired</th><th>Cost</th><th>Accum. dep.</th><th>NBV</th><th></th></tr></thead>
+              <thead><tr><th>Ref</th><th>Asset</th><th>Category</th><th>Qty</th><th>Date received</th><th>Assigned</th><th></th></tr></thead>
               <tbody>
-                {assets.map((a) => (
-                  <tr key={a.id} style={{ opacity: a.state === "disposed" ? 0.55 : 1 }}>
-                    <td className="mono">{a.id}</td>
-                    <td><strong>{a.name}</strong>{a.state === "disposed" && <span className="pill over" style={{ marginLeft: 7 }}>disposed</span>}</td>
-                    <td style={{ fontSize: 12 }}>{a.category}</td>
-                    <td style={{ fontSize: 12 }}>{a.acquired}</td>
-                    <td className="mono">{a.cost.toLocaleString()}</td>
-                    <td className="mono">{a.accumDep.toLocaleString()}</td>
-                    <td className="mono"><strong>{a.nbv.toLocaleString()}</strong></td>
-                    <td style={{ textAlign: "right" }}>
-                      {a.state !== "disposed" && (
-                        <a href="#" onClick={(e) => { e.preventDefault(); const reason = window.prompt(`Dispose ${a.name}? Optional reason:`, ""); if (reason !== null) disposeAsset(a.id, reason); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Dispose</a>
-                      )}
-                    </td>
+                {assets.length === 0 && <tr><td colSpan={7} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No assets yet — use Add asset to register a laptop, vehicle or equipment.</td></tr>}
+                {assets.map((a) => {
+                  const out = assignedByAsset[a.id] || 0;
+                  return (
+                    <tr key={a.id} style={{ opacity: a.state === "disposed" ? 0.55 : 1 }}>
+                      <td className="mono">{a.id}</td>
+                      <td><strong>{a.name}</strong>{a.state === "disposed" && <span className="pill over" style={{ marginLeft: 7 }}>disposed</span>}</td>
+                      <td style={{ fontSize: 12 }}>{a.category || "—"}</td>
+                      <td className="mono">{a.quantity}</td>
+                      <td style={{ fontSize: 12 }}>{a.acquired}</td>
+                      <td>{out > 0 ? <span className="pill today" style={{ textTransform: "none" }}>{out} assigned</span> : <span className="meta">—</span>}</td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        {a.state !== "disposed" && (
+                          <>
+                            <a href="#" onClick={(e) => { e.preventDefault(); setAssignFor(a); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12, marginRight: 12 }}>Assign</a>
+                            <a href="#" onClick={(e) => { e.preventDefault(); const reason = window.prompt(`Dispose ${a.name}? Optional reason:`, ""); if (reason !== null) disposeAsset(a.id, reason); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Dispose</a>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="panel">
+            <div className="panel-h"><h3>Assigned assets</h3><span className="meta">who holds what</span></div>
+            <table className="tbl">
+              <thead><tr><th>Employee</th><th>Item</th><th>Qty</th><th>Assigned</th></tr></thead>
+              <tbody>
+                {assetAssignments.length === 0 && <tr><td colSpan={4} style={{ color: "var(--ink-soft)", fontSize: 13 }}>Nothing assigned yet — use Assign on an asset above to hand one to an employee.</td></tr>}
+                {assetAssignments.map((a) => (
+                  <tr key={a.ref}>
+                    <td><strong>{a.employee}</strong></td>
+                    <td>{a.assetName} <span className="meta mono">{a.assetRef}</span></td>
+                    <td className="mono">{a.qty}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{a.assignedAt}</td>
                   </tr>
                 ))}
               </tbody>
@@ -608,6 +706,7 @@ export default function InventoryView() {
       <StockModal />
       <ItemModal />
       <AssetModal />
+      <AssignAssetModal open={!!assignFor} asset={assignFor} onClose={() => setAssignFor(null)} />
     </>
   );
 }

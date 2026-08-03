@@ -22,7 +22,7 @@ try {
   console.log("— project:", proj.name, "| state =", proj.state);
 
   // add + toggle a milestone
-  let r = await rpc(`public.add_project_milestone('${pid}'::uuid, 'Smoke-test milestone', 'todo')`);
+  let r = await rpc(`public.add_project_milestone('${pid}'::uuid, 'Smoke-test milestone', 0, null, null, 'todo')`);
   const newMs = r.detail.milestones.find((m) => m.t === "Smoke-test milestone");
   console.log("— milestone added:", newMs.t, "| id ok:", !!newMs.id);
   r = await rpc(`public.set_milestone_status('${newMs.id}'::uuid, 'done')`);

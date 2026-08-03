@@ -122,6 +122,13 @@ export const roleTemplates: Record<string, Perms> = {
 // Super admin = anyone whose live grant gives full (level 3) access to the "users"
 // module. Derived from perms at read time (see Users.tsx / AccessDrawer), not a list.
 
+// Who may open User Management at all: anyone with a "users" grant (level >= 1).
+// In practice these are the admin-type roles (MD, HR, Head of IT) — everyone else
+// has users:0 and the module is hidden from the sidebar and blocked on direct nav.
+export function canManageUsers(perms: Record<string, Perms>, email?: string | null): boolean {
+  return (perms[email ?? ""]?.users ?? 0) >= 1;
+}
+
 // least-privilege grants, set per person (not just by role)
 export const initialPerms: Record<string, Perms> = {
   "dennis@ignis.africa": { ...allFull },
@@ -162,14 +169,41 @@ export interface ProjectDetail {
   budget: string;
   spent: string;
   pct: string;
+  budgetAmount?: number;   // numeric budget in KES (drives the milestone-total cap)
+  spentAmount?: number;    // sum of completed-milestone amounts, recognised as spend
+  startDate?: string;
+  endDate?: string;
   timeline: string;
   team: string;
-  milestones: { id?: string; t: string; s: "done" | "now" | "todo" }[];
+  milestones: { id?: string; t: string; s: "done" | "now" | "todo"; amount?: number; start?: string; end?: string }[];
   drawdowns: { id?: string; t: string; v: string; s: string }[];
   reporting: string;
   field: string;
   // legacy seed docs are plain strings; uploaded docs are { name, path } objects
   docs: (string | { name: string; path: string })[];
+}
+
+// A field-activity assignment — someone sent to check a site (folded in via loadFromDb).
+export interface FieldActivity {
+  id: string;
+  project: string;
+  assignee: string;
+  phone: string | null;
+  email: string | null;
+  date: string;
+  note: string | null;
+}
+
+// In-app notification (e.g. tagged on an engagement) — drives the bell + CRM badge.
+export interface AppNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  linkView: string | null;
+  linkRef: string | null;
+  seen: boolean;
+  createdAt: string;
 }
 
 // Projects load live from the DB (public.projects) via bootstrap — no seed rows.

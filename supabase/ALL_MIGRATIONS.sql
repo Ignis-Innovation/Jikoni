@@ -6796,3 +6796,1379 @@ update public.budget_lines set committed = 0, actual = 0;
 update public.leave_balances set used = 0, reserved = 0;
 
 commit;
+
+-- ======== supabase/migrations/0036_ui_refinements.sql ========
+-- ============================================================
+-- Jikoni Tool — UI refinement round (Inventory, HR, Staff Portal)
+-- Backend changes for the frontend tidy-up:
+--   * stock_items.supplier         — capture the supplier on a new item
+--   * assets.quantity              — physical assets are tracked by count now,
+--                                    not depreciation (cost/life become optional)
+--   * asset_assignments            — who holds which asset (laptop, car, …)
+--   * create_stock_item + p_supplier
+--   * register_asset simplified    — name / category / quantity / date received
+--   * assign_asset                 — hand an asset to an employee
+--   * add_employee + p_contract_end — store the end date for non-permanent staff
+-- Idempotent: safe to re-run. Assignments + asset quantity are folded into the
+-- client read model in loadFromDb (like dispatch receipts), so bootstrap() is
+-- untouched.
+-- ============================================================
+
+-- ---------- new columns ----------
+alter table public.stock_items add column if not exists supplier text;
+alter table public.assets add column if not exists quantity int not null default 1;
+
+-- Physical-asset register no longer requires a positive cost (depreciation is
+-- optional now) — relax the cost check and default it to zero.
+alter table public.assets drop constraint if exists assets_cost_check;
+alter table public.assets alter column cost set default 0;
+
+-- ---------- asset assignments (who holds what) ----------
+create table if not exists public.asset_assignments (
+  id          uuid primary key default gen_random_uuid(),
+  ref         text not null unique,
+  entity_id   uuid references public.entities(id),
+  asset_id    uuid not null references public.assets(id),
+  asset_ref   text not null,
+  employee    text not null,
+  qty         int not null default 1 check (qty > 0),
+  assigned_at date not null default current_date,
+  state       text not null default 'assigned' check (state in ('assigned','returned')),
+  actor       uuid,
+  created_at  timestamptz not null default now()
+);
+
+insert into public.ref_counters(kind, prefix, n) values ('ASN', 'ASN-', 100)
+on conflict (kind) do nothing;
+
+-- ---------- create a stock item (now captures supplier) ----------
+drop function if exists public.create_stock_item(text,text,text,text,numeric,numeric,numeric,text);
+create or replace function public.create_stock_item(
+  p_sku text default null, p_name text default null, p_category text default null, p_unit text default 'unit',
+  p_unit_cost numeric default 0, p_reorder_level numeric default 0,
+  p_reorder_qty numeric default 0, p_budget_code text default null, p_supplier text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_code text := nullif(trim(coalesce(p_budget_code, '')), '');
+  v_sku  text := nullif(trim(coalesce(p_sku, '')), '');
+  v_sup  text := nullif(trim(coalesce(p_supplier, '')), '');
+begin
+  perform public.assert_access('inventory', 2);
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'A stock item needs a name'; end if;
+  if v_sku is null then v_sku := public.next_ref('SKU'); end if;   -- auto-generate a code
+  if exists (select 1 from public.stock_items where sku = v_sku) then
+    raise exception 'A stock item with SKU % already exists', v_sku;
+  end if;
+  if v_code is not null and not exists (select 1 from public.budget_lines where code = v_code) then
+    raise exception 'Unknown budget code: %', v_code;
+  end if;
+  insert into public.stock_items(entity_id, sku, name, category, unit, unit_cost, reorder_level, reorder_qty, budget_code, supplier)
+  values (v_entity, v_sku, p_name, nullif(trim(coalesce(p_category,'')),''), coalesce(nullif(trim(p_unit),''),'unit'),
+          coalesce(p_unit_cost,0), coalesce(p_reorder_level,0), coalesce(p_reorder_qty,0), v_code, v_sup);
+  perform public.audit_write('inventory.item_created', 'stock_item', v_sku,
+    jsonb_build_object('name', p_name, 'category', p_category, 'unitCost', p_unit_cost,
+                       'reorderLevel', p_reorder_level, 'budgetCode', v_code, 'supplier', v_sup));
+  return jsonb_build_object('sku', v_sku, 'name', p_name, 'category', p_category, 'unit', p_unit,
+    'unitCost', coalesce(p_unit_cost,0), 'reorderLevel', coalesce(p_reorder_level,0), 'onHand', 0, 'autoReq', null);
+end $$;
+
+-- ---------- register a physical asset (name / category / quantity / date) ----------
+drop function if exists public.register_asset(text,text,numeric,int,date,numeric);
+create or replace function public.register_asset(
+  p_name text, p_category text default null, p_quantity int default 1, p_acquired date default current_date
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_ref text;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_qty int := greatest(coalesce(p_quantity, 1), 1);
+begin
+  perform public.assert_access('inventory', 2);
+  if nullif(trim(coalesce(p_name,'')),'') is null then raise exception 'An asset needs a name'; end if;
+  v_ref := public.next_ref('AST');
+  -- cost/life default to 0/1: this is a physical-count register, not depreciation
+  insert into public.assets(ref, entity_id, name, category, cost, salvage, life_months, acquired_on, quantity)
+  values (v_ref, v_entity, trim(p_name), nullif(trim(coalesce(p_category,'')),''), 0, 0, 1,
+          coalesce(p_acquired, current_date), v_qty);
+  perform public.audit_write('asset.registered','asset', v_ref,
+    jsonb_build_object('name', p_name, 'quantity', v_qty, 'acquired', p_acquired));
+  return jsonb_build_object('id', v_ref, 'name', p_name, 'quantity', v_qty);
+end $$;
+
+-- ---------- assign an asset to an employee ----------
+create or replace function public.assign_asset(p_asset_ref text, p_employee text, p_qty int default 1)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_ref text; a record;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_qty int := greatest(coalesce(p_qty, 1), 1);
+begin
+  perform public.assert_access('inventory', 2);
+  select * into a from public.assets where ref = p_asset_ref;
+  if not found then raise exception 'Unknown asset: %', p_asset_ref; end if;
+  if nullif(trim(coalesce(p_employee,'')),'') is null then raise exception 'Assign the asset to an employee'; end if;
+  v_ref := public.next_ref('ASN');
+  insert into public.asset_assignments(ref, entity_id, asset_id, asset_ref, employee, qty, assigned_at)
+  values (v_ref, v_entity, a.id, a.ref, trim(p_employee), v_qty, current_date);
+  perform public.audit_write('asset.assigned','asset', p_asset_ref,
+    jsonb_build_object('employee', trim(p_employee), 'qty', v_qty, 'assignment', v_ref));
+  return jsonb_build_object('id', v_ref, 'asset', p_asset_ref, 'employee', trim(p_employee), 'qty', v_qty);
+end $$;
+
+-- ---------- add employee (now stores the contract end date) ----------
+drop function if exists public.add_employee(text,text,text,text,date,numeric,text,text,text,text);
+create or replace function public.add_employee(
+  p_name text, p_email text, p_role_title text default null,
+  p_contract_type text default 'permanent', p_start_date date default current_date,
+  p_gross_salary numeric default 0, p_kra text default null, p_nssf text default null,
+  p_shif text default null, p_bank text default null, p_contract_end date default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_email text := lower(nullif(trim(coalesce(p_email, '')), ''));
+  v_user uuid; v_staff text;
+  v_year int := extract(year from coalesce(p_start_date, current_date))::int;
+begin
+  perform public.assert_access('hr', 3);
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'An employee needs a name'; end if;
+  if v_email is null then raise exception 'An employee needs an email'; end if;
+  if p_contract_type not in ('permanent','fixed_term','casual','consultant') then
+    raise exception 'Unknown contract type: %', p_contract_type;
+  end if;
+  if p_contract_type <> 'permanent' and p_contract_end is null then
+    raise exception 'A non-permanent contract needs an end date';
+  end if;
+  if exists (select 1 from public.app_users where email = v_email) then
+    raise exception 'A user with email % already exists', v_email;
+  end if;
+  insert into public.app_users(entity_id, name, email, role_title, role_key)
+  values (v_entity, trim(p_name), v_email, nullif(trim(coalesce(p_role_title,'')),''), 'std')
+  returning id into v_user;
+  v_staff := public.next_ref('STF');
+  insert into public.staff_files(entity_id, app_user_id, staff_no, kra_pin, nssf_no, shif_no,
+    contract_type, start_date, contract_end, gross_salary, bank, docs)
+  values (v_entity, v_user, v_staff,
+    nullif(trim(coalesce(p_kra,'')),''), nullif(trim(coalesce(p_nssf,'')),''), nullif(trim(coalesce(p_shif,'')),''),
+    p_contract_type, p_start_date, p_contract_end, coalesce(p_gross_salary,0), nullif(trim(coalesce(p_bank,'')),''),
+    jsonb_build_array(jsonb_build_object('name','Employment contract','version',1,'uploaded',to_char(coalesce(p_start_date,current_date),'YYYY-MM-DD'))));
+  insert into public.leave_balances(app_user_id, kind, year, entitled, used)
+  select v_user, kind, v_year, days_per_year, 0 from public.leave_policies
+  on conflict (app_user_id, kind, year) do nothing;
+  perform public.audit_write('hr.employee_added','staff', v_staff,
+    jsonb_build_object('name', p_name, 'email', v_email, 'contract', p_contract_type, 'gross', p_gross_salary, 'contractEnd', p_contract_end));
+  return jsonb_build_object('staffNo', v_staff, 'name', p_name, 'email', v_email);
+end $$;
+
+-- ---------- RLS + grants ----------
+alter table public.asset_assignments enable row level security;
+drop policy if exists "read for authenticated" on public.asset_assignments;
+create policy "read for authenticated" on public.asset_assignments for select to authenticated using (true);
+
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'create_stock_item(text,text,text,text,numeric,numeric,numeric,text,text)',
+    'register_asset(text,text,int,date)',
+    'assign_asset(text,text,int)',
+    'add_employee(text,text,text,text,date,numeric,text,text,text,text,date)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ======== supabase/migrations/0037_projects_crm_round.sql ========
+-- ============================================================
+-- Jikoni Tool — Projects money model + CRM tagging/notifications
+-- Backend for the Projects & Programmes + Partnerships CRM feature round:
+--   * projects.budget_amount / start_date / end_date  — numeric budget + timeline
+--   * project_milestones.amount / start_date / end_date — money + dates per milestone
+--   * project_drawdowns.milestone_id                   — completing a milestone auto-
+--                                                        creates a Received drawdown
+--   * create_project             — numeric budget + start/end dates
+--   * add_project_milestone      — amount + dates; total may not exceed the budget
+--   * set_milestone_status       — done → auto-drawdown + recompute spent; reopen removes
+--   * create_field_activity      — assign someone (name/phone/email) to a site
+--   * partners.contact_name/email/phone + create_partner
+--   * create_engagement + p_tagged_email — in-app notification for a tagged teammate
+--   * notifications table + mark_notifications_seen — drives the bell + CRM badge
+-- Contact fields, field activities and notifications are folded into the client read
+-- model in loadFromDb (like dispatch receipts / asset assignments), so bootstrap()
+-- stays untouched. Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- new columns ----------
+alter table public.projects add column if not exists budget_amount numeric not null default 0;
+alter table public.projects add column if not exists start_date date;
+alter table public.projects add column if not exists end_date date;
+
+alter table public.project_milestones add column if not exists amount numeric not null default 0;
+alter table public.project_milestones add column if not exists start_date date;
+alter table public.project_milestones add column if not exists end_date date;
+
+alter table public.project_drawdowns add column if not exists milestone_id uuid
+  references public.project_milestones(id) on delete cascade;
+
+alter table public.field_activities add column if not exists assignee text;
+alter table public.field_activities add column if not exists phone text;
+alter table public.field_activities add column if not exists email text;
+alter table public.field_activities drop constraint if exists field_activities_kind_check;
+alter table public.field_activities add constraint field_activities_kind_check
+  check (kind in ('site_visit','install','readiness_assessment','assignment'));
+
+alter table public.partners add column if not exists contact_name text;
+alter table public.partners add column if not exists email text;
+alter table public.partners add column if not exists phone text;
+
+-- ---------- notifications (drives the topbar bell + CRM badge) ----------
+create table if not exists public.notifications (
+  id           uuid primary key default gen_random_uuid(),
+  entity_id    uuid references public.entities(id),
+  recipient_email text not null,
+  kind         text not null,
+  title        text not null,
+  body         text,
+  link_view    text,
+  link_ref     text,
+  seen         boolean not null default false,
+  created_at   timestamptz not null default now()
+);
+create index if not exists notifications_recipient_idx on public.notifications(recipient_email, seen);
+
+alter table public.notifications enable row level security;
+drop policy if exists "own notifications read" on public.notifications;
+create policy "own notifications read" on public.notifications for select to authenticated
+  using (recipient_email = lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', '')));
+drop policy if exists "own notifications update" on public.notifications;
+create policy "own notifications update" on public.notifications for update to authenticated
+  using (recipient_email = lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', '')));
+
+-- ---------- money helpers ----------
+create or replace function public.fmt_kes(p numeric) returns text
+language sql immutable as $$ select 'KES ' || to_char(coalesce(p, 0), 'FM999,999,999,990') $$;
+
+-- Recompute a project's displayed spend + burn % from its completed milestones.
+create or replace function public.recompute_project_money(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_spent numeric; v_budget numeric;
+begin
+  select coalesce(sum(amount), 0) into v_spent
+    from public.project_milestones where project_id = p_id and status = 'done';
+  select budget_amount into v_budget from public.projects where id = p_id;
+  update public.projects
+     set spent_txt  = public.fmt_kes(v_spent),
+         pct        = case when coalesce(v_budget, 0) > 0
+                           then round(v_spent / v_budget * 100)::text || '%' else '0%' end,
+         updated_at = now()
+   where id = p_id;
+end $$;
+
+-- ---------- project read-model json (now carries money + dates) ----------
+create or replace function public.project_detail_json(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', p.id, 'state', p.state,
+    'funder', p.funder, 'status', p.status, 'budget', p.budget_txt, 'spent', p.spent_txt,
+    'pct', p.pct, 'timeline', p.timeline, 'team', p.team, 'reporting', p.reporting, 'field', p.field,
+    'budgetAmount', p.budget_amount,
+    'spentAmount', coalesce((select sum(amount) from public.project_milestones
+                             where project_id = p.id and status = 'done'), 0),
+    'startDate', p.start_date, 'endDate', p.end_date,
+    'docs', p.docs,
+    'milestones', coalesce((select jsonb_agg(jsonb_build_object(
+                              'id', id, 't', title, 's', status,
+                              'amount', amount, 'start', start_date, 'end', end_date) order by sort)
+                            from public.project_milestones where project_id = p.id), '[]'::jsonb),
+    'drawdowns',  coalesce((select jsonb_agg(jsonb_build_object(
+                              'id', id, 't', title, 'v', amount_txt, 's', status) order by sort)
+                            from public.project_drawdowns where project_id = p.id), '[]'::jsonb))
+  from public.projects p where p.id = p_id
+$$;
+
+-- ---------- create a project (numeric budget + start/end dates) ----------
+drop function if exists public.create_project(text,text,text,text,text,text);
+create or replace function public.create_project(
+  p_name text, p_funder text, p_budget_amount numeric,
+  p_start_date date, p_end_date date, p_team text, p_status text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_timeline text;
+  p record;
+begin
+  perform public.assert_access('projects', 2);
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'A project name is required'; end if;
+  if exists (select 1 from public.projects where name = trim(p_name)) then
+    raise exception 'A project named "%" already exists', trim(p_name);
+  end if;
+  v_timeline := case
+    when p_start_date is not null and p_end_date is not null
+      then to_char(p_start_date, 'Mon YYYY') || ' → ' || to_char(p_end_date, 'Mon YYYY')
+    when p_start_date is not null then 'From ' || to_char(p_start_date, 'Mon YYYY')
+    else '2026' end;
+  insert into public.projects(entity_id, name, funder, status, budget_amount, budget_txt, spent_txt, pct,
+                              start_date, end_date, timeline, team, is_extra, docs)
+  values (v_entity, trim(p_name), nullif(trim(coalesce(p_funder, '')), ''),
+          coalesce(nullif(trim(coalesce(p_status, '')), ''), 'Setup'),
+          coalesce(p_budget_amount, 0), public.fmt_kes(coalesce(p_budget_amount, 0)), 'KES 0', '0%',
+          p_start_date, p_end_date, v_timeline,
+          nullif(trim(coalesce(p_team, '')), ''), true, '[]'::jsonb)
+  returning * into p;
+  perform public.audit_write('project.created', 'project', p.name,
+    jsonb_build_object('funder', p_funder, 'budget', p_budget_amount, 'start', p_start_date, 'end', p_end_date, 'team', p_team));
+  return jsonb_build_object('name', p.name, 'created', true, 'detail', public.project_detail_json(p.id));
+end $$;
+
+-- ---------- add a milestone (amount + dates; total may not exceed budget) ----------
+drop function if exists public.add_project_milestone(uuid,text,text);
+create or replace function public.add_project_milestone(
+  p_project_id uuid, p_title text, p_amount numeric default 0,
+  p_start_date date default null, p_end_date date default null, p_status text default 'todo')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_sort int; v_budget numeric; v_used numeric;
+begin
+  perform public.assert_access('projects', 2);
+  if nullif(trim(coalesce(p_title, '')), '') is null then raise exception 'A milestone title is required'; end if;
+  if p_status not in ('done','now','todo') then raise exception 'Invalid milestone status %', p_status; end if;
+  if coalesce(p_amount, 0) < 0 then raise exception 'Milestone amount cannot be negative'; end if;
+  select budget_amount into v_budget from public.projects where id = p_project_id;
+  if v_budget is null then raise exception 'Project not found'; end if;
+  select coalesce(sum(amount), 0) into v_used from public.project_milestones where project_id = p_project_id;
+  if v_used + coalesce(p_amount, 0) > v_budget then
+    raise exception 'Milestones would total % which exceeds the project budget of %',
+      public.fmt_kes(v_used + coalesce(p_amount, 0)), public.fmt_kes(v_budget);
+  end if;
+  select coalesce(max(sort), 0) + 1 into v_sort from public.project_milestones where project_id = p_project_id;
+  insert into public.project_milestones(project_id, title, status, sort, amount, start_date, end_date)
+  values (p_project_id, trim(p_title), p_status, v_sort, coalesce(p_amount, 0), p_start_date, p_end_date);
+  perform public.recompute_project_money(p_project_id);
+  perform public.audit_write('project.milestone_added','project', p_project_id::text,
+    jsonb_build_object('title', p_title, 'amount', p_amount, 'status', p_status));
+  return public.project_payload(p_project_id);
+end $$;
+
+-- ---------- complete a milestone → recognise its amount as a drawdown ----------
+create or replace function public.set_milestone_status(p_milestone_id uuid, p_status text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid; v_title text; v_amount numeric; v_sort int;
+begin
+  perform public.assert_access('projects', 2);
+  if p_status not in ('done','now','todo') then raise exception 'Invalid milestone status %', p_status; end if;
+  update public.project_milestones set status = p_status where id = p_milestone_id
+    returning project_id, title, amount into v_project, v_title, v_amount;
+  if v_project is null then raise exception 'Milestone not found'; end if;
+  if p_status = 'done' then
+    -- recognise the milestone amount as a Received drawdown (one per milestone)
+    if not exists (select 1 from public.project_drawdowns where milestone_id = p_milestone_id) then
+      select coalesce(max(sort), 0) + 1 into v_sort from public.project_drawdowns where project_id = v_project;
+      insert into public.project_drawdowns(project_id, title, amount_txt, status, sort, milestone_id)
+      values (v_project, v_title, public.fmt_kes(v_amount), 'Received', v_sort, p_milestone_id);
+    end if;
+  else
+    -- reopened → pull the auto-created drawdown back out
+    delete from public.project_drawdowns where milestone_id = p_milestone_id;
+  end if;
+  perform public.recompute_project_money(v_project);
+  perform public.audit_write('project.milestone_status','project', v_project::text,
+    jsonb_build_object('milestone', p_milestone_id, 'status', p_status));
+  return public.project_payload(v_project);
+end $$;
+
+-- ---------- assign someone to a field activity ----------
+create or replace function public.create_field_activity(
+  p_project_id uuid, p_assignee text, p_phone text, p_email text,
+  p_activity_on date default current_date, p_note text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  perform public.assert_access('projects', 2);
+  if not exists (select 1 from public.projects where id = p_project_id) then raise exception 'Project not found'; end if;
+  if nullif(trim(coalesce(p_assignee, '')), '') is null then raise exception 'An assignee is required'; end if;
+  insert into public.field_activities(project_id, kind, county, note, activity_on, assignee, phone, email)
+  values (p_project_id, 'assignment', null, nullif(trim(coalesce(p_note, '')), ''),
+          coalesce(p_activity_on, current_date), trim(p_assignee),
+          nullif(trim(coalesce(p_phone, '')), ''), nullif(trim(coalesce(p_email, '')), ''))
+  returning id into v_id;
+  perform public.audit_write('project.field_activity','project', p_project_id::text,
+    jsonb_build_object('assignee', p_assignee, 'note', p_note));
+  return jsonb_build_object('id', v_id);
+end $$;
+
+-- ---------- create a partner (now captures a contact person) ----------
+drop function if exists public.create_partner(text,text,text,text,text);
+create or replace function public.create_partner(
+  p_name text, p_type text, p_country text, p_owner_name text, p_status text,
+  p_contact_name text default null, p_email text default null, p_phone text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_entity uuid := (select id from public.entities where code = 'KE'); v_cls text; v_id uuid;
+begin
+  perform public.assert_access('crm', 2);
+  v_cls := case p_status
+    when 'Active'        then 'done'
+    when 'Ready to fund' then 'done'
+    when 'Holding'       then 'over'
+    when 'Negotiation'   then 'today'
+    when 'Materials'     then 'today'
+    when 'Contracting'   then 'today'
+    else 'week' end;
+  insert into public.partners(entity_id, name, type, country, owner_name, status, status_cls,
+                              contact_name, email, phone)
+  values (v_entity, p_name, p_type, p_country, p_owner_name, p_status, v_cls,
+          nullif(trim(coalesce(p_contact_name, '')), ''), nullif(trim(coalesce(p_email, '')), ''),
+          nullif(trim(coalesce(p_phone, '')), ''))
+  returning id into v_id;
+  perform public.audit_write('partner.created', 'partner', p_name,
+    jsonb_build_object('type', p_type, 'country', p_country, 'owner', p_owner_name,
+                       'status', p_status, 'contact', p_contact_name, 'email', p_email));
+  return jsonb_build_object(
+    'id', v_id, 'name', p_name, 'type', p_type, 'country', p_country,
+    'ownerName', p_owner_name, 'status', p_status, 'statusCls', v_cls,
+    'contactName', p_contact_name, 'email', p_email, 'phone', p_phone);
+end $$;
+
+-- ---------- create an engagement (optionally tag a teammate) ----------
+drop function if exists public.create_engagement(text,text,text,text,text,text);
+create or replace function public.create_engagement(
+  p_name text, p_stage text, p_owner_name text, p_pipeline text,
+  p_next_action text default null, p_due_key text default 'week', p_tagged_email text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_ref text; v_pill text; v_pill_txt text; v_stage text; v_id uuid; v_who text;
+  v_note text := nullif(trim(coalesce(p_next_action, '')), '');
+  v_tag  text := lower(nullif(trim(coalesce(p_tagged_email, '')), ''));
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('crm', 2);
+  v_ref := public.next_ref(case when p_pipeline = 'down' then 'DST' else 'ENG' end);
+  v_stage := coalesce(nullif(trim(coalesce(p_stage, '')), ''),
+                      case when p_pipeline = 'down' then 'Identification' else 'Discovery' end);
+  select case p_due_key when 'today' then 'today' when 'over' then 'over' else 'week' end,
+         case p_due_key when 'today' then 'Today' when 'over' then 'Overdue' when 'nweek' then 'Next week' else 'This week' end
+    into v_pill, v_pill_txt;
+  insert into public.engagements(ref, entity_id, name, stage, owner_name, pill, pill_txt, pipeline)
+  values (v_ref, v_entity, p_name, v_stage, p_owner_name, v_pill, v_pill_txt, p_pipeline)
+  returning id into v_id;
+  v_who := coalesce((select name from public.app_users where auth_id = auth.uid()), p_owner_name);
+  if v_note is not null then
+    insert into public.engagement_updates(engagement_id, channel, who, note, happened)
+    values (v_id, 'Note', v_who, v_note, 'Today');
+  end if;
+  -- tag a teammate → in-app notification (email is sent client-side via /api/notify)
+  if v_tag is not null and exists (select 1 from public.app_users where email = v_tag) then
+    insert into public.notifications(entity_id, recipient_email, kind, title, body, link_view, link_ref)
+    values (v_entity, v_tag, 'eng_tag',
+            v_who || ' tagged you on ' || v_ref,
+            p_name || ' — ' || v_stage, 'crm', v_ref);
+  end if;
+  perform public.audit_write('engagement.created', 'engagement', v_ref,
+    jsonb_build_object('name', p_name, 'stage', v_stage, 'owner', p_owner_name,
+                       'pipeline', p_pipeline, 'note', v_note, 'tagged', v_tag));
+  return jsonb_build_object(
+    'id', v_ref, 'n', p_name, 'st', v_stage, 'o', p_owner_name,
+    'pl', v_pill, 'plt', v_pill_txt, 'pipeline', p_pipeline, 'taggedEmail', v_tag);
+end $$;
+
+-- ---------- mark my notifications read ----------
+create or replace function public.mark_notifications_seen(p_ids uuid[] default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_email text := lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''));
+  v_n int;
+begin
+  update public.notifications set seen = true
+   where recipient_email = v_email and seen = false and (p_ids is null or id = any(p_ids));
+  get diagnostics v_n = row_count;
+  return jsonb_build_object('seen', v_n);
+end $$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'create_project(text,text,numeric,date,date,text,text)',
+    'add_project_milestone(uuid,text,numeric,date,date,text)',
+    'set_milestone_status(uuid,text)',
+    'create_field_activity(uuid,text,text,text,date,text)',
+    'create_partner(text,text,text,text,text,text,text,text)',
+    'create_engagement(text,text,text,text,text,text,text)',
+    'mark_notifications_seen(uuid[])']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ======== supabase/migrations/0038_finance_procurement_wiring.sql ========
+-- ============================================================
+-- Jikoni Tool — Finance & Procurement wiring round
+-- The procure-to-pay + payables/receivables spine already exists as RPCs
+-- (submit_requisition, budget_check, approve_requisition, raise_po, submit_grn,
+-- capture_ap_invoice, three_way_match, pay_invoice, screen_vendor,
+-- submit_sales_invoice, post_journal). This migration adds the few missing pieces
+-- so the modules run end to end on real data:
+--   * create_vendor        — onboard a supplier (screening comes after, via screen_vendor)
+--   * record_ar_receipt     — record a collection against a sales invoice + post the journal
+--   * account_balances()    — trial-balance read model for the General Ledger tab
+--   * chart_of_accounts read policy (the only spine table without one)
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- chart_of_accounts is the only spine table missing a read policy (needed for the GL tab)
+alter table public.chart_of_accounts enable row level security;
+drop policy if exists "read for authenticated" on public.chart_of_accounts;
+create policy "read for authenticated" on public.chart_of_accounts for select to authenticated using (true);
+
+-- ---------- onboard a vendor (screening + tax gate applied later) ----------
+create or replace function public.create_vendor(
+  p_name text, p_category text default null, p_country text default 'Kenya',
+  p_kra_pin text default null, p_bank text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_owner  uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_pin text := nullif(trim(coalesce(p_kra_pin, '')), '');
+  v_id uuid;
+begin
+  perform public.assert_access('procurement', 2);
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'A vendor needs a name'; end if;
+  if exists (select 1 from public.vendors where name = trim(p_name)) then
+    raise exception 'A vendor named "%" already exists', trim(p_name);
+  end if;
+  insert into public.vendors(entity_id, owner_id, name, category, country, tax_status, bank, since,
+                             screen_status, state)
+  values (v_entity, v_owner, trim(p_name), nullif(trim(coalesce(p_category, '')), ''),
+          coalesce(nullif(trim(coalesce(p_country, '')), ''), 'Kenya'),
+          case when v_pin is not null then 'PIN ' || v_pin else 'Pending PIN' end,
+          nullif(trim(coalesce(p_bank, '')), ''), to_char(now(), 'Mon YYYY'),
+          'pending', 'draft')
+  returning id into v_id;
+  perform public.audit_write('vendor.created', 'vendor', trim(p_name),
+    jsonb_build_object('category', p_category, 'country', p_country, 'kra', v_pin));
+  return jsonb_build_object('id', v_id, 'name', trim(p_name), 'category', p_category,
+    'country', coalesce(p_country, 'Kenya'), 'screenStatus', 'pending', 'state', 'draft');
+end $$;
+
+-- ---------- record a collection against a sales invoice ----------
+create or replace function public.record_ar_receipt(p_inv_ref text, p_amount numeric, p_method text default 'bank')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare inv record; je text;
+begin
+  perform public.assert_access('finance', 2);
+  if coalesce(p_amount, 0) <= 0 then raise exception 'A receipt amount is required'; end if;
+  select * into inv from public.sales_invoices where ref = p_inv_ref;
+  if not found then raise exception 'Sales invoice % not found', p_inv_ref; end if;
+  if inv.state = 'paid' then raise exception '% is already settled', p_inv_ref; end if;
+  -- cash in, receivable down
+  je := public.post_journal('Receipt for ' || p_inv_ref || ' — ' || inv.customer, 'receipt', p_inv_ref,
+    jsonb_build_array(
+      jsonb_build_object('account', case when p_method = 'mpesa' then '1000' else '1000' end, 'debit', p_amount),
+      jsonb_build_object('account', '1100', 'credit', p_amount)));
+  update public.sales_invoices set state = 'paid', due_pill_cls = 'done', due_pill_txt = 'Paid', updated_at = now()
+   where id = inv.id;
+  perform public.audit_write('receipt.recorded', 'sales_invoice', p_inv_ref,
+    jsonb_build_object('amount', p_amount, 'method', p_method, 'journal', je));
+  return jsonb_build_object('invoice', p_inv_ref, 'amount', p_amount, 'journal', je);
+end $$;
+
+-- ---------- trial-balance read model for the General Ledger tab ----------
+-- Sums posted journal lines per account and joins the chart of accounts so the GL
+-- shows a balance per account with its type. Balance is signed by account kind.
+create or replace function public.account_balances() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'code', code, 'name', name, 'kind', kind,
+      'debit', debit, 'credit', credit,
+      'balance', case when kind in ('asset','expense') then debit - credit else credit - debit end)
+      order by code), '[]'::jsonb)
+  from (
+    select coa.code, coa.name, coa.kind,
+           coalesce(sum(jl.debit), 0)  as debit,
+           coalesce(sum(jl.credit), 0) as credit
+    from public.chart_of_accounts coa
+    left join public.journal_lines jl on jl.account_code = coa.code
+    left join public.journal_entries je on je.id = jl.journal_id and je.state = 'posted'
+    where coa.active
+    group by coa.code, coa.name, coa.kind
+    having coalesce(sum(jl.debit), 0) <> 0 or coalesce(sum(jl.credit), 0) <> 0
+  ) q
+$$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'create_vendor(text,text,text,text,text)',
+    'record_ar_receipt(text,numeric,text)',
+    'account_balances()']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ======== supabase/migrations/0039_v2_control_gaps.sql ========
+-- ============================================================
+-- Jikoni Tool — Finance & Procurement PRD v2: control-gap fixes
+-- Closes the loopholes called out in the v2 PRD (backend-enforced + testable):
+--   #2 vendor bank-detail change → callback verification before it takes effect
+--   #3 duplicate supplier-invoice check on capture
+--   #4 PO amendment → re-approval when the change exceeds tolerance
+--   #5 three-way-match tolerance + PO-amend tolerance are configurable (app_config)
+--   #6 over-delivery on a GRN is held, not silently accepted
+--   #1 notifications fire on approvals + exceptions (notify_role helper)
+-- Plus set_app_config so Settings can edit the rules. Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- configurable rules ----------
+insert into public.app_config(key, value) values
+  ('match_tolerance_pct', '0.5'::jsonb),
+  ('po_amend_tolerance_pct', '5'::jsonb),
+  ('manual_journal_threshold', '100000'::jsonb),
+  ('reminder_hours', '24'::jsonb),
+  ('escalation_hours', '72'::jsonb)
+on conflict (key) do nothing;
+
+-- admin setter for the Settings screen
+create or replace function public.set_app_config(p_key text, p_value jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  perform public.assert_access('users', 2);
+  if p_key not in ('match_tolerance_pct','po_amend_tolerance_pct','manual_journal_threshold',
+                   'reminder_hours','escalation_hours','enforce_sod','enforce_access') then
+    raise exception 'Unknown setting: %', p_key;
+  end if;
+  insert into public.app_config(key, value, updated_at) values (p_key, p_value, now())
+  on conflict (key) do update set value = excluded.value, updated_at = now();
+  perform public.audit_write('config.updated','app_config', p_key, jsonb_build_object('value', p_value));
+  return jsonb_build_object('key', p_key, 'value', p_value);
+end $$;
+
+-- ---------- notifications: fan a notification out to everyone holding a role ----------
+create or replace function public.notify_role(
+  p_module text, p_min_level int, p_kind text, p_title text, p_body text,
+  p_link_view text, p_link_ref text
+) returns void language plpgsql security definer set search_path = public as $$
+declare v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  insert into public.notifications(entity_id, recipient_email, kind, title, body, link_view, link_ref)
+  select v_entity, up.email, p_kind, p_title, p_body, p_link_view, p_link_ref
+  from public.user_permissions up
+  where up.module = p_module and up.level >= p_min_level;
+end $$;
+
+-- ---------- PO amendment (loophole #4) ----------
+alter table public.purchase_orders add column if not exists needs_reapproval boolean not null default false;
+
+create or replace function public.amend_po(
+  p_po_ref text, p_new_amount numeric, p_new_delivery text default null, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  po record; bcode text; tol numeric; delta_pct numeric; v_reapp boolean;
+begin
+  perform public.assert_access('procurement', 2);
+  select * into po from public.purchase_orders where ref = p_po_ref;
+  if not found then raise exception 'PO % not found', p_po_ref; end if;
+  if po.state in ('closed','cancelled') then raise exception 'PO % is % and cannot be amended', p_po_ref, po.state; end if;
+  if coalesce(p_new_amount, 0) <= 0 then raise exception 'A new amount is required'; end if;
+  tol := coalesce((select value::numeric from public.app_config where key = 'po_amend_tolerance_pct'), 5);
+  delta_pct := case when po.amount > 0 then abs(p_new_amount - po.amount) / po.amount * 100 else 100 end;
+  v_reapp := delta_pct > tol;
+  -- move the budget commitment by the delta on the coded line
+  select budget_code into bcode from public.requisitions where id = po.requisition_id;
+  if bcode is not null then
+    update public.budget_lines set committed = greatest(committed + (p_new_amount - po.amount), 0) where code = bcode;
+  end if;
+  update public.purchase_orders
+     set amount = p_new_amount,
+         delivery = coalesce(nullif(trim(coalesce(p_new_delivery, '')), ''), delivery),
+         needs_reapproval = v_reapp, updated_at = now()
+   where id = po.id;
+  perform public.audit_write('po.amended','po', p_po_ref,
+    jsonb_build_object('from', po.amount, 'to', p_new_amount, 'deltaPct', round(delta_pct, 1), 'reason', p_reason, 'reapproval', v_reapp));
+  if v_reapp then
+    perform public.notify_role('procurement', 3, 'po_amend',
+      p_po_ref || ' amended — needs re-approval',
+      po.vendor_name || ': ' || public.fmt_kes(po.amount) || ' → ' || public.fmt_kes(p_new_amount) || ' (' || round(delta_pct, 1) || '%)',
+      'procurement', p_po_ref);
+  end if;
+  return jsonb_build_object('id', p_po_ref, 'amount', p_new_amount, 'reapproval', v_reapp, 'deltaPct', round(delta_pct, 1));
+end $$;
+
+create or replace function public.approve_po_amendment(p_po_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare po record;
+begin
+  perform public.assert_access('procurement', 3);
+  select * into po from public.purchase_orders where ref = p_po_ref;
+  if not found then raise exception 'PO % not found', p_po_ref; end if;
+  update public.purchase_orders set needs_reapproval = false, updated_at = now() where id = po.id;
+  perform public.audit_write('po.amendment_approved','po', p_po_ref, jsonb_build_object('amount', po.amount));
+  return jsonb_build_object('id', p_po_ref, 'reapproval', false);
+end $$;
+
+-- ---------- goods received: hold over-delivery (loophole #6) ----------
+create or replace function public.submit_grn(p_po_ref text, p_coverage text, p_pct int, p_note text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  po record; req_owner uuid; v_ref text; existing int; added int; total_pct int;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_receiver uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  select * into po from public.purchase_orders where ref = p_po_ref;
+  if not found then raise exception 'PO % not found', p_po_ref; end if;
+  if po.state = 'closed' then raise exception 'PO % is closed', p_po_ref; end if;
+  select owner_id into req_owner from public.requisitions where id = po.requisition_id;
+  perform public.assert_sod('goods receipt (receiver ≠ requester)', req_owner);
+  select coalesce(sum(pct), 0) into existing from public.goods_received_notes where po_id = po.id and state = 'received';
+  if existing >= 100 then raise exception 'PO % is already fully received', p_po_ref; end if;
+  added := case when p_coverage = 'full' then 100 - existing else least(greatest(p_pct, 1), 99) end;
+  -- over-delivery is held, not silently accepted: a partial that exceeds the balance is blocked
+  if existing + added > 100 then
+    raise exception 'Over-delivery: PO % already has % of 100 received — amend the PO to receive more', p_po_ref, existing;
+  end if;
+  v_ref := public.next_ref('GRN');
+  insert into public.goods_received_notes(ref, entity_id, po_id, receiver_id, coverage, pct, note)
+  values (v_ref, v_entity, po.id, v_receiver,
+          case when p_coverage = 'full' then 'full' else 'partial' end, added, p_note);
+  select coalesce(sum(pct), 0) into total_pct from public.goods_received_notes where po_id = po.id and state = 'received';
+  if po.state = 'open' and total_pct < 100 then
+    update public.purchase_orders set state = 'partially_received' where id = po.id;
+  end if;
+  perform public.audit_write('grn.received','grn', v_ref,
+    jsonb_build_object('po', p_po_ref, 'coverage', p_coverage, 'pct', added));
+  return jsonb_build_object('id', v_ref, 'po', p_po_ref, 'totalPct', least(total_pct, 100));
+end $$;
+
+-- ---------- payables: duplicate check + amendment gate + configurable tolerance ----------
+create or replace function public.three_way_match(p_invoice_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  inv record; po record; grn_pct int; tol numeric;
+  amount_ok boolean; grn_ok boolean; over boolean;
+begin
+  select * into inv from public.invoices_ap where id = p_invoice_id;
+  select * into po from public.purchase_orders where id = inv.po_id;
+  select coalesce(sum(pct), 0) into grn_pct from public.goods_received_notes where po_id = po.id and state = 'received';
+  tol := coalesce((select value::numeric from public.app_config where key = 'match_tolerance_pct'), 0.5) / 100.0;
+  amount_ok := abs(inv.amount - po.amount) <= po.amount * tol;
+  over := grn_pct > 100;
+  grn_ok := grn_pct >= 100 and not over;
+  if amount_ok and grn_ok then
+    update public.invoices_ap set state = 'matched', match_note = null where id = inv.id;
+    update public.purchase_orders set state = 'closed' where id = po.id and state in ('open','partially_received');
+    perform public.audit_write('invoice.matched','invoice_ap', inv.ref, jsonb_build_object('po', po.ref, 'amount', inv.amount));
+    return jsonb_build_object('state','matched');
+  else
+    update public.invoices_ap set state = 'exception',
+      match_note = case
+        when over then format('Over-delivery: goods received %s%%', grn_pct)
+        when not grn_ok then format('Goods received %s%% — awaiting balance', grn_pct)
+        else format('Amount mismatch: invoice %s vs PO %s', inv.amount, po.amount) end
+      where id = inv.id;
+    perform public.audit_write('invoice.exception','invoice_ap', inv.ref,
+      jsonb_build_object('po', po.ref, 'grnPct', grn_pct, 'invoice', inv.amount, 'poAmount', po.amount, 'over', over));
+    -- route the exception by type (loophole #1 / §9.3)
+    perform public.notify_role('finance', 3, 'match_exception',
+      inv.ref || ' held — match exception',
+      case when over then po.vendor_name || ': over-delivery ' || grn_pct || '%'
+           when not grn_ok then po.vendor_name || ': goods only ' || grn_pct || '% received'
+           else po.vendor_name || ': amount mismatch' end,
+      'finance', inv.ref);
+    return jsonb_build_object('state','exception');
+  end if;
+end $$;
+
+create or replace function public.capture_ap_invoice(p_po_ref text, p_amount numeric)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  po record; v_ref text; v_id uuid; m jsonb; line record;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('finance', 2);
+  select * into po from public.purchase_orders where ref = p_po_ref;
+  if not found then raise exception 'PO % not found', p_po_ref; end if;
+  -- loophole #4: an amended PO must be re-approved before an invoice is captured
+  if po.needs_reapproval then raise exception 'PO % was amended and is awaiting re-approval', p_po_ref; end if;
+  -- loophole #3: duplicate invoice guard — one live invoice per PO in this model
+  if exists (select 1 from public.invoices_ap where po_id = po.id and state in ('captured','matched','paid')) then
+    raise exception 'Possible duplicate: % already has a supplier invoice captured', p_po_ref;
+  end if;
+  v_ref := public.next_ref('INV');
+  insert into public.invoices_ap(ref, entity_id, vendor_id, po_id, amount)
+  values (v_ref, v_entity, po.vendor_id, po.id, p_amount) returning id into v_id;
+  select bl.* into line from public.budget_lines bl
+    join public.requisitions r on r.budget_code = bl.code where r.id = po.requisition_id;
+  perform public.post_journal('Supplier invoice ' || v_ref || ' — ' || po.vendor_name, 'invoice_ap', v_ref,
+    jsonb_build_array(
+      jsonb_build_object('account', coalesce(line.account_code,'5000'), 'debit', p_amount),
+      jsonb_build_object('account', '2000', 'credit', p_amount)));
+  perform public.audit_write('invoice.captured','invoice_ap', v_ref, jsonb_build_object('po', p_po_ref, 'amount', p_amount));
+  m := public.three_way_match(v_id);
+  return jsonb_build_object('id', v_ref, 'po', p_po_ref, 'match', m->>'state');
+end $$;
+
+-- ---------- requisition submission notifies the approver (loophole #1) ----------
+create or replace function public.submit_requisition(p_item text, p_amount numeric, p_code text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  bc jsonb; rt jsonb; v_ref text; v_state text; v_status text;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_owner uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  bc := public.budget_check(p_code, p_amount);
+  rt := public.route_approval(p_amount);
+  v_state := rt->>'resultState';
+  v_ref := public.next_ref('PR');
+  insert into public.requisitions(ref, entity_id, owner_id, item, amount, budget_code, budget_chip, budget_chip_txt, state)
+  values (v_ref, v_entity, v_owner, p_item, p_amount, p_code, bc->>'chip', bc->>'chipTxt', v_state);
+  update public.budget_lines set committed = committed + p_amount where code = p_code;
+  v_status := case v_state when 'approved' then 'approved' when 'md_review' then 'md' else 'await' end;
+  perform public.audit_write('requisition.submitted','requisition', v_ref,
+    jsonb_build_object('item', p_item, 'amount', p_amount, 'code', p_code, 'budget', bc->>'chipTxt', 'routing', rt->>'label'));
+  -- notify approvers when the requisition actually needs a decision
+  if v_state in ('submitted','md_review') then
+    perform public.notify_role('procurement', 3, 'req_approval',
+      v_ref || ' awaiting your approval',
+      p_item || ' — ' || public.fmt_kes(p_amount) || ' (' || (bc->>'chipTxt') || ')',
+      'procurement', v_ref);
+  end if;
+  return jsonb_build_object('id', v_ref, 'item', p_item, 'amt', p_amount, 'code', p_code,
+    'chip', bc->>'chip', 'chipTxt', bc->>'chipTxt', 'status', v_status,
+    'routing', jsonb_build_object('label', rt->>'label', 'who', rt->>'who'));
+end $$;
+
+-- ---------- vendor bank-detail change → callback verification (loophole #2) ----------
+create table if not exists public.vendor_bank_changes (
+  id           uuid primary key default gen_random_uuid(),
+  entity_id    uuid references public.entities(id),
+  vendor_id    uuid not null references public.vendors(id),
+  vendor_name  text not null,
+  old_bank     text,
+  new_bank     text not null,
+  requested_by uuid,
+  verified_by  uuid,
+  callback_note text,
+  state        text not null default 'pending' check (state in ('pending','verified','rejected')),
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+alter table public.vendor_bank_changes enable row level security;
+drop policy if exists "read for authenticated" on public.vendor_bank_changes;
+create policy "read for authenticated" on public.vendor_bank_changes for select to authenticated using (true);
+
+create or replace function public.request_vendor_bank_change(p_vendor_name text, p_new_bank text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v record; v_id uuid;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_actor uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  if nullif(trim(coalesce(p_new_bank, '')), '') is null then raise exception 'New bank details are required'; end if;
+  select * into v from public.vendors where name = p_vendor_name;
+  if not found then raise exception 'Vendor % not found', p_vendor_name; end if;
+  -- supersede any earlier pending request for this vendor
+  update public.vendor_bank_changes set state = 'rejected', updated_at = now()
+   where vendor_id = v.id and state = 'pending';
+  insert into public.vendor_bank_changes(entity_id, vendor_id, vendor_name, old_bank, new_bank, requested_by)
+  values (v_entity, v.id, v.name, v.bank, trim(p_new_bank), v_actor) returning id into v_id;
+  perform public.audit_write('vendor.bank_change_requested','vendor', p_vendor_name,
+    jsonb_build_object('old', v.bank, 'new', trim(p_new_bank)));
+  -- security notification cannot be muted (§9.2): alert finance approvers to verify by callback
+  perform public.notify_role('finance', 3, 'vendor_bank_change',
+    'Bank-detail change requested — verify by callback',
+    p_vendor_name || ': confirm the new account by phone using the number on file before approving.',
+    'procurement', p_vendor_name);
+  return jsonb_build_object('id', v_id, 'vendor', p_vendor_name, 'state', 'pending');
+end $$;
+
+create or replace function public.approve_vendor_bank_change(p_change_id uuid, p_callback_note text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare ch record;
+  v_actor uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('finance', 3);
+  select * into ch from public.vendor_bank_changes where id = p_change_id;
+  if not found then raise exception 'Change request not found'; end if;
+  if ch.state <> 'pending' then raise exception 'This request is already %', ch.state; end if;
+  -- requester ≠ verifier is a named security control — enforced regardless of the SoD flag
+  if v_actor is not null and v_actor = ch.requested_by then
+    raise exception 'The person who requested the bank-detail change cannot verify it';
+  end if;
+  if nullif(trim(coalesce(p_callback_note, '')), '') is null then
+    raise exception 'Record the callback confirmation (who you spoke to and the number called)';
+  end if;
+  update public.vendor_bank_changes
+     set state = 'verified', verified_by = v_actor, callback_note = trim(p_callback_note), updated_at = now()
+   where id = ch.id;
+  update public.vendors set bank = ch.new_bank, updated_at = now() where id = ch.vendor_id;
+  perform public.audit_write('vendor.bank_change_verified','vendor', ch.vendor_name,
+    jsonb_build_object('new', ch.new_bank, 'callback', trim(p_callback_note)));
+  return jsonb_build_object('id', ch.id, 'vendor', ch.vendor_name, 'state', 'verified');
+end $$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'set_app_config(text,jsonb)',
+    'notify_role(text,int,text,text,text,text,text)',
+    'amend_po(text,numeric,text,text)',
+    'approve_po_amendment(text)',
+    'submit_grn(text,text,int,text)',
+    'three_way_match(uuid)',
+    'capture_ap_invoice(text,numeric)',
+    'submit_requisition(text,numeric,text)',
+    'request_vendor_bank_change(text,text)',
+    'approve_vendor_bank_change(uuid,text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ======== supabase/migrations/0040_coding_and_requisitions.sql ========
+-- ============================================================
+-- Jikoni Tool — UI Build Spec: Coding + full Requisition form
+-- Build-priority items #1 (Settings → Coding) and #2 (the Requisitions form):
+--   * upsert_cost_centre        — create/update a cost centre (a budget_line) from
+--                                 Settings → Coding, the dropdown source for reqs/budgets
+--   * requisitions gains qty / unit / unit_price / project_code / justification
+--   * submit_requisition        — richer form + "Save as Draft" (no budget commit / routing)
+--   * submit_requisition_final  — a draft moves to Submitted: budget commit + routing + notify
+--   * withdraw_requisition      — requester pulls a pending req back to draft (releases budget),
+--                                 or discards a draft
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- cost centres (Coding) ----------
+create or replace function public.upsert_cost_centre(p_name text, p_budget numeric)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_entity uuid := (select id from public.entities where code = 'KE'); v_code text := trim(coalesce(p_name, ''));
+begin
+  perform public.assert_access('finance', 2);
+  if v_code = '' then raise exception 'A cost-centre name is required'; end if;
+  insert into public.budget_lines(entity_id, code, budget, account_code)
+  values (v_entity, v_code, greatest(coalesce(p_budget, 0), 0), '5000')
+  on conflict (code) do update set budget = excluded.budget, updated_at = now();
+  perform public.audit_write('coding.cost_centre','budget_line', v_code, jsonb_build_object('budget', p_budget));
+  return jsonb_build_object('code', v_code, 'budget', greatest(coalesce(p_budget, 0), 0));
+end $$;
+
+-- ---------- requisitions gain the full form's fields ----------
+alter table public.requisitions add column if not exists qty numeric;
+alter table public.requisitions add column if not exists unit text;
+alter table public.requisitions add column if not exists unit_price numeric;
+alter table public.requisitions add column if not exists project_code text;
+alter table public.requisitions add column if not exists justification text;
+
+-- withdraw sends a pending requisition back to draft — register those transitions
+insert into public.record_transitions(record_type, from_state, to_state) values
+  ('requisition','submitted','draft'),
+  ('requisition','md_review','draft')
+on conflict do nothing;
+
+-- ---------- submit a requisition (full form; optional Save-as-Draft) ----------
+drop function if exists public.submit_requisition(text,numeric,text);
+create or replace function public.submit_requisition(
+  p_item text, p_amount numeric, p_code text,
+  p_qty numeric default 1, p_unit text default 'unit', p_unit_price numeric default null,
+  p_project text default null, p_justification text default null, p_as_draft boolean default false)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  bc jsonb; rt jsonb; v_ref text; v_state text; v_status text;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_owner uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  bc := public.budget_check(p_code, p_amount);          -- chip shown either way
+  v_ref := public.next_ref('PR');
+  if p_as_draft then
+    insert into public.requisitions(ref, entity_id, owner_id, item, amount, budget_code,
+      budget_chip, budget_chip_txt, state, qty, unit, unit_price, project_code, justification)
+    values (v_ref, v_entity, v_owner, p_item, p_amount, p_code, bc->>'chip', bc->>'chipTxt', 'draft',
+            p_qty, p_unit, p_unit_price, nullif(trim(coalesce(p_project,'')),''), nullif(trim(coalesce(p_justification,'')),''));
+    perform public.audit_write('requisition.drafted','requisition', v_ref, jsonb_build_object('item', p_item, 'amount', p_amount));
+    return jsonb_build_object('id', v_ref, 'item', p_item, 'amt', p_amount, 'code', p_code,
+      'chip', bc->>'chip', 'chipTxt', bc->>'chipTxt', 'status', 'draft',
+      'routing', jsonb_build_object('label', 'Draft', 'who', 'saved — submit when ready'));
+  end if;
+  rt := public.route_approval(p_amount);
+  v_state := rt->>'resultState';
+  insert into public.requisitions(ref, entity_id, owner_id, item, amount, budget_code,
+    budget_chip, budget_chip_txt, state, qty, unit, unit_price, project_code, justification)
+  values (v_ref, v_entity, v_owner, p_item, p_amount, p_code, bc->>'chip', bc->>'chipTxt', v_state,
+          p_qty, p_unit, p_unit_price, nullif(trim(coalesce(p_project,'')),''), nullif(trim(coalesce(p_justification,'')),''));
+  update public.budget_lines set committed = committed + p_amount where code = p_code;
+  v_status := case v_state when 'approved' then 'approved' when 'md_review' then 'md' else 'await' end;
+  perform public.audit_write('requisition.submitted','requisition', v_ref,
+    jsonb_build_object('item', p_item, 'amount', p_amount, 'code', p_code, 'budget', bc->>'chipTxt', 'routing', rt->>'label'));
+  if v_state in ('submitted','md_review') then
+    perform public.notify_role('procurement', 3, 'req_approval',
+      v_ref || ' awaiting your approval', p_item || ' — ' || public.fmt_kes(p_amount) || ' (' || (bc->>'chipTxt') || ')',
+      'procurement', v_ref);
+  end if;
+  return jsonb_build_object('id', v_ref, 'item', p_item, 'amt', p_amount, 'code', p_code,
+    'chip', bc->>'chip', 'chipTxt', bc->>'chipTxt', 'status', v_status,
+    'routing', jsonb_build_object('label', rt->>'label', 'who', rt->>'who'));
+end $$;
+
+-- ---------- a draft moves into approval ----------
+create or replace function public.submit_requisition_final(p_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r record; bc jsonb; rt jsonb; v_state text; v_status text;
+begin
+  perform public.assert_access('procurement', 2);
+  select * into r from public.requisitions where ref = p_ref;
+  if not found then raise exception 'Requisition % not found', p_ref; end if;
+  if r.state <> 'draft' then raise exception '% is not a draft (state: %)', p_ref, r.state; end if;
+  bc := public.budget_check(r.budget_code, r.amount);
+  rt := public.route_approval(r.amount);
+  v_state := rt->>'resultState';
+  update public.requisitions set state = v_state, budget_chip = bc->>'chip', budget_chip_txt = bc->>'chipTxt', updated_at = now()
+   where id = r.id;
+  update public.budget_lines set committed = committed + r.amount where code = r.budget_code;
+  v_status := case v_state when 'approved' then 'approved' when 'md_review' then 'md' else 'await' end;
+  perform public.audit_write('requisition.submitted','requisition', p_ref, jsonb_build_object('from', 'draft', 'routing', rt->>'label'));
+  if v_state in ('submitted','md_review') then
+    perform public.notify_role('procurement', 3, 'req_approval',
+      p_ref || ' awaiting your approval', r.item || ' — ' || public.fmt_kes(r.amount), 'procurement', p_ref);
+  end if;
+  return jsonb_build_object('id', p_ref, 'status', v_status);
+end $$;
+
+-- ---------- requester withdraws: pending → draft (release budget), or discard a draft ----------
+create or replace function public.withdraw_requisition(p_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r record; v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  select * into r from public.requisitions where ref = p_ref;
+  if not found then raise exception 'Requisition % not found', p_ref; end if;
+  if v_me is not null and r.owner_id is not null and v_me <> r.owner_id then
+    raise exception 'Only the requester can withdraw %', p_ref;
+  end if;
+  if r.state in ('submitted','md_review') then
+    update public.requisitions set state = 'draft', updated_at = now() where id = r.id;
+    update public.budget_lines set committed = greatest(committed - r.amount, 0) where code = r.budget_code;
+    perform public.audit_write('requisition.withdrawn','requisition', p_ref, jsonb_build_object('to', 'draft'));
+    return jsonb_build_object('id', p_ref, 'status', 'draft');
+  elsif r.state = 'draft' then
+    delete from public.requisitions where id = r.id;
+    perform public.audit_write('requisition.discarded','requisition', p_ref, '{}'::jsonb);
+    return jsonb_build_object('id', p_ref, 'status', 'discarded');
+  else
+    raise exception 'Only a draft or pending requisition can be withdrawn (state: %)', r.state;
+  end if;
+end $$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'upsert_cost_centre(text,numeric)',
+    'submit_requisition(text,numeric,text,numeric,text,numeric,text,text,boolean)',
+    'submit_requisition_final(text)',
+    'withdraw_requisition(text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ======== supabase/migrations/0041_qty_chain_payables_storage.sql ========
+-- ============================================================
+-- Jikoni Tool — UI Build Spec: qty-based chain + payables enrichment + storage
+-- Single-line, quantity-based model (confirmed with Brian). Covers spec items:
+--   #2 raise_po now carries an editable qty + unit price (from the requisition)
+--   #3 GRN moves from % complete to quantity received against the PO's ordered qty,
+--      with per-delivery over-delivery held (accept → PO amendment / reject the excess)
+--   #1 capture_ap_invoice gains invoice number / date / currency / withholding tax and
+--      a duplicate guard (vendor + invoice number + amount); adds an Approve-for-Payment
+--      step (preparer ≠ approver); pay deducts WHT to a payable account
+--   #5 a shared 'uploads' storage bucket for GRN photos, requisition/RFQ attachments, etc.
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- schema ----------
+alter table public.purchase_orders   add column if not exists qty numeric;
+alter table public.purchase_orders   add column if not exists unit_price numeric;
+alter table public.goods_received_notes add column if not exists qty_received numeric;
+alter table public.goods_received_notes add column if not exists over_delivery boolean not null default false;
+alter table public.goods_received_notes add column if not exists photo_path text;
+
+alter table public.invoices_ap add column if not exists invoice_number text;
+alter table public.invoices_ap add column if not exists invoice_date date;
+alter table public.invoices_ap add column if not exists currency text not null default 'KES';
+alter table public.invoices_ap add column if not exists wht_applied boolean not null default false;
+alter table public.invoices_ap add column if not exists wht_amount numeric not null default 0;
+alter table public.invoices_ap add column if not exists captured_by uuid;
+-- add the Approve-for-Payment state between matched and paid
+alter table public.invoices_ap drop constraint if exists invoices_ap_state_check;
+alter table public.invoices_ap add constraint invoices_ap_state_check
+  check (state in ('captured','matched','exception','approved','paid'));
+insert into public.record_transitions(record_type, from_state, to_state) values
+  ('invoice_ap','matched','approved'), ('invoice_ap','approved','paid')
+on conflict do nothing;
+
+-- WHT payable account + rate config
+insert into public.chart_of_accounts(entity_id, code, name, kind)
+select (select id from public.entities where code = 'KE'), '2200', 'Withholding tax payable', 'liability'
+on conflict (entity_id, code) do nothing;
+insert into public.app_config(key, value) values ('wht_rate_pct', '5'::jsonb) on conflict (key) do nothing;
+
+-- shared uploads bucket (public read; authenticated write)
+insert into storage.buckets(id, name, public) values ('uploads','uploads', true) on conflict (id) do nothing;
+drop policy if exists "uploads read" on storage.objects;
+create policy "uploads read" on storage.objects for select using (bucket_id = 'uploads');
+drop policy if exists "uploads write" on storage.objects;
+create policy "uploads write" on storage.objects for insert to authenticated with check (bucket_id = 'uploads');
+drop policy if exists "uploads update" on storage.objects;
+create policy "uploads update" on storage.objects for update to authenticated using (bucket_id = 'uploads');
+
+-- ---------- #2 raise PO with an editable line (qty + unit price) ----------
+drop function if exists public.raise_po(text,text,text);
+create or replace function public.raise_po(
+  p_req_ref text, p_vendor_name text, p_delivery text,
+  p_qty numeric default null, p_unit_price numeric default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  r record; v record; v_ref text; v_delivery text; v_qty numeric; v_price numeric; v_amount numeric;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_owner uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  select * into r from public.requisitions where ref = p_req_ref;
+  if not found then raise exception 'Requisition % not found', p_req_ref; end if;
+  if r.state <> 'approved' then
+    raise exception 'Document chain: % must be approved before a PO can exist (state: %)', p_req_ref, r.state;
+  end if;
+  select * into v from public.vendors where name = p_vendor_name;
+  if not found then raise exception 'Vendor % is not registered', p_vendor_name; end if;
+  v_qty   := greatest(coalesce(p_qty, r.qty, 1), 0.0001);
+  v_price := coalesce(p_unit_price, r.unit_price, r.amount / v_qty);
+  v_amount := round(v_qty * v_price, 2);
+  v_ref := public.next_ref('PO');
+  v_delivery := coalesce(nullif(trim(coalesce(p_delivery, '')), ''), '—');
+  insert into public.purchase_orders(ref, entity_id, owner_id, requisition_id, vendor_id, vendor_name, amount, delivery, qty, unit_price)
+  values (v_ref, v_entity, v_owner, r.id, v.id, v.name, v_amount, v_delivery, v_qty, v_price);  -- sanctions gate fires here
+  update public.requisitions set state = 'converted' where id = r.id;
+  update public.vendors set open_pos = open_pos + 1 where id = v.id;
+  perform public.audit_write('po.issued','po', v_ref,
+    jsonb_build_object('requisition', p_req_ref, 'vendor', v.name, 'qty', v_qty, 'unitPrice', v_price, 'amount', v_amount));
+  return jsonb_build_object('id', v_ref, 'vendor', v.name, 'amt', v_amount, 'delivery', v_delivery, 'qty', v_qty);
+end $$;
+
+-- ---------- #3 goods received by quantity, with over-delivery held ----------
+drop function if exists public.submit_grn(text,text,int,text);
+create or replace function public.submit_grn(
+  p_po_ref text, p_qty_received numeric, p_note text default null,
+  p_over_action text default null, p_photo_path text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  po record; req_owner uuid; v_ref text; ordered numeric; existing numeric; remaining numeric;
+  v_qty numeric; v_over boolean := false; v_pct int;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_receiver uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('procurement', 2);
+  select * into po from public.purchase_orders where ref = p_po_ref;
+  if not found then raise exception 'PO % not found', p_po_ref; end if;
+  if po.state = 'closed' then raise exception 'PO % is closed', p_po_ref; end if;
+  select owner_id into req_owner from public.requisitions where id = po.requisition_id;
+  perform public.assert_sod('goods receipt (receiver ≠ requester)', req_owner);
+  if coalesce(p_qty_received, 0) <= 0 then raise exception 'Enter the quantity received'; end if;
+  ordered := coalesce(po.qty, 1);
+  select coalesce(sum(qty_received), 0) into existing from public.goods_received_notes where po_id = po.id and state = 'received';
+  remaining := ordered - existing;
+  if remaining <= 0 then raise exception 'PO % is already fully received (%/%)', p_po_ref, existing, ordered; end if;
+  v_qty := p_qty_received;
+  if v_qty > remaining then
+    if p_over_action = 'accept' then
+      v_over := true;                                   -- record the excess but hold via a PO amendment
+      update public.purchase_orders set needs_reapproval = true where id = po.id;
+    elsif p_over_action = 'reject' then
+      v_qty := remaining;                               -- take only what was ordered, turn the rest away
+    else
+      raise exception 'Over-delivery: % received but only % remain on % — accept (amend PO) or reject the excess', v_qty, remaining, p_po_ref;
+    end if;
+  end if;
+  v_ref := public.next_ref('GRN');
+  v_pct := least(round((existing + v_qty) / ordered * 100)::int, 100);
+  insert into public.goods_received_notes(ref, entity_id, po_id, receiver_id, coverage, pct, qty_received, over_delivery, note, photo_path)
+  values (v_ref, v_entity, po.id, v_receiver,
+          case when (existing + v_qty) >= ordered then 'full' else 'partial' end,
+          greatest(v_pct, 1), v_qty, v_over, p_note, p_photo_path);
+  if po.state = 'open' and (existing + v_qty) < ordered then
+    update public.purchase_orders set state = 'partially_received' where id = po.id;
+  end if;
+  perform public.audit_write('grn.received','grn', v_ref,
+    jsonb_build_object('po', p_po_ref, 'qty', v_qty, 'ordered', ordered, 'over', v_over));
+  return jsonb_build_object('id', v_ref, 'po', p_po_ref, 'received', existing + v_qty, 'ordered', ordered, 'over', v_over);
+end $$;
+
+-- ---------- three-way match on quantity ----------
+create or replace function public.three_way_match(p_invoice_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  inv record; po record; recv numeric; ordered numeric; tol numeric;
+  amount_ok boolean; grn_ok boolean; over boolean;
+begin
+  select * into inv from public.invoices_ap where id = p_invoice_id;
+  select * into po from public.purchase_orders where id = inv.po_id;
+  ordered := coalesce(po.qty, 1);
+  select coalesce(sum(qty_received), 0) into recv from public.goods_received_notes where po_id = po.id and state = 'received';
+  tol := coalesce((select value::numeric from public.app_config where key = 'match_tolerance_pct'), 0.5) / 100.0;
+  amount_ok := abs(inv.amount - po.amount) <= po.amount * tol;
+  over := recv > ordered;
+  grn_ok := recv >= ordered and not over;
+  if amount_ok and grn_ok then
+    update public.invoices_ap set state = 'matched', match_note = null where id = inv.id;
+    update public.purchase_orders set state = 'closed' where id = po.id and state in ('open','partially_received');
+    perform public.audit_write('invoice.matched','invoice_ap', inv.ref, jsonb_build_object('po', po.ref, 'amount', inv.amount));
+    return jsonb_build_object('state','matched');
+  else
+    update public.invoices_ap set state = 'exception',
+      match_note = case
+        when over then format('Over-delivery: %s of %s received', recv, ordered)
+        when recv < ordered then format('Goods received %s of %s — awaiting balance', recv, ordered)
+        else format('Amount mismatch: invoice %s vs PO %s', inv.amount, po.amount) end
+      where id = inv.id;
+    perform public.audit_write('invoice.exception','invoice_ap', inv.ref,
+      jsonb_build_object('po', po.ref, 'received', recv, 'ordered', ordered, 'invoice', inv.amount, 'poAmount', po.amount, 'over', over));
+    perform public.notify_role('finance', 3, 'match_exception',
+      inv.ref || ' held — match exception',
+      case when over then po.vendor_name || ': over-delivery ' || recv || '/' || ordered
+           when recv < ordered then po.vendor_name || ': received ' || recv || '/' || ordered
+           else po.vendor_name || ': amount mismatch' end,
+      'finance', inv.ref);
+    return jsonb_build_object('state','exception');
+  end if;
+end $$;
+
+-- ---------- #1 capture supplier invoice (number/date/currency/WHT + duplicate guard) ----------
+drop function if exists public.capture_ap_invoice(text,numeric);
+create or replace function public.capture_ap_invoice(
+  p_po_ref text, p_amount numeric, p_invoice_number text default null,
+  p_invoice_date date default null, p_currency text default 'KES', p_wht boolean default false)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  po record; v_ref text; v_id uuid; m jsonb; line record; dup text; v_wht numeric; v_rate numeric;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_actor uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_num text := nullif(trim(coalesce(p_invoice_number, '')), '');
+begin
+  perform public.assert_access('finance', 2);
+  select * into po from public.purchase_orders where ref = p_po_ref;
+  if not found then raise exception 'PO % not found', p_po_ref; end if;
+  if po.needs_reapproval then raise exception 'PO % was amended and is awaiting re-approval', p_po_ref; end if;
+  -- duplicate guard: same vendor + invoice number + amount already in the system
+  if v_num is not null then
+    select i.ref into dup from public.invoices_ap i
+      where i.vendor_id = po.vendor_id and lower(i.invoice_number) = lower(v_num) and i.amount = p_amount
+      limit 1;
+    if dup is not null then raise exception 'Possible duplicate of % (same vendor, invoice number and amount)', dup; end if;
+  end if;
+  -- one live invoice per PO in this single-line model
+  if exists (select 1 from public.invoices_ap where po_id = po.id and state in ('captured','matched','approved','paid')) then
+    raise exception 'Possible duplicate: % already has a supplier invoice captured', p_po_ref;
+  end if;
+  v_rate := coalesce((select value::numeric from public.app_config where key = 'wht_rate_pct'), 5);
+  v_wht := case when p_wht then round(p_amount * v_rate / 100.0, 2) else 0 end;
+  v_ref := public.next_ref('INV');
+  insert into public.invoices_ap(ref, entity_id, vendor_id, po_id, amount, invoice_number, invoice_date, currency, wht_applied, wht_amount, captured_by)
+  values (v_ref, v_entity, po.vendor_id, po.id, p_amount, v_num, p_invoice_date, coalesce(nullif(p_currency,''),'KES'), p_wht, v_wht, v_actor)
+  returning id into v_id;
+  select bl.* into line from public.budget_lines bl
+    join public.requisitions r on r.budget_code = bl.code where r.id = po.requisition_id;
+  perform public.post_journal('Supplier invoice ' || v_ref || ' — ' || po.vendor_name, 'invoice_ap', v_ref,
+    jsonb_build_array(
+      jsonb_build_object('account', coalesce(line.account_code,'5000'), 'debit', p_amount),
+      jsonb_build_object('account', '2000', 'credit', p_amount)));
+  perform public.audit_write('invoice.captured','invoice_ap', v_ref,
+    jsonb_build_object('po', p_po_ref, 'amount', p_amount, 'number', v_num, 'wht', v_wht));
+  m := public.three_way_match(v_id);
+  return jsonb_build_object('id', v_ref, 'po', p_po_ref, 'match', m->>'state', 'wht', v_wht);
+end $$;
+
+-- ---------- #1 approve for payment (preparer ≠ approver) ----------
+create or replace function public.approve_ap_invoice(p_inv_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare inv record; v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+begin
+  perform public.assert_access('finance', 3);
+  select * into inv from public.invoices_ap where ref = p_inv_ref;
+  if not found then raise exception 'Invoice % not found', p_inv_ref; end if;
+  if inv.state <> 'matched' then raise exception '% must be matched before approval (state: %)', p_inv_ref, inv.state; end if;
+  if v_me is not null and inv.captured_by is not null and v_me = inv.captured_by then
+    raise exception 'The person who captured % cannot approve it for payment', p_inv_ref;
+  end if;
+  update public.invoices_ap set state = 'approved' where id = inv.id;
+  perform public.audit_write('invoice.approved','invoice_ap', p_inv_ref, jsonb_build_object('amount', inv.amount));
+  return jsonb_build_object('id', p_inv_ref, 'state', 'approved');
+end $$;
+
+-- ---------- pay (requires approval; deducts WHT) ----------
+create or replace function public.pay_invoice(p_inv_ref text, p_method text default 'bank')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  inv record; po record; v_ref text; je text; bcode text; net numeric; lines jsonb;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('finance', 3);
+  select * into inv from public.invoices_ap where ref = p_inv_ref;
+  if not found then raise exception 'Invoice % not found', p_inv_ref; end if;
+  if inv.state <> 'approved' then
+    raise exception 'Approval required: % must be approved for payment first (state: %)', p_inv_ref, inv.state;
+  end if;
+  select * into po from public.purchase_orders where id = inv.po_id;
+  net := inv.amount - coalesce(inv.wht_amount, 0);
+  v_ref := public.next_ref('PAY');
+  lines := jsonb_build_array(
+    jsonb_build_object('account', '2000', 'debit', inv.amount),
+    jsonb_build_object('account', '1000', 'credit', net));
+  if coalesce(inv.wht_amount, 0) > 0 then
+    lines := lines || jsonb_build_object('account', '2200', 'credit', inv.wht_amount);
+  end if;
+  je := public.post_journal('Payment ' || v_ref || ' — ' || po.vendor_name, 'payment', v_ref, lines);
+  insert into public.payments(ref, entity_id, invoice_ap_id, method, amount, journal_ref)
+  values (v_ref, v_entity, inv.id, p_method, net, je);
+  if p_method = 'mpesa' then
+    insert into public.mpesa_payments(payment_ref, shortcode, amount, state) values (v_ref, '174379', net, 'pending');
+  end if;
+  update public.invoices_ap set state = 'paid' where id = inv.id;
+  update public.vendors set open_pos = greatest(open_pos - 1, 0) where id = inv.vendor_id;
+  select budget_code into bcode from public.requisitions where id = po.requisition_id;
+  if bcode is not null then
+    update public.budget_lines set committed = greatest(committed - inv.amount, 0), actual = actual + inv.amount where code = bcode;
+  end if;
+  perform public.audit_write('payment.made','payment', v_ref,
+    jsonb_build_object('invoice', p_inv_ref, 'method', p_method, 'net', net, 'wht', inv.wht_amount, 'journal', je));
+  return jsonb_build_object('id', v_ref, 'invoice', p_inv_ref, 'journal', je, 'net', net);
+end $$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'raise_po(text,text,text,numeric,numeric)',
+    'submit_grn(text,numeric,text,text,text)',
+    'three_way_match(uuid)',
+    'capture_ap_invoice(text,numeric,text,date,text,boolean)',
+    'approve_ap_invoice(text)',
+    'pay_invoice(text,text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;

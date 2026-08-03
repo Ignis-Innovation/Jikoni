@@ -110,88 +110,170 @@ export function TaskModal() {
 
 /* ================= RAISE REQUISITION ================= */
 export function ReqModal() {
-  const { reqOpen, closeReq, submitReq, toast } = useApp();
+  const { reqOpen, closeReq, submitReq, costCentres, projectDetails, toast } = useApp();
+  const centres = costCentres.length ? costCentres.map((c) => c.code) : Object.keys(budgetLines);
+  const projects = Object.keys(projectDetails);
   const [item, setItem] = useState("");
-  const [code, setCode] = useState("Deployment");
-  const [amtStr, setAmtStr] = useState("");
+  const [qty, setQty] = useState("1");
+  const [unit, setUnit] = useState("pcs");
+  const [code, setCode] = useState("");
+  const [project, setProject] = useState("");
+  const [unitPrice, setUnitPrice] = useState("");
+  const [justification, setJustification] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (reqOpen) {
-      setItem(""); setCode("Deployment"); setAmtStr("");
+      setItem(""); setQty("1"); setUnit("pcs"); setCode(centres[0] ?? ""); setProject(""); setUnitPrice(""); setJustification("");
       setTimeout(() => inputRef.current?.focus(), 60);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reqOpen]);
 
-  const a = parseFloat(amtStr) || 0;
-  const b = a > 0 ? reqBudgetState(code, a) : null;
-  const r = reqRouting(a);
+  const total = (parseFloat(qty) || 0) * (parseFloat(unitPrice) || 0);
+  const b = total > 0 && budgetLines[code] ? reqBudgetState(code, total) : null;
+  const r = reqRouting(total);
 
-  function submit() {
-    if (!item.trim()) { toast("Add a description", "What are you requisitioning?"); return; }
-    if (!a) { toast("Add an amount", "Needed for the budget check and routing"); return; }
-    submitReq(item.trim(), a, code);
+  function validate() {
+    if (!item.trim()) { toast("Add a description", "What are you requisitioning?"); return false; }
+    if (!(parseFloat(qty) > 0)) { toast("Add a quantity", "How many?"); return false; }
+    if (!code) { toast("Pick a cost centre", "Coding drives the budget check and the ledger"); return false; }
+    if (!(parseFloat(unitPrice) > 0)) { toast("Add a unit price", "Needed for the total and budget check"); return false; }
+    return true;
+  }
+  function go(asDraft: boolean) {
+    if (!validate()) return;
+    submitReq({ item: item.trim(), amt: total, code, qty: parseFloat(qty) || 1, unit, unitPrice: parseFloat(unitPrice) || 0, project, justification: justification.trim(), asDraft });
   }
 
   return (
-    <ModalShell open={reqOpen} onClose={closeReq} width={500}>
-      <div className="mh"><h3>Raise a requisition</h3><p>Budget is checked as you type; approval routes by amount.</p></div>
+    <ModalShell open={reqOpen} onClose={closeReq} width={520}>
+      <div className="mh"><h3>Raise a requisition</h3><p>Budget is checked as you type; approval routes by amount. Coding is required — it drives the budget check now and the ledger later.</p></div>
       <div className="mb">
-        <div><label>What do you need?</label><input ref={inputRef} className="field" placeholder="e.g. Cooker spares — maintenance batch" value={item} onChange={(e) => setItem(e.target.value)} /></div>
+        <div><label>Item / description</label><input ref={inputRef} className="field" placeholder="e.g. Cooker spares — maintenance batch" value={item} onChange={(e) => setItem(e.target.value)} /></div>
         <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label>Coding — cost centre / project</label>
-            <select className="field" style={{ width: "100%" }} value={code} onChange={(e) => setCode(e.target.value)}>
-              {Object.keys(budgetLines).map((k) => <option key={k}>{k}</option>)}
+          <div style={{ width: 90 }}><label>Quantity</label><input className="field" style={{ width: "100%" }} type="number" min="0" value={qty} onChange={(e) => setQty(e.target.value)} /></div>
+          <div style={{ width: 120 }}>
+            <label>Unit</label>
+            <select className="field" style={{ width: "100%" }} value={unit} onChange={(e) => setUnit(e.target.value)}>
+              <option>pcs</option><option>kg</option><option>litre</option><option>box</option><option>service</option>
             </select>
           </div>
-          <div style={{ width: 150 }}>
-            <label>Amount (KES)</label>
-            <input className="field" type="number" min="0" placeholder="0" style={{ width: "100%" }} value={amtStr} onChange={(e) => setAmtStr(e.target.value)} />
+          <div style={{ flex: 1 }}><label>Est. unit price (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" placeholder="0" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Cost centre</label>
+            <select className="field" style={{ width: "100%" }} value={code} onChange={(e) => setCode(e.target.value)}>
+              {centres.length === 0 && <option value="">No cost centres — add one in Settings → Coding</option>}
+              {centres.map((k) => <option key={k}>{k}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>Project <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+            <select className="field" style={{ width: "100%" }} value={project} onChange={(e) => setProject(e.target.value)}>
+              <option value="">— none —</option>
+              {projects.map((p) => <option key={p}>{p}</option>)}
+            </select>
           </div>
         </div>
+        <div className="recon" style={{ padding: "8px 0" }}><span>Estimated total</span><span className="mono"><strong>{kes(total)}</strong></span></div>
         <div className="reqbox" style={b ? { background: b.bg, color: b.fg, borderColor: "transparent" } : { background: "#FCFAF6", color: "var(--ink-soft)" }}>
           <div className="rl">Budget check</div>
-          {b ? b.msg : "Enter an amount to check the budget."}
+          {b ? b.msg : "Enter quantity and unit price to check the budget."}
         </div>
         <div className="reqbox" style={{ background: "#FCFAF6", color: r ? "var(--ink)" : "var(--ink-soft)" }}>
           <div className="rl">Approval routing</div>
           {r ? <><strong>{r.label}</strong> — {r.who}.</> : "Set by amount, using Settings → Approvals."}
         </div>
+        <div><label>Justification / notes <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <textarea className="field" style={{ width: "100%", minHeight: 60, resize: "vertical", fontFamily: "inherit" }} placeholder="Why this is needed" value={justification} onChange={(e) => setJustification(e.target.value)} />
+        </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeReq}>Cancel</button>
-        <button className="btn primary" onClick={submit}>Submit requisition</button>
+        <button className="btn" onClick={() => go(true)}>Save as Draft</button>
+        <button className="btn primary" onClick={() => go(false)}>Submit for Approval</button>
       </div>
     </ModalShell>
   );
 }
 
-/* ================= RAISE PO ================= */
+/* ================= NEW PO — pick an approved requisition ================= */
+export function PoPickerModal() {
+  const { poPickerOpen, closePoPicker, reqs, raisePO } = useApp();
+  const approved = reqs.filter((r) => r.status === "approved");
+  return (
+    <ModalShell open={poPickerOpen} onClose={closePoPicker} width={520}>
+      <div className="mh"><h3>New purchase order</h3><p>A PO can only be raised from an approved requisition. Pick one to pre-fill the order.</p></div>
+      <div className="mb">
+        {approved.length === 0 ? (
+          <div style={{ color: "var(--ink-soft)", fontSize: 13, padding: "10px 0" }}>No approved requisitions waiting to be converted. Approve one in the Requisitions tab first.</div>
+        ) : (
+          <table className="tbl">
+            <thead><tr><th>PR</th><th>Item</th><th>Cost centre</th><th>Amount</th><th></th></tr></thead>
+            <tbody>
+              {approved.map((r) => (
+                <tr key={r.id}>
+                  <td className="mono">{r.id}</td>
+                  <td>{r.item}{r.qty ? <small style={{ color: "var(--ink-soft)", display: "block" }}>{r.qty} {r.unit}</small> : null}</td>
+                  <td style={{ fontSize: 12 }}>{r.code}</td>
+                  <td className="mono">{r.amt.toLocaleString()}</td>
+                  <td style={{ textAlign: "right" }}><button className="btn primary" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => { closePoPicker(); raisePO(r.id); }}>Select →</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div className="mf"><button className="btn" onClick={closePoPicker}>Cancel</button></div>
+    </ModalShell>
+  );
+}
+
+/* ================= RAISE PO (from the picked requisition) ================= */
 export function POModal() {
-  const { poFor, closePO, submitPO } = useApp();
-  const [vendor, setVendor] = useState("BURN Manufacturing");
+  const { poFor, closePO, submitPO, vendors, toast } = useApp();
+  // Only cleared vendors can be awarded a PO (the sanctions gate blocks the rest).
+  const cleared = vendors.filter((v) => v.screenStatus === "cleared");
+  const [vendor, setVendor] = useState("");
   const [delivery, setDelivery] = useState("Standard · 7 days");
+  const [qty, setQty] = useState("1");
+  const [unitPrice, setUnitPrice] = useState("0");
   useEffect(() => {
-    if (poFor) { setVendor("BURN Manufacturing"); setDelivery("Standard · 7 days"); }
+    if (poFor) {
+      setVendor(cleared[0]?.name ?? ""); setDelivery("Standard · 7 days");
+      setQty(String(poFor.qty ?? 1));
+      setUnitPrice(String(poFor.unitPrice ?? (poFor.qty ? poFor.amt / poFor.qty : poFor.amt)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poFor]);
+  const q = parseFloat(qty) || 0;
+  const price = parseFloat(unitPrice) || 0;
+  const value = q * price;
 
   return (
-    <ModalShell open={!!poFor} onClose={closePO} width={500}>
+    <ModalShell open={!!poFor} onClose={closePO} width={520}>
       <div className="mh"><h3>Raise a purchase order</h3><p>{poFor ? `From requisition ${poFor.id} · ${poFor.code}` : "From requisition"}</p></div>
       <div className="mb">
         <div><label>Item</label><input className="field" readOnly style={{ background: "#FCFAF6" }} value={poFor?.item || ""} /></div>
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label>Vendor</label>
-            <select className="field" style={{ width: "100%" }} value={vendor} onChange={(e) => setVendor(e.target.value)}>
-              <option>BURN Manufacturing</option><option>Nakuru Fabricators</option><option>Equity Logistics</option><option>Safaricom</option>
-            </select>
-          </div>
-          <div style={{ width: 150 }}>
-            <label>Value (KES)</label>
-            <input className="field" readOnly style={{ width: "100%", background: "#FCFAF6" }} value={poFor ? poFor.amt.toLocaleString() : ""} />
-          </div>
+        <div>
+          <label>Vendor <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· cleared only</span></label>
+          <select className="field" style={{ width: "100%" }} value={vendor} onChange={(e) => setVendor(e.target.value)}>
+            {cleared.length === 0 && <option value="">No cleared vendors — onboard & screen one first</option>}
+            {cleared.map((v) => <option key={v.id} value={v.name}>{v.name}</option>)}
+          </select>
         </div>
+        <table className="tbl">
+          <thead><tr><th>Line</th><th>Qty</th><th>Unit price</th><th style={{ textAlign: "right" }}>Line total</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>{poFor?.item}</td>
+              <td><input className="field" style={{ width: 70, padding: "4px 8px" }} type="number" min="0" value={qty} onChange={(e) => setQty(e.target.value)} /></td>
+              <td><input className="field" style={{ width: 100, padding: "4px 8px" }} type="number" min="0" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} /></td>
+              <td className="mono" style={{ textAlign: "right" }}>{value.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
         <div>
           <label>Delivery terms</label>
           <select className="field" style={{ width: "100%" }} value={delivery} onChange={(e) => setDelivery(e.target.value)}>
@@ -200,12 +282,291 @@ export function POModal() {
         </div>
         <div className="reqbox" style={{ background: "var(--flame-soft)", color: "#0c6f82", borderColor: "transparent" }}>
           <div className="rl">Control</div>
-          The vendor must have cleared sanctions screening. The PO closes only when the goods-received note and invoice match.
+          The vendor must have cleared sanctions screening. The PO closes only when the goods-received note and invoice match on quantity.
         </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closePO}>Cancel</button>
-        <button className="btn primary" onClick={() => submitPO(vendor, delivery)}>Issue PO</button>
+        <button className="btn primary" onClick={() => { if (!vendor) { toast("Pick a cleared vendor", "Onboard and screen a vendor before raising a PO"); return; } if (q <= 0 || price <= 0) { toast("Check the line", "Quantity and unit price are required"); return; } submitPO(vendor, delivery, q, price); }}>Create Purchase Order</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= NEW VENDOR ================= */
+export function VendorModal() {
+  const { vendorOpen, closeVendorForm, createVendor, toast } = useApp();
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [country, setCountry] = useState("Kenya");
+  const [kraPin, setKraPin] = useState("");
+  const [bank, setBank] = useState("");
+  useEffect(() => {
+    if (vendorOpen) { setName(""); setCategory(""); setCountry("Kenya"); setKraPin(""); setBank(""); }
+  }, [vendorOpen]);
+  function save() {
+    if (!name.trim()) { toast("Name the vendor", "What's the supplier called?"); return; }
+    createVendor({ name: name.trim(), category: category.trim(), country: country.trim() || "Kenya", kraPin: kraPin.trim(), bank: bank.trim() });
+  }
+  return (
+    <ModalShell open={vendorOpen} onClose={closeVendorForm} width={500}>
+      <div className="mh"><h3>Onboard a vendor</h3><p>Registers the supplier. Sanctions screening comes next — a vendor can't be awarded a PO until it clears.</p></div>
+      <div className="mb">
+        <div><label>Vendor name</label><input className="field" placeholder="e.g. BURN Manufacturing" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Category</label><input className="field" style={{ width: "100%" }} placeholder="e.g. Fabrication" value={category} onChange={(e) => setCategory(e.target.value)} /></div>
+          <div style={{ width: 150 }}><label>Country</label><input className="field" style={{ width: "100%" }} value={country} onChange={(e) => setCountry(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>KRA PIN <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· tax status</span></label><input className="field" style={{ width: "100%" }} placeholder="A00…" value={kraPin} onChange={(e) => setKraPin(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>Bank <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· for payment</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. Equity ·001…" value={bank} onChange={(e) => setBank(e.target.value)} /></div>
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeVendorForm}>Cancel</button>
+        <button className="btn primary" onClick={save}>Onboard vendor</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= RECORD GOODS-RECEIVED NOTE (by quantity) ================= */
+export function GrnModal() {
+  const { grnFor, closeGrn, recordGrn, poRows, toast } = useApp();
+  const eligible = poRows.filter((p) => p.state === "open" || p.state === "partially_received");
+  const [poId, setPoId] = useState("");
+  const [qtyNow, setQtyNow] = useState("");
+  const [note, setNote] = useState("");
+  const [over, setOver] = useState<"accept" | "reject">("reject");
+  const [photo, setPhoto] = useState<File | null>(null);
+  useEffect(() => {
+    if (grnFor) { setPoId(grnFor.id); setQtyNow(""); setNote(""); setOver("reject"); setPhoto(null); }
+  }, [grnFor]);
+  const po = poRows.find((p) => p.id === poId);
+  const ordered = po?.qty ?? 0;
+  const already = po?.received ?? 0;
+  const remaining = Math.max(ordered - already, 0);
+  const now = parseFloat(qtyNow) || 0;
+  const isOver = now > remaining && remaining > 0;
+  function save() {
+    if (!poId) { toast("Pick a PO", "Which purchase order was delivered?"); return; }
+    if (now <= 0) { toast("Enter a quantity", "How many units arrived now?"); return; }
+    if (!photo) { toast("Photo required", "Attach a photo of the delivery"); return; }
+    recordGrn(poId, now, note.trim(), isOver ? over : "", photo);
+  }
+  return (
+    <ModalShell open={!!grnFor} onClose={closeGrn} width={500}>
+      <div className="mh"><h3>Record goods received</h3><p>Confirms the quantity that arrived against a PO. The receiver must differ from the requester.</p></div>
+      <div className="mb">
+        <div>
+          <label>Purchase order</label>
+          <select className="field" style={{ width: "100%" }} value={poId} onChange={(e) => setPoId(e.target.value)}>
+            {eligible.length === 0 && <option value="">No open POs</option>}
+            {eligible.map((p) => <option key={p.id} value={p.id}>{p.id} · {p.vendor}</option>)}
+          </select>
+        </div>
+        {po && (
+          <table className="tbl" style={{ marginTop: 4 }}>
+            <thead><tr><th>Line</th><th>Qty ordered</th><th>Already received</th><th>Receiving now</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>{po.vendor}<small style={{ color: "var(--ink-soft)", display: "block" }}>@ {po.unitPrice.toLocaleString()} / unit</small></td>
+                <td className="mono">{ordered}</td>
+                <td className="mono">{already}</td>
+                <td><input className="field" style={{ width: 90, padding: "4px 8px" }} type="number" min="0" placeholder={String(remaining)} value={qtyNow} onChange={(e) => setQtyNow(e.target.value)} /></td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+        {isOver && (
+          <div className="reqbox" style={{ background: "#FBEEE9", color: "var(--flame)", borderColor: "transparent" }}>
+            <div className="rl">Over-delivery — {now} received, only {remaining} remaining</div>
+            <div className="seg-ctl" style={{ marginTop: 6 }}>
+              <button className={over === "reject" ? "on" : ""} onClick={() => setOver("reject")}>Reject excess (take {remaining})</button>
+              <button className={over === "accept" ? "on" : ""} onClick={() => setOver("accept")}>Accept excess (amend PO)</button>
+            </div>
+          </div>
+        )}
+        <div><label>Condition / note</label><input className="field" placeholder="e.g. good condition" value={note} onChange={(e) => setNote(e.target.value)} /></div>
+        <div>
+          <label>Photo of delivery <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· required</span></label>
+          <input className="field" type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
+          {photo && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{photo.name}</div>}
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeGrn}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={eligible.length === 0 || !photo}>Record GRN</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= CAPTURE SUPPLIER INVOICE ================= */
+export function CaptureInvoiceModal() {
+  const { invoiceFor, closeCaptureInvoice, captureInvoice, poRows, appConfig, toast } = useApp();
+  // must capture against an open/received PO (not cancelled, not already invoiced-closed handled server-side)
+  const eligible = poRows.filter((p) => p.state !== "cancelled");
+  const [poId, setPoId] = useState("");
+  const [invNo, setInvNo] = useState("");
+  const [invDate, setInvDate] = useState("");
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("KES");
+  const [wht, setWht] = useState(false);
+  useEffect(() => {
+    if (invoiceFor) { setPoId(invoiceFor.id); setAmount(String(invoiceFor.amt)); setInvNo(""); setInvDate(new Date().toISOString().slice(0, 10)); setCurrency("KES"); setWht(false); }
+  }, [invoiceFor]);
+  const po = poRows.find((p) => p.id === poId);
+  const amt = parseFloat(amount) || 0;
+  const whtRate = Number(appConfig.wht_rate_pct ?? 5);
+  const whtAmt = wht ? Math.round(amt * whtRate / 100) : 0;
+  function save() {
+    if (!poId) { toast("Pick a PO", "Capture must be against an existing PO"); return; }
+    if (amt <= 0) { toast("Enter an amount", "The invoice amount is required"); return; }
+    if (!invNo.trim()) { toast("Invoice number required", "Needed for the duplicate check"); return; }
+    captureInvoice({ poRef: poId, amount: amt, invoiceNumber: invNo.trim(), invoiceDate: invDate, currency, wht });
+  }
+  return (
+    <ModalShell open={!!invoiceFor} onClose={closeCaptureInvoice} width={500}>
+      <div className="mh"><h3>Capture supplier invoice</h3><p>Select the PO first — the vendor auto-fills. Runs the three-way match on save.</p></div>
+      <div className="mb">
+        <div>
+          <label>Purchase order</label>
+          <select className="field" style={{ width: "100%" }} value={poId} onChange={(e) => { setPoId(e.target.value); const m = eligible.find((x) => x.id === e.target.value); if (m) setAmount(String(m.amt)); }}>
+            {eligible.length === 0 && <option value="">No POs</option>}
+            {eligible.map((p) => <option key={p.id} value={p.id}>{p.id} · {p.vendor}</option>)}
+          </select>
+        </div>
+        <div><label>Vendor <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· from the PO</span></label><input className="field" readOnly style={{ background: "#FCFAF6" }} value={po?.vendor || ""} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Invoice number</label><input className="field" style={{ width: "100%" }} placeholder="e.g. INV-2291" value={invNo} onChange={(e) => setInvNo(e.target.value)} /></div>
+          <div style={{ width: 160 }}><label>Invoice date</label><input className="field" style={{ width: "100%" }} type="date" value={invDate} onChange={(e) => setInvDate(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Amount</label><input className="field" style={{ width: "100%" }} type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+          <div style={{ width: 120 }}>
+            <label>Currency</label>
+            <select className="field" style={{ width: "100%" }} value={currency} onChange={(e) => setCurrency(e.target.value)}>
+              <option>KES</option><option>USD</option>
+            </select>
+          </div>
+        </div>
+        <div className="row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+          <div><label style={{ margin: 0 }}>Subject to withholding tax</label><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>e.g. consultancy — {whtRate}% deducted at payment</div></div>
+          <input type="checkbox" checked={wht} onChange={(e) => setWht(e.target.checked)} style={{ width: 18, height: 18, accentColor: "var(--flame)" }} />
+        </div>
+        {wht && amt > 0 && (
+          <div className="recon" style={{ padding: "8px 0" }}><span>WHT ({whtRate}%) withheld · net to vendor</span><span className="mono">{whtAmt.toLocaleString()} · {(amt - whtAmt).toLocaleString()}</span></div>
+        )}
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeCaptureInvoice}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={eligible.length === 0}>Capture &amp; match</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= RECORD AR RECEIPT ================= */
+export function ReceiptModal() {
+  const { receiptFor, closeReceipt, recordReceipt, toast } = useApp();
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("bank");
+  useEffect(() => {
+    if (receiptFor) { setAmount(String(receiptFor.tot)); setMethod("bank"); }
+  }, [receiptFor]);
+  function save() {
+    if (!receiptFor) return;
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) { toast("Enter an amount", "The receipt amount is required"); return; }
+    recordReceipt(receiptFor.id, amt, method);
+  }
+  return (
+    <ModalShell open={!!receiptFor} onClose={closeReceipt} width={460}>
+      <div className="mh"><h3>Record a receipt</h3><p>{receiptFor ? `Collection against ${receiptFor.id} · ${receiptFor.cust}` : "Collection"}</p></div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Amount (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+          <div style={{ width: 150 }}>
+            <label>Method</label>
+            <select className="field" style={{ width: "100%" }} value={method} onChange={(e) => setMethod(e.target.value)}>
+              <option value="bank">Bank</option><option value="mpesa">M-Pesa</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeReceipt}>Cancel</button>
+        <button className="btn primary" onClick={save}>Record receipt</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= AMEND A PURCHASE ORDER ================= */
+export function PoAmendModal() {
+  const { poAmendFor, closePoAmend, amendPo, appConfig, toast } = useApp();
+  const [amount, setAmount] = useState("");
+  const [delivery, setDelivery] = useState("");
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    if (poAmendFor) { setAmount(String(poAmendFor.amt)); setDelivery(poAmendFor.delivery || ""); setReason(""); }
+  }, [poAmendFor]);
+  const tol = Number(appConfig.po_amend_tolerance_pct ?? 5);
+  const newAmt = parseFloat(amount) || 0;
+  const deltaPct = poAmendFor && poAmendFor.amt > 0 ? Math.abs(newAmt - poAmendFor.amt) / poAmendFor.amt * 100 : 0;
+  const willReapprove = deltaPct > tol;
+  function save() {
+    if (newAmt <= 0) { toast("Enter an amount", "The amended value is required"); return; }
+    if (!reason.trim()) { toast("Give a reason", "Amendments must say why the PO changed"); return; }
+    amendPo(poAmendFor!.id, newAmt, delivery.trim(), reason.trim());
+  }
+  return (
+    <ModalShell open={!!poAmendFor} onClose={closePoAmend} width={480}>
+      <div className="mh"><h3>Amend purchase order</h3><p>{poAmendFor ? `${poAmendFor.id} · ${poAmendFor.vendor}` : ""}</p></div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>New value (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>Delivery</label><input className="field" style={{ width: "100%" }} value={delivery} onChange={(e) => setDelivery(e.target.value)} /></div>
+        </div>
+        <div><label>Reason</label><input className="field" placeholder="e.g. supplier price increase" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+        {newAmt > 0 && (
+          <div className="reqbox" style={{ background: willReapprove ? "#FBEEE9" : "var(--flame-soft)", color: willReapprove ? "var(--flame)" : "#0c6f82", borderColor: "transparent" }}>
+            <div className="rl">{willReapprove ? "Re-approval" : "Within tolerance"}</div>
+            {deltaPct.toFixed(1)}% change vs {tol}% tolerance — {willReapprove ? "this routes back for approval before the vendor sees the change, and blocks invoicing until approved." : "applies immediately."}
+          </div>
+        )}
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closePoAmend}>Cancel</button>
+        <button className="btn primary" onClick={save}>Amend PO</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= VENDOR BANK-DETAIL CHANGE (request) ================= */
+export function BankChangeModal() {
+  const { bankChangeFor, closeBankChange, requestBankChange, toast } = useApp();
+  const [bank, setBank] = useState("");
+  useEffect(() => { if (bankChangeFor) setBank(""); }, [bankChangeFor]);
+  function save() {
+    if (!bank.trim()) { toast("Enter the new account", "The new bank details are required"); return; }
+    requestBankChange(bankChangeFor!, bank.trim());
+  }
+  return (
+    <ModalShell open={!!bankChangeFor} onClose={closeBankChange} width={460}>
+      <div className="mh"><h3>Change bank details</h3><p>{bankChangeFor ? `For ${bankChangeFor}` : ""}</p></div>
+      <div className="mb">
+        <div><label>New bank account</label><input className="field" placeholder="e.g. KCB · 1234567890" value={bank} onChange={(e) => setBank(e.target.value)} /></div>
+        <div className="reqbox" style={{ background: "#FBEEE9", color: "var(--flame)", borderColor: "transparent" }}>
+          <div className="rl">Security control</div>
+          This won't take effect until a different Finance user verifies it by phoning the vendor on the number already on file. Payments keep going to the current account until then.
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeBankChange}>Cancel</button>
+        <button className="btn primary" onClick={save}>Submit for verification</button>
       </div>
     </ModalShell>
   );
@@ -372,22 +733,26 @@ function PickField({ label, value, onChange, options }: {
 
 /* ================= NEW ENGAGEMENT ================= */
 export function EngagementModal() {
-  const { engFormOpen, closeEngForm, createEngagement, crm, toast } = useApp();
+  const { engFormOpen, closeEngForm, createEngagement, crm, members, me, toast } = useApp();
   const [name, setName] = useState("");
   const [pipeline, setPipeline] = useState<"up" | "down">("up");
   const [owner, setOwner] = useState("");
   const [due, setDue] = useState("week");
   const [note, setNote] = useState("");
+  const [tagged, setTagged] = useState("");
   const [file, setFile] = useState<File | null>(null);
 
   useEffect(() => {
-    if (engFormOpen) { setName(""); setPipeline("up"); setDue("week"); setNote(""); setFile(null); setOwner(crm.teamNames[0] ?? ""); }
+    if (engFormOpen) { setName(""); setPipeline("up"); setDue("week"); setNote(""); setTagged(""); setFile(null); setOwner(crm.teamNames[0] ?? ""); }
   }, [engFormOpen, crm.teamNames]);
+
+  // Anyone with a login can be tagged, except yourself (you'd be notifying yourself).
+  const taggable = members.filter((m) => m.email !== me?.email);
 
   function save() {
     if (!name.trim()) { toast("Name the partner", "Which organisation is this engagement with?"); return; }
     if (!owner) { toast("Pick an owner", "Who's carrying this engagement?"); return; }
-    createEngagement(name.trim(), owner, pipeline, due, note, file);
+    createEngagement(name.trim(), owner, pipeline, due, note, tagged, file);
   }
 
   return (
@@ -423,6 +788,14 @@ export function EngagementModal() {
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
+        </div>
+        <div>
+          <label>Tag a teammate <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <select className="field" style={{ width: "100%" }} value={tagged} onChange={(e) => setTagged(e.target.value)}>
+            <option value="">No one — don't notify anyone</option>
+            {taggable.map((m) => <option key={m.email} value={m.email}>{m.name}</option>)}
+          </select>
+          {tagged && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>They'll get a bell notification and an email about this engagement.</div>}
         </div>
         <div>
           <label>Document <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
@@ -529,12 +902,15 @@ export function PartnerModal() {
   const [country, setCountry] = useState("KE");
   const [owner, setOwner] = useState("");
   const [status, setStatus] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const types = crm.dropdowns.partner_type ?? [];
   const statuses = crm.dropdowns.partner_status ?? [];
 
   useEffect(() => {
     if (partnerOpen) {
-      setName(""); setCountry("KE");
+      setName(""); setCountry("KE"); setContactName(""); setEmail(""); setPhone("");
       setType(types[0] ?? ""); setStatus(statuses[0] ?? ""); setOwner(crm.teamNames[0] ?? "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -545,7 +921,8 @@ export function PartnerModal() {
     if (!type) { toast("Pick a type", "How would you classify this partner?"); return; }
     if (!owner) { toast("Pick an owner", "Who manages this relationship?"); return; }
     if (!status) { toast("Pick a status", "Where's the relationship at?"); return; }
-    createPartner(name.trim(), type, country.trim() || "KE", owner, status);
+    createPartner({ name: name.trim(), type, country: country.trim() || "KE", owner, status,
+      contactName: contactName.trim(), email: email.trim(), phone: phone.trim() });
   }
 
   return (
@@ -560,6 +937,11 @@ export function PartnerModal() {
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><PickField label="Owner" value={owner} onChange={setOwner} options={crm.teamNames} /></div>
           <div style={{ flex: 1 }}><PickField label="Status" value={status} onChange={setStatus} options={statuses} /></div>
+        </div>
+        <div><label>Contact full name</label><input className="field" placeholder="e.g. Jane Wanjiru" value={contactName} onChange={(e) => setContactName(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Email</label><input className="field" style={{ width: "100%" }} type="email" placeholder="jane@partner.co" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>Phone</label><input className="field" style={{ width: "100%" }} placeholder="+254…" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
         </div>
       </div>
       <div className="mf">
@@ -816,16 +1198,20 @@ export function ProjectModal() {
   const [name, setName] = useState("");
   const [funder, setFunder] = useState("");
   const [budget, setBudget] = useState("");
-  const [timeline, setTimeline] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [team, setTeam] = useState("");
   const [status, setStatus] = useState("Setup");
   useEffect(() => {
-    if (projectFormOpen) { setName(""); setFunder(""); setBudget(""); setTimeline(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); }
+    if (projectFormOpen) { setName(""); setFunder(""); setBudget(""); setStartDate(""); setEndDate(""); setStatus("Setup"); setTeam(crm.teamNames[0] ?? ""); }
   }, [projectFormOpen, crm.teamNames]);
 
   function save() {
     if (!name.trim()) { toast("Name the project", "What's the project called?"); return; }
-    createProject({ name: name.trim(), funder: funder.trim(), budget: budget.trim(), timeline: timeline.trim(), team, status });
+    const budgetAmount = parseFloat(budget) || 0;
+    if (budgetAmount <= 0) { toast("Budget is required", "Enter the total budget in KES — milestones draw against it"); return; }
+    if (startDate && endDate && endDate < startDate) { toast("Check the dates", "The end date can't be before the start date"); return; }
+    createProject({ name: name.trim(), funder: funder.trim(), budgetAmount, startDate, endDate, team, status });
   }
 
   return (
@@ -835,22 +1221,76 @@ export function ProjectModal() {
         <div><label>Project name</label><input className="field" placeholder="e.g. Makueni VTC rollout" value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><label>Funder <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. Charm Impact" value={funder} onChange={(e) => setFunder(e.target.value)} /></div>
-          <div style={{ width: 160 }}><label>Budget <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. KES 3.2M" value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
+          <div style={{ width: 180 }}><label>Budget (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" placeholder="e.g. 3200000" value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Start date</label><input className="field" style={{ width: "100%" }} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>End date</label><input className="field" style={{ width: "100%" }} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}><PickField label="Owner / team" value={team} onChange={setTeam} options={crm.teamNames} /></div>
-          <div style={{ width: 160 }}><label>Timeline <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. 2026 — Q4" value={timeline} onChange={(e) => setTimeline(e.target.value)} /></div>
-        </div>
-        <div>
-          <label>Status</label>
-          <select className="field" style={{ width: "100%" }} value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option>Setup</option><option>On track</option><option>At risk</option><option>Complete</option>
-          </select>
+          <div style={{ flex: 1 }}>
+            <label>Status</label>
+            <select className="field" style={{ width: "100%" }} value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option>Setup</option><option>On track</option><option>At risk</option><option>Complete</option>
+            </select>
+          </div>
         </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeProjectForm}>Cancel</button>
         <button className="btn primary" onClick={save}>Create project</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= NEW FIELD ACTIVITY (assign someone to check a site) ================= */
+export function FieldActivityModal() {
+  const { fieldActivityOpen, closeFieldActivity, createFieldActivity, projectDetails, toast } = useApp();
+  const projectNames = Object.keys(projectDetails);
+  const [project, setProject] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [date, setDate] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (fieldActivityOpen) {
+      setProject(projectNames[0] ?? ""); setAssignee(""); setPhone(""); setEmail("");
+      setDate(new Date().toISOString().slice(0, 10)); setNote("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldActivityOpen]);
+
+  function save() {
+    if (!project) { toast("Pick a project", "Which project is this field activity for?"); return; }
+    if (!assignee.trim()) { toast("Who's going?", "Enter the name of the person assigned"); return; }
+    createFieldActivity({ projectName: project, assignee: assignee.trim(), phone: phone.trim(), email: email.trim(), date, note: note.trim() });
+  }
+
+  return (
+    <ModalShell open={fieldActivityOpen} onClose={closeFieldActivity} width={500}>
+      <div className="mh"><h3>Add field activity</h3><p>Assign someone to visit a site — e.g. "go fix the pipes at Makueni". Logged against the project.</p></div>
+      <div className="mb">
+        <div>
+          <label>Project</label>
+          <select className="field" style={{ width: "100%" }} value={project} onChange={(e) => setProject(e.target.value)}>
+            {projectNames.length === 0 && <option value="">No projects yet — add one first</option>}
+            {projectNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        <div><label>Assignee</label><input className="field" placeholder="e.g. Peter Otieno" value={assignee} onChange={(e) => setAssignee(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Phone</label><input className="field" style={{ width: "100%" }} placeholder="+254…" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>Email</label><input className="field" style={{ width: "100%" }} type="email" placeholder="peter@…" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+        </div>
+        <div style={{ width: 180 }}><label>Date</label><input className="field" style={{ width: "100%" }} type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+        <div><label>Task note</label><input className="field" placeholder="e.g. Fix the water pipes at the test site" value={note} onChange={(e) => setNote(e.target.value)} /></div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeFieldActivity}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={projectNames.length === 0}>Assign</button>
       </div>
     </ModalShell>
   );

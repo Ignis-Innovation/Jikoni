@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { AppProvider, useApp } from "./store";
-import { flagColors } from "./data";
+import { flagColors, canManageUsers } from "./data";
 import { moduleLabels, subnavs } from "./nav";
 import {
   BrandMark, ChevDown, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
@@ -22,7 +22,7 @@ import ComplianceView from "./views/Compliance";
 import UsersView from "./views/Users";
 import SettingsView from "./views/Settings";
 import { EngDrawer, VendorDrawer, ProjectDrawer, AccessDrawer } from "./components/drawers";
-import { InviteModal, TaskModal, ReqModal, POModal, InvoiceModal, LeaveModal, EngagementModal, EngUpdateModal, PartnerModal, OpportunityModal, RiskModal, PolicyModal, DocumentModal, ContractModal, ProjectModal } from "./components/modals";
+import { InviteModal, TaskModal, ReqModal, POModal, PoPickerModal, InvoiceModal, LeaveModal, EngagementModal, EngUpdateModal, PartnerModal, OpportunityModal, RiskModal, PolicyModal, DocumentModal, ContractModal, ProjectModal, FieldActivityModal, VendorModal, GrnModal, CaptureInvoiceModal, ReceiptModal, PoAmendModal, BankChangeModal } from "./components/modals";
 
 const views: Record<string, React.ComponentType> = {
   home: HomeView, deploy: DeployView, readiness: ReadinessView, raise: RaiseView,
@@ -76,8 +76,12 @@ function NavModule({ v, icon, badge, badgeCls, collapsed, setCollapsed }: {
 }
 
 function Sidebar() {
-  const { view, entity, cycleEntity, me, signOut } = useApp();
+  const { view, entity, cycleEntity, me, perms, notifications, signOut } = useApp();
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
+  const canUsers = canManageUsers(perms, me?.email);
+  // CRM badge counts only unseen CRM notifications — it appears only when there's
+  // something new the user hasn't opened yet.
+  const crmUnseen = notifications.filter((n) => !n.seen && n.linkView === "crm").length;
   // per-module "collapsed" override so an active module can be folded shut
   const [collapsedFor, setCollapsedFor] = useState<string | null>(null);
   const collapsed = (v: string) => collapsedFor === v;
@@ -115,7 +119,7 @@ function Sidebar() {
         <NavModule v="inventory" icon={<BoxI />} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />
 
         <div className="nav-group">People</div>
-        <NavModule v="hr" icon={<HrI />} badge="3" badgeCls="blue" collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />
+        <NavModule v="hr" icon={<HrI />} collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />
         <NavModule v="staffportal" icon={<PortalI />} collapsed={collapsed("staffportal")} setCollapsed={setCollapsed("staffportal")} />
 
         <div className="nav-group">Deployment</div>
@@ -123,14 +127,13 @@ function Sidebar() {
         <NavModule v="projects" icon={<ProjectsI />} collapsed={collapsed("projects")} setCollapsed={setCollapsed("projects")} />
 
         <div className="nav-group">Growth</div>
-        <NavItem v="raise" icon={<RaiseI />} label="Fundraise & Diligence" />
-        <NavModule v="crm" icon={<CrmI />} badge="8" collapsed={collapsed("crm")} setCollapsed={setCollapsed("crm")} />
+        <NavModule v="crm" icon={<CrmI />} badge={crmUnseen ? String(crmUnseen) : undefined} collapsed={collapsed("crm")} setCollapsed={setCollapsed("crm")} />
 
         <div className="nav-group">Governance</div>
         <NavModule v="compliance" icon={<ComplianceI />} collapsed={collapsed("compliance")} setCollapsed={setCollapsed("compliance")} />
 
         <div className="nav-group">Administration</div>
-        <NavItem v="users" icon={<UsersI />} label="User Management" />
+        {canUsers && <NavItem v="users" icon={<UsersI />} label="User Management" />}
         <NavItem v="settings" icon={<SettingsI />} label="Settings" />
       </nav>
 
@@ -180,17 +183,65 @@ function Topbar() {
       <div className="iconbtn" onClick={openTask} title="Add task" style={{ fontWeight: 600 }}>
         <PlusI width={18} height={18} />
       </div>
-      <div className="iconbtn" onClick={() => toast("Notifications", "3 items need your attention")}>
-        <span className="ping" />
+      <NotifBell />
+    </div>
+  );
+}
+
+function NotifBell() {
+  const { notifications, markNotificationsSeen, goTab } = useApp();
+  const [open, setOpen] = useState(false);
+  const unseen = notifications.filter((n) => !n.seen);
+  function openNotif(n: { id: string; linkView: string | null }) {
+    markNotificationsSeen([n.id]);
+    if (n.linkView === "crm") goTab("crm", "cr-eng");
+    else if (n.linkView === "procurement") goTab("procurement", "p-req");
+    else if (n.linkView === "finance") goTab("finance", "f-ap");
+    setOpen(false);
+  }
+  return (
+    <div style={{ position: "relative" }}>
+      <div className="iconbtn" onClick={() => setOpen((o) => !o)} title="Notifications">
+        {unseen.length > 0 && <span className="ping" />}
         <BellI width={18} height={18} />
+      </div>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 40 }} onClick={() => setOpen(false)} />
+          <div style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 328, maxHeight: 420, overflowY: "auto", background: "#fff", border: "1px solid var(--line)", borderRadius: 12, boxShadow: "0 12px 32px rgba(0,0,0,.14)", zIndex: 41 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <strong style={{ fontSize: 13 }}>Notifications</strong>
+              {unseen.length > 0 && <button className="btn" style={{ padding: "3px 8px", fontSize: 11 }} onClick={() => markNotificationsSeen()}>Mark all read</button>}
+            </div>
+            {notifications.length === 0 && <div style={{ padding: 16, color: "var(--ink-soft)", fontSize: 13 }}>Nothing yet — you're all caught up.</div>}
+            {notifications.map((n) => (
+              <div key={n.id} onClick={() => openNotif(n)} style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", cursor: "pointer", background: n.seen ? "#fff" : "#FCFAF6" }}>
+                <div style={{ fontSize: 12.5, fontWeight: n.seen ? 400 : 600 }}>{n.title}</div>
+                {n.body && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>{n.body}</div>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function NoAccess() {
+  return (
+    <div className="vhead">
+      <div>
+        <h1>Restricted</h1>
+        <p>You don't have access to User Management. Ask an administrator (MD, HR or Head of IT) if you need it.</p>
       </div>
     </div>
   );
 }
 
 function Shell() {
-  const { view, mainRef } = useApp();
-  const Active = views[view];
+  const { view, mainRef, me, perms } = useApp();
+  const blocked = view === "users" && !canManageUsers(perms, me?.email);
+  const Active = blocked ? NoAccess : views[view];
   return (
     <>
       <Sidebar />
@@ -219,6 +270,14 @@ function Shell() {
       <DocumentModal />
       <ContractModal />
       <ProjectModal />
+      <FieldActivityModal />
+      <VendorModal />
+      <PoPickerModal />
+      <GrnModal />
+      <CaptureInvoiceModal />
+      <ReceiptModal />
+      <PoAmendModal />
+      <BankChangeModal />
       <Toasts />
     </>
   );

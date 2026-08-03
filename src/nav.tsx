@@ -25,9 +25,8 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "f-report", l: "Reporting & Compliance" },
   ],
   inventory: [
-    { t: "i-over", l: "Overview" },
     { t: "i-items", l: "Stock Items" },
-    { t: "i-move", l: "Movements" },
+    { t: "i-move", l: "Moved stock" },
     { t: "i-dsp", l: "Dispatches" },
     { t: "i-assets", l: "Asset Register" },
   ],
@@ -41,7 +40,6 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "p-contracts", l: "Contracts" },
   ],
   hr: [
-    { t: "h-over", l: "Overview" },
     { t: "h-personnel", l: "Personnel Management" },
     { t: "h-leave", l: "Leave" },
     { t: "h-pay", l: "Payroll" },
@@ -54,15 +52,13 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
   ],
   staffportal: [
     { t: "sp-me", l: "This Month" },
-    { t: "sp-leave", l: "My Leave" },
-    { t: "sp-perf", l: "My Performance" },
-    { t: "sp-certs", l: "My Certificates" },
-    { t: "sp-files", l: "My Files" },
+    { t: "sp-leave", l: "Leave" },
+    { t: "sp-perf", l: "Performance" },
+    { t: "sp-files", l: "Documents" },
     { t: "sp-fb", l: "Give Feedback" },
-    { t: "sp-exit", l: "My Exit" },
+    { t: "sp-exit", l: "Exit" },
   ],
   projects: [
-    { t: "pr-over", l: "Overview" },
     { t: "pr-projects", l: "Projects" },
     { t: "pr-budget", l: "Budgets" },
     { t: "pr-milestones", l: "Milestones" },
@@ -70,7 +66,6 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "pr-field", l: "Field Activity" },
   ],
   crm: [
-    { t: "cr-over", l: "Overview" },
     { t: "cr-eng", l: "Engagements" },
     { t: "cr-partners", l: "Partners" },
     { t: "cr-opps", l: "Opportunities" },
@@ -87,7 +82,11 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
 export function Crumb({ view }: { view: string }) {
   const { tabs } = useApp();
   const tab = tabs[view];
-  const label = subnavs[view]?.find((s) => s.t === tab)?.l || "";
+  // Inventory, HR, Projects & CRM drop their "Overview" subnav entry — the module
+  // lands on the overview tab directly, so fall back to that label for the breadcrumb.
+  const overviewTab = view === "inventory" ? "i-over" : view === "hr" ? "h-over"
+    : view === "projects" ? "pr-over" : view === "crm" ? "cr-over" : null;
+  const label = subnavs[view]?.find((s) => s.t === tab)?.l || (tab === overviewTab ? "Overview" : "");
   return (
     <div className="crumb">
       {moduleLabels[view]} <CrumbChev /> <b>{label}</b>

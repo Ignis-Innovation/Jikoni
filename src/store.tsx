@@ -10,20 +10,34 @@ import { LoginGate, SetPassword } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
+  FieldActivity, AppNotification,
   kes,
 } from "./data";
 
 export interface Toast { id: number; title: string; sub?: string }
-export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "await" | "md" | "approved" | "po" }
+export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "draft" | "await" | "md" | "approved" | "rejected" | "po"; qty?: number; unit?: string; unitPrice?: number; project?: string | null; justification?: string | null; raisedBy?: string; date?: string }
 export interface NewPO { id: string; vendor: string; amt: number; delivery: string }
 export interface NewInvoice { cust: string; id: string; tot: number; pillCls: string; pillTxt: string }
+
+/* ---------- Procurement + Finance spine read models (folded in via loadFromDb) ---------- */
+export interface Vendor { id: string; name: string; category: string | null; country: string; taxStatus: string; screenStatus: string; rating: string | null; openPos: number; state: string; bank?: string | null }
+export interface PORow { id: string; vendor: string; amt: number; delivery: string; state: string; reapproval: boolean; qty: number; unitPrice: number; received: number }
+export interface AuditRow { id: number; when: string; actor: string; action: string; recordType: string; recordRef: string | null; detail: Record<string, unknown> }
+export interface BankChange { id: string; vendor: string; oldBank: string | null; newBank: string; state: string; callbackNote: string | null; when: string }
+export interface Grn { id: string; po: string; vendor: string; coverage: string; pct: number; qtyReceived: number; over: boolean; note: string | null; when: string }
+export interface ApInvoice { ref: string; po: string; vendor: string; amount: number; state: string; matchNote: string | null; when: string; invoiceNumber: string | null; invoiceDate: string | null; currency: string; wht: number; capturedByMe: boolean }
+export interface PaymentRow { ref: string; invoice: string; amount: number; method: string; journalRef: string | null; when: string }
+export interface JournalLine { account: string; debit: number; credit: number }
+export interface Journal { ref: string; memo: string; sourceType: string | null; when: string; lines: JournalLine[] }
+export interface AccountBal { code: string; name: string; kind: string; debit: number; credit: number; balance: number }
 
 /* ---------- Inventory (Phase 2 — the one net-new module) ---------- */
 export interface StockItem { sku: string; name: string; category: string; unit: string; unitCost: number; reorderLevel: number; onHand: number; autoReq: string | null }
 export interface StockMovement { when: string; sku: string; type: string; qty: number; from: string | null; to: string | null; source: string | null; note: string | null }
 export interface DispatchRow { id: string; project: string | null; destination: string; lines: { sku: string; name: string; qty: number }[]; state: string; receipt?: string | null }
-export interface AssetRow { id: string; name: string; category: string; cost: number; accumDep: number; nbv: number; acquired: string; state: string }
-export interface InventoryData { items: StockItem[]; locations: string[]; movements: StockMovement[]; dispatches: DispatchRow[]; assets: AssetRow[] }
+export interface AssetRow { id: string; name: string; category: string; cost: number; accumDep: number; nbv: number; acquired: string; state: string; quantity: number }
+export interface AssetAssignment { ref: string; assetRef: string; assetName: string; employee: string; qty: number; assignedAt: string }
+export interface InventoryData { items: StockItem[]; locations: string[]; movements: StockMovement[]; dispatches: DispatchRow[]; assets: AssetRow[]; assetAssignments: AssetAssignment[] }
 export type StockModalMode = "receive" | "issue" | "dispatch" | "transfer" | "adjust" | null;
 // item form is "new" (create) or an existing row (edit); asset form is a simple open flag
 export type ItemModalMode = "new" | StockItem | null;
@@ -101,7 +115,7 @@ export type HrModalMode =
 export interface EngUpdate { ts?: string; d: string; ch: string; who: string; note: string }
 export interface EngDoc { name: string; path: string }
 export interface CrmEng { id: string; n: string; st: string; o: string; pl: string; plt: string; updates: EngUpdate[]; docs: EngDoc[] }
-export interface Partner { id: string; name: string; type: string; country: string; ownerName: string; status: string; statusCls: string }
+export interface Partner { id: string; name: string; type: string; country: string; ownerName: string; status: string; statusCls: string; contactName?: string | null; email?: string | null; phone?: string | null }
 export interface Opportunity { id: string; name: string; type: string; deadline: string; linkedTo: string; status: string; statusCls: string }
 export interface CrmData {
   engUp: CrmEng[]; engDown: CrmEng[];
@@ -190,19 +204,72 @@ interface AppApi {
   openReq: () => void;
   closeReq: () => void;
   reqs: Req[];
-  submitReq: (item: string, amt: number, code: string) => void;
+  submitReq: (v: { item: string; amt: number; code: string; qty: number; unit: string; unitPrice: number; project: string; justification: string; asDraft: boolean }) => void;
+  submitReqFinal: (id: string) => void;
+  withdrawReq: (id: string) => void;
   approvePR: (id: string) => void;
+  costCentres: { code: string; budget: number; used: number }[];
+  createCostCentre: (name: string, budget: number) => void;
   poFor: Req | null;
   raisePO: (id: string) => void;
   closePO: () => void;
-  submitPO: (vendor: string, delivery: string) => void;
+  submitPO: (vendor: string, delivery: string, qty?: number, unitPrice?: number) => void;
+  poPickerOpen: boolean;
+  openPoPicker: () => void;
+  closePoPicker: () => void;
   newPOs: NewPO[];
+
+  // Procurement spine read models + mutations
+  vendors: Vendor[];
+  poRows: PORow[];
+  grns: Grn[];
+  vendorOpen: boolean;
+  openVendorForm: () => void;
+  closeVendorForm: () => void;
+  createVendor: (v: { name: string; category: string; country: string; kraPin: string; bank: string }) => void;
+  screenVendor: (name: string, result: "cleared" | "flagged", detail: string) => void;
+  grnFor: PORow | null;
+  openGrn: (po: PORow) => void;
+  closeGrn: () => void;
+  recordGrn: (poRef: string, qtyReceived: number, note: string, overAction: string, photo?: File | null) => void;
 
   invOpen: boolean;
   openInvoice: () => void;
   closeInvoice: () => void;
   submitInvoice: (cust: string, desc: string, net: number, dueSel: string) => void;
   newInvoices: NewInvoice[];
+
+  // Finance spine read models + mutations
+  apInvoices: ApInvoice[];
+  payments: PaymentRow[];
+  journals: Journal[];
+  accounts: AccountBal[];
+  invoiceFor: PORow | null;
+  openCaptureInvoice: (po: PORow) => void;
+  closeCaptureInvoice: () => void;
+  captureInvoice: (v: { poRef: string; amount: number; invoiceNumber: string; invoiceDate: string; currency: string; wht: boolean }) => void;
+  approveInvoice: (invRef: string) => void;
+  payInvoice: (invRef: string, method: string) => void;
+  receiptFor: NewInvoice | null;
+  openReceipt: (inv: NewInvoice) => void;
+  closeReceipt: () => void;
+  recordReceipt: (invRef: string, amount: number, method: string) => void;
+
+  // v2 controls: PO amendment, vendor bank-detail change, settings config, audit trail
+  poAmendFor: PORow | null;
+  openPoAmend: (po: PORow) => void;
+  closePoAmend: () => void;
+  amendPo: (poRef: string, amount: number, delivery: string, reason: string) => void;
+  approvePoAmendment: (poRef: string) => void;
+  bankChangeFor: string | null;
+  openBankChange: (vendor: string) => void;
+  closeBankChange: () => void;
+  requestBankChange: (vendor: string, newBank: string) => void;
+  approveBankChange: (id: string, callbackNote: string) => void;
+  bankChanges: BankChange[];
+  appConfig: Record<string, number | boolean | string>;
+  setAppConfig: (key: string, value: number | boolean | string) => void;
+  audit: AuditRow[];
 
   projectDetails: Record<string, ProjectDetail>;
   extraProjects: { name: string; funder: string }[];
@@ -212,12 +279,17 @@ interface AppApi {
   projectFormOpen: boolean;
   openProjectForm: () => void;
   closeProjectForm: () => void;
-  createProject: (v: { name: string; funder: string; budget: string; timeline: string; team: string; status: string }) => void;
-  addMilestone: (projectId: string, title: string, status?: string) => void;
+  createProject: (v: { name: string; funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string }) => void;
+  addMilestone: (projectId: string, title: string, amount: number, startDate: string, endDate: string, status?: string) => void;
   setMilestoneStatus: (milestoneId: string, status: string) => void;
   addDrawdown: (projectId: string, title: string, amount: string, status?: string) => void;
   setDrawdownStatus: (drawdownId: string, status: string) => void;
   logFieldActivity: (projectId: string, kind: string, county: string, note: string) => void;
+  fieldActivities: FieldActivity[];
+  fieldActivityOpen: boolean;
+  openFieldActivity: () => void;
+  closeFieldActivity: () => void;
+  createFieldActivity: (v: { projectName: string; assignee: string; phone: string; email: string; date: string; note: string }) => void;
   setProjectState: (projectId: string, state: string) => void;
   addProjectDocument: (projectId: string, file: File) => void;
   projectDocUrl: (path: string, downloadName?: string) => string;
@@ -243,7 +315,7 @@ interface AppApi {
   hrModal: HrModalMode;
   openHrModal: (m: HrModalMode) => void;
   closeHrModal: () => void;
-  addEmployee: (v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string }) => void;
+  addEmployee: (v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string; contractEnd: string }) => void;
   preparePayroll: (period: string) => void;
   approvePayroll: (ref: string) => void;
   postPayroll: (ref: string) => void;
@@ -281,7 +353,7 @@ interface AppApi {
   engFormOpen: boolean;
   openEngForm: () => void;
   closeEngForm: () => void;
-  createEngagement: (name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string, file?: File | null) => void;
+  createEngagement: (name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string, taggedEmail: string, file?: File | null) => void;
   engUpdateOpen: boolean;
   openEngUpdate: () => void;
   closeEngUpdate: () => void;
@@ -291,11 +363,15 @@ interface AppApi {
   partnerOpen: boolean;
   openPartnerForm: () => void;
   closePartnerForm: () => void;
-  createPartner: (name: string, type: string, country: string, owner: string, status: string) => void;
+  createPartner: (v: { name: string; type: string; country: string; owner: string; status: string; contactName: string; email: string; phone: string }) => void;
   oppOpen: boolean;
   openOppForm: () => void;
   closeOppForm: () => void;
   createOpportunity: (name: string, type: string, deadline: string, linkedTo: string, status: string) => void;
+
+  // In-app notifications (topbar bell + CRM badge)
+  notifications: AppNotification[];
+  markNotificationsSeen: (ids?: string[]) => void;
 
   // Compliance & Governance
   compliance: ComplianceData;
@@ -333,12 +409,13 @@ interface AppApi {
   itemModal: ItemModalMode;
   openItemModal: (m: Exclude<ItemModalMode, null>) => void;
   closeItemModal: () => void;
-  createStockItem: (v: { name: string; category: string; unit: string; unitCost: number; reorderLevel: number; reorderQty: number; budgetCode: string }) => void;
+  createStockItem: (v: { name: string; category: string; unit: string; unitCost: number; reorderLevel: number; reorderQty: number; budgetCode: string; supplier: string }) => void;
   updateStockItem: (sku: string, reorderLevel: number, reorderQty: number, unitCost: number) => void;
   assetOpen: boolean;
   openAssetForm: () => void;
   closeAssetForm: () => void;
-  registerAsset: (v: { name: string; category: string; cost: number; lifeMonths: number; acquired: string; salvage: number }) => void;
+  registerAsset: (v: { name: string; category: string; quantity: number; acquired: string }) => void;
+  assignAsset: (assetRef: string, employee: string, qty: number) => void;
   disposeAsset: (ref: string, reason: string) => void;
   runDepreciation: (period: string) => void;
 }
@@ -380,16 +457,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [reqOpen, setReqOpen] = useState(false);
   const [reqs, setReqs] = useState<Req[]>([]);
   const [poFor, setPoFor] = useState<Req | null>(null);
+  const [poPickerOpen, setPoPickerOpen] = useState(false);
   const [newPOs, setNewPOs] = useState<NewPO[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [poRows, setPoRows] = useState<PORow[]>([]);
+  const [grns, setGrns] = useState<Grn[]>([]);
+  const [vendorOpen, setVendorOpen] = useState(false);
+  const [grnFor, setGrnFor] = useState<PORow | null>(null);
 
   const [invOpen, setInvOpen] = useState(false);
   const [newInvoices, setNewInvoices] = useState<NewInvoice[]>([]);
+  const [apInvoices, setApInvoices] = useState<ApInvoice[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [journals, setJournals] = useState<Journal[]>([]);
+  const [accounts, setAccounts] = useState<AccountBal[]>([]);
+  const [invoiceFor, setInvoiceFor] = useState<PORow | null>(null);
+  const [receiptFor, setReceiptFor] = useState<NewInvoice | null>(null);
+  const [poAmendFor, setPoAmendFor] = useState<PORow | null>(null);
+  const [bankChangeFor, setBankChangeFor] = useState<string | null>(null);
+  const [bankChanges, setBankChanges] = useState<BankChange[]>([]);
+  const [appConfig, setAppConfigState] = useState<Record<string, number | boolean | string>>({});
+  const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [costCentres, setCostCentres] = useState<{ code: string; budget: number; used: number }[]>([]);
 
   const [projectDetails, setProjectDetails] = useState(initialProjectDetails);
   const [extraProjects, setExtraProjects] = useState<{ name: string; funder: string }[]>([]);
   const [engToProject, setEngToProject] = useState(initialEngToProject);
   const [projectToEng, setProjectToEng] = useState(initialProjectToEng);
   const [projectFormOpen, setProjectFormOpen] = useState(false);
+  const [fieldActivities, setFieldActivities] = useState<FieldActivity[]>([]);
+  const [fieldActivityOpen, setFieldActivityOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [stockModal, setStockModal] = useState<StockModalMode>(null);
@@ -470,7 +568,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const byRef = new Map((rc as { ref: string; receipt_path: string | null }[]).map((r) => [r.ref, r.receipt_path]));
       inv.dispatches = inv.dispatches.map((d) => ({ ...d, receipt: byRef.get(d.id) ?? null }));
     }
+    // Asset quantity and employee assignments live on columns/tables bootstrap
+    // doesn't return — fold them in by ref (same approach as dispatch receipts).
+    const { data: aq } = await supabase.from("assets").select("ref, quantity");
+    if (aq) {
+      const qtyByRef = new Map((aq as { ref: string; quantity: number }[]).map((r) => [r.ref, r.quantity]));
+      inv.assets = inv.assets.map((a) => ({ ...a, quantity: qtyByRef.get(a.id) ?? 1 }));
+    }
+    const { data: asn } = await supabase
+      .from("asset_assignments")
+      .select("ref, asset_ref, employee, qty, assigned_at")
+      .order("assigned_at", { ascending: false });
+    inv.assetAssignments = ((asn ?? []) as { ref: string; asset_ref: string; employee: string; qty: number; assigned_at: string }[])
+      .map((r) => ({ ref: r.ref, assetRef: r.asset_ref, assetName: inv.assets.find((a) => a.id === r.asset_ref)?.name ?? r.asset_ref, employee: r.employee, qty: r.qty, assignedAt: r.assigned_at }));
     setInventory(inv);
+    // Field-activity assignments live on columns bootstrap doesn't return — fold them in
+    // (same approach as asset assignments). Only the new "assignment" rows are shown here.
+    const { data: fa } = await supabase
+      .from("field_activities")
+      .select("id, assignee, phone, email, note, activity_on, projects(name)")
+      .eq("kind", "assignment")
+      .order("activity_on", { ascending: false });
+    setFieldActivities(((fa ?? []) as any[]).map((r) => {
+      const rel = r.projects;
+      const project: string = Array.isArray(rel) ? rel[0]?.name : rel?.name;
+      return { id: r.id, project: project ?? "—", assignee: r.assignee, phone: r.phone, email: r.email, date: r.activity_on, note: r.note };
+    }));
+    // My in-app notifications (RLS scopes to the signed-in user) — drives bell + CRM badge.
+    const { data: nf } = await supabase
+      .from("notifications")
+      .select("id, kind, title, body, link_view, link_ref, seen, created_at")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    setNotifications(((nf ?? []) as any[]).map((r) => ({
+      id: r.id, kind: r.kind, title: r.title, body: r.body,
+      linkView: r.link_view, linkRef: r.link_ref, seen: r.seen, createdAt: r.created_at,
+    })));
+    // Partner contact fields (contact_name/email/phone) aren't in bootstrap — fold them in by id.
+    const { data: pc } = await supabase.from("partners").select("id, contact_name, email, phone");
+    const contactById = new Map(((pc ?? []) as any[]).map((r) => [r.id as string, r]));
+    const withContact = (p: Partner): Partner => {
+      const c = contactById.get(p.id);
+      return c ? { ...p, contactName: c.contact_name, email: c.email, phone: c.phone } : p;
+    };
     // Engagement documents live in a side table — fold them into each engagement by ref
     // (same approach as dispatch receipts above), so bootstrap() stays untouched.
     const { data: docRows } = await supabase
@@ -492,7 +632,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setCrm({
       engUp: ((data.engagements?.up ?? []) as CrmEng[]).map(withDocs),
       engDown: ((data.engagements?.down ?? []) as CrmEng[]).map(withDocs),
-      partners: (data.partners ?? []) as Partner[],
+      partners: ((data.partners ?? []) as Partner[]).map(withContact),
       opportunities: (data.opportunities ?? []) as Opportunity[],
       dropdowns: (data.crmDropdowns ?? {}) as Record<string, string[]>,
       teamNames: (data.teamNames ?? []) as string[],
@@ -502,10 +642,109 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setCompliance((data.compliance ?? {
       policies: [], companyDocuments: [], obligations: [], risks: [], contracts: [],
     }) as ComplianceData);
-    // sync the req modal's live budget preview with the ledger (same object the modal imports)
-    for (const [k, v] of Object.entries(data.budgetLines as Record<string, { b: number; u: number }>)) {
-      if (budgetLines[k]) { budgetLines[k].b = v.b; budgetLines[k].u = v.u; }
-    }
+    // sync the req modal's live budget preview with the ledger (same object the modal imports).
+    // Add new cost centres too (created in Settings → Coding), not just update existing ones.
+    const blData = data.budgetLines as Record<string, { b: number; u: number }>;
+    for (const [k, v] of Object.entries(blData)) { budgetLines[k] = { b: v.b, u: v.u }; }
+    setCostCentres(Object.entries(blData).map(([code, v]) => ({ code, budget: v.b, used: v.u })));
+    // ---- Procurement + Finance spine read models (bootstrap doesn't carry these) ----
+    const { data: vn } = await supabase
+      .from("vendors")
+      .select("id, name, category, country, tax_status, screen_status, rating, open_pos, state, bank")
+      .order("created_at", { ascending: false });
+    setVendors(((vn ?? []) as any[]).map((r) => ({
+      id: r.id, name: r.name, category: r.category, country: r.country, taxStatus: r.tax_status,
+      screenStatus: r.screen_status, rating: r.rating, openPos: r.open_pos, state: r.state, bank: r.bank,
+    })));
+    const { data: po } = await supabase
+      .from("purchase_orders")
+      .select("id, ref, vendor_name, amount, delivery, state, needs_reapproval, qty, unit_price, goods_received_notes(qty_received, state)")
+      .order("created_at", { ascending: false });
+    setPoRows(((po ?? []) as any[]).map((r) => {
+      const recv = ((r.goods_received_notes ?? []) as any[]).filter((g) => g.state === "received").reduce((s, g) => s + Number(g.qty_received || 0), 0);
+      return { id: r.ref, vendor: r.vendor_name, amt: Number(r.amount), delivery: r.delivery, state: r.state, reapproval: !!r.needs_reapproval, qty: Number(r.qty ?? 1), unitPrice: Number(r.unit_price ?? r.amount), received: recv };
+    }));
+    // Richer requisitions read model (draft state + the full form's fields) — overrides bootstrap's reqs.
+    const reqStatus: Record<string, Req["status"]> = { draft: "draft", submitted: "await", md_review: "md", approved: "approved", converted: "po", rejected: "rejected" };
+    const { data: rqs } = await supabase
+      .from("requisitions")
+      .select("ref, item, amount, budget_code, budget_chip, budget_chip_txt, state, qty, unit, unit_price, project_code, justification, created_at, app_users(name)")
+      .order("created_at", { ascending: false });
+    setReqs(((rqs ?? []) as any[]).map((r) => {
+      const rel = r.app_users; const who = Array.isArray(rel) ? rel[0]?.name : rel?.name;
+      return {
+        id: r.ref, item: r.item, amt: Number(r.amount), code: r.budget_code,
+        chip: r.budget_chip || "ok", chipTxt: r.budget_chip_txt || "within",
+        status: reqStatus[r.state] ?? "await",
+        qty: r.qty != null ? Number(r.qty) : undefined, unit: r.unit,
+        unitPrice: r.unit_price != null ? Number(r.unit_price) : undefined,
+        project: r.project_code, justification: r.justification,
+        raisedBy: who ?? "—", date: r.created_at,
+      };
+    }));
+    const { data: gr } = await supabase
+      .from("goods_received_notes")
+      .select("ref, coverage, pct, qty_received, over_delivery, note, created_at, purchase_orders(ref, vendor_name)")
+      .order("created_at", { ascending: false });
+    setGrns(((gr ?? []) as any[]).map((r) => {
+      const rel = r.purchase_orders; const po = Array.isArray(rel) ? rel[0] : rel;
+      return { id: r.ref, po: po?.ref ?? "—", vendor: po?.vendor_name ?? "—", coverage: r.coverage, pct: r.pct, qtyReceived: Number(r.qty_received ?? 0), over: !!r.over_delivery, note: r.note, when: r.created_at };
+    }));
+    const { data: ap } = await supabase
+      .from("invoices_ap")
+      .select("ref, amount, state, match_note, created_at, invoice_number, invoice_date, currency, wht_amount, captured_by, purchase_orders(ref, vendor_name)")
+      .order("created_at", { ascending: false });
+    const myEmail = (data.me as any)?.email ?? null;
+    const { data: meRow } = myEmail ? await supabase.from("app_users").select("id").eq("email", myEmail).maybeSingle() : { data: null };
+    const myId = (meRow as any)?.id ?? null;
+    setApInvoices(((ap ?? []) as any[]).map((r) => {
+      const rel = r.purchase_orders; const po = Array.isArray(rel) ? rel[0] : rel;
+      return {
+        ref: r.ref, po: po?.ref ?? "—", vendor: po?.vendor_name ?? "—", amount: Number(r.amount), state: r.state, matchNote: r.match_note, when: r.created_at,
+        invoiceNumber: r.invoice_number, invoiceDate: r.invoice_date, currency: r.currency || "KES", wht: Number(r.wht_amount || 0),
+        capturedByMe: myId != null && r.captured_by === myId,
+      };
+    }));
+    const { data: pay } = await supabase
+      .from("payments")
+      .select("ref, amount, method, journal_ref, created_at, invoices_ap(ref)")
+      .order("created_at", { ascending: false });
+    setPayments(((pay ?? []) as any[]).map((r) => {
+      const rel = r.invoices_ap; const inv = Array.isArray(rel) ? rel[0] : rel;
+      return { ref: r.ref, invoice: inv?.ref ?? "—", amount: Number(r.amount), method: r.method, journalRef: r.journal_ref, when: r.created_at };
+    }));
+    const { data: je } = await supabase
+      .from("journal_entries")
+      .select("ref, memo, source_type, created_at, journal_lines(account_code, debit, credit)")
+      .order("created_at", { ascending: false })
+      .limit(40);
+    setJournals(((je ?? []) as any[]).map((r) => ({
+      ref: r.ref, memo: r.memo, sourceType: r.source_type, when: r.created_at,
+      lines: ((r.journal_lines ?? []) as any[]).map((l) => ({ account: l.account_code, debit: Number(l.debit), credit: Number(l.credit) })),
+    })));
+    const { data: bal } = await supabase.rpc("account_balances");
+    setAccounts(((bal ?? []) as any[]).map((r) => ({
+      code: r.code, name: r.name, kind: r.kind, debit: Number(r.debit), credit: Number(r.credit), balance: Number(r.balance),
+    })));
+    // configurable rules (Settings → Approval & Matching Rules) + audit trail + bank-change queue
+    const { data: cfg } = await supabase.from("app_config").select("key, value");
+    setAppConfigState(Object.fromEntries(((cfg ?? []) as any[]).map((r) => [r.key, r.value])));
+    const { data: au } = await supabase
+      .from("audit_log")
+      .select("id, actor_email, action, record_type, record_ref, detail, created_at")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    setAudit(((au ?? []) as any[]).map((r) => ({
+      id: r.id, when: r.created_at, actor: r.actor_email || "system", action: r.action,
+      recordType: r.record_type, recordRef: r.record_ref, detail: r.detail || {},
+    })));
+    const { data: bc } = await supabase
+      .from("vendor_bank_changes")
+      .select("id, vendor_name, old_bank, new_bank, state, callback_note, created_at")
+      .order("created_at", { ascending: false });
+    setBankChanges(((bc ?? []) as any[]).map((r) => ({
+      id: r.id, vendor: r.vendor_name, oldBank: r.old_bank, newBank: r.new_bank, state: r.state, callbackNote: r.callback_note, when: r.created_at,
+    })));
     return true;
   }
   // self-scoped HR record (leave balances + my applications) — my_hr_summary()
@@ -633,13 +872,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
+  // Clicking a module header lands on its overview/home tab. Inventory & HR have
+  // no visible "Overview" subnav item, so this is what shows their overview.
+  const MODULE_HOME: Record<string, string> = {
+    finance: "f-over", procurement: "p-over", inventory: "i-over", hr: "h-over",
+    staffportal: "sp-me", projects: "pr-over", crm: "cr-over", compliance: "c-policies",
+  };
   function go(v: string) {
+    if (MODULE_HOME[v]) setTabs((prev) => ({ ...prev, [v]: MODULE_HOME[v] }));
     setView(v);
     mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
   function goTab(v: string, t: string) {
+    // Set the requested tab and switch the view directly — going through go()
+    // would clobber the tab back to the module's overview home.
     setTabs((prev) => ({ ...prev, [v]: t }));
-    go(v);
+    setView(v);
+    mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function cycleEntity() {
@@ -693,16 +942,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- requisition → PO chain (budget commit + routing + audit in the DB) ---------- */
-  async function submitReq(item: string, amt: number, code: string) {
+  async function submitReq(v: { item: string; amt: number; code: string; qty: number; unit: string; unitPrice: number; project: string; justification: string; asDraft: boolean }) {
     const { data, error } = await supabase.rpc("submit_requisition", {
-      p_item: item, p_amount: amt, p_code: code,
+      p_item: v.item, p_amount: v.amt, p_code: v.code, p_qty: v.qty || 1, p_unit: v.unit || "unit",
+      p_unit_price: v.unitPrice || null, p_project: v.project || null,
+      p_justification: v.justification || null, p_as_draft: v.asDraft,
     });
     if (error) { toast("Requisition failed", error.message); return; }
     const r = data as Req & { routing: { label: string; who: string } };
-    setReqs((prev) => [{ id: r.id, item: r.item, amt: r.amt, code: r.code, chip: r.chip, chipTxt: r.chipTxt, status: r.status }, ...prev]);
-    if (budgetLines[code]) budgetLines[code].u += amt; // keep the modal preview in step with the commitment
+    if (!v.asDraft && budgetLines[v.code]) budgetLines[v.code].u += v.amt; // keep the modal preview in step with the commitment
     setReqOpen(false);
-    toast(r.id + " raised · " + r.routing.label, cap(r.routing.who));
+    await loadFromDb();
+    toast(r.id + (v.asDraft ? " saved as draft" : " raised · " + r.routing.label), v.asDraft ? "Submit it when you're ready" : cap(r.routing.who));
+  }
+  async function submitReqFinal(id: string) {
+    const { data, error } = await supabase.rpc("submit_requisition_final", { p_ref: id });
+    if (error) { toast("Couldn't submit", error.message); return; }
+    await loadFromDb();
+    toast(id + " submitted", data.status === "approved" ? "Auto-approved — ready to raise a PO" : "Routed for approval");
+  }
+  async function withdrawReq(id: string) {
+    const { data, error } = await supabase.rpc("withdraw_requisition", { p_ref: id });
+    if (error) { toast("Withdraw failed", error.message); return; }
+    await loadFromDb();
+    toast(id + (data.status === "discarded" ? " discarded" : " withdrawn"), data.status === "discarded" ? "Draft removed" : "Back to draft — budget released");
+  }
+  async function createCostCentre(name: string, budget: number) {
+    const { data, error } = await supabase.rpc("upsert_cost_centre", { p_name: name, p_budget: budget });
+    if (error) { toast("Cost centre not saved", error.message); return; }
+    await loadFromDb();
+    toast(data.code + " saved", "Available as coding on requisitions and budgets");
   }
   async function approvePR(id: string) {
     const { error } = await supabase.rpc("approve_requisition", { p_ref: id });
@@ -714,17 +983,120 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const r = reqs.find((x) => x.id === id);
     if (r) setPoFor(r);
   }
-  async function submitPO(vendor: string, delivery: string) {
+  async function submitPO(vendor: string, delivery: string, qty?: number, unitPrice?: number) {
     if (!poFor) return;
     const { data, error } = await supabase.rpc("raise_po", {
       p_req_ref: poFor.id, p_vendor_name: vendor, p_delivery: delivery,
+      p_qty: qty ?? null, p_unit_price: unitPrice ?? null,
     });
     if (error) { toast("PO blocked", error.message); return; }
     const po = data as NewPO;
-    setNewPOs((prev) => [po, ...prev]);
-    setReqs((prev) => prev.map((r) => (r.id === poFor.id ? { ...r, status: "po" } : r)));
     setPoFor(null);
+    await loadFromDb();
     toast(po.id + " issued to " + vendor, "Draft PO created — awaiting delivery & goods-received note");
+  }
+  // Upload a file to the shared 'uploads' bucket and return its public URL/path.
+  async function uploadFile(prefix: string, file: File): Promise<string | null> {
+    const safe = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${prefix}/${Date.now()}-${safe}`;
+    const up = await supabase.storage.from("uploads").upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (up.error) { toast("Upload failed", up.error.message); return null; }
+    return up.data.path;
+  }
+
+  /* ---------- vendors (onboard → screen → award-ready) ---------- */
+  async function createVendor(v: { name: string; category: string; country: string; kraPin: string; bank: string }) {
+    const { data, error } = await supabase.rpc("create_vendor", {
+      p_name: v.name, p_category: v.category || null, p_country: v.country || "Kenya",
+      p_kra_pin: v.kraPin || null, p_bank: v.bank || null,
+    });
+    if (error) { toast("Vendor not added", error.message); return; }
+    setVendorOpen(false);
+    await loadFromDb();
+    toast(data.name + " onboarded", "Screen for sanctions before a PO can be awarded");
+  }
+  async function screenVendor(name: string, result: "cleared" | "flagged", detail: string) {
+    const { data, error } = await supabase.rpc("screen_vendor", { p_vendor_name: name, p_result: result, p_detail: detail || null });
+    if (error) { toast("Screening failed", error.message); return; }
+    await loadFromDb();
+    toast(`${name} — ${result}`, result === "cleared" ? "Cleared for award" : "Flagged — cannot be awarded a PO");
+  }
+
+  /* ---------- goods received by quantity (SoD: receiver ≠ requester) ---------- */
+  async function recordGrn(poRef: string, qtyReceived: number, note: string, overAction: string, photo?: File | null) {
+    const photoPath = photo ? await uploadFile(`grn/${poRef}`, photo) : null;
+    const { data, error } = await supabase.rpc("submit_grn", {
+      p_po_ref: poRef, p_qty_received: qtyReceived, p_note: note || null,
+      p_over_action: overAction || null, p_photo_path: photoPath,
+    });
+    if (error) { toast("GRN blocked", error.message); return; }
+    setGrnFor(null);
+    await loadFromDb();
+    toast(`${data.id} recorded`, `${poRef} — ${data.received} of ${data.ordered} received${data.over ? " · over-delivery flagged" : ""}`);
+  }
+
+  /* ---------- payables: capture invoice → match → approve → pay ---------- */
+  async function captureInvoice(v: { poRef: string; amount: number; invoiceNumber: string; invoiceDate: string; currency: string; wht: boolean }) {
+    const { data, error } = await supabase.rpc("capture_ap_invoice", {
+      p_po_ref: v.poRef, p_amount: v.amount, p_invoice_number: v.invoiceNumber || null,
+      p_invoice_date: v.invoiceDate || null, p_currency: v.currency || "KES", p_wht: v.wht,
+    });
+    if (error) { toast("Invoice not captured", error.message); return; }
+    setInvoiceFor(null);
+    await loadFromDb();
+    toast(`${data.id} captured`, data.match === "matched" ? "Three-way match clean — approve for payment" : "Held as an exception — check the match");
+  }
+  async function approveInvoice(invRef: string) {
+    const { error } = await supabase.rpc("approve_ap_invoice", { p_inv_ref: invRef });
+    if (error) { toast("Approval blocked", error.message); return; }
+    await loadFromDb();
+    toast(`${invRef} approved for payment`, "A different person from whoever captured it");
+  }
+  async function payInvoice(invRef: string, method: string) {
+    const { data, error } = await supabase.rpc("pay_invoice", { p_inv_ref: invRef, p_method: method });
+    if (error) { toast("Payment blocked", error.message); return; }
+    await loadFromDb();
+    toast(`${data.id} paid`, `${invRef} settled · net ${Math.round(data.net).toLocaleString()} · journal ${data.journal}`);
+  }
+
+  /* ---------- v2: PO amendment (re-approval beyond tolerance) ---------- */
+  async function amendPo(poRef: string, amount: number, delivery: string, reason: string) {
+    const { data, error } = await supabase.rpc("amend_po", {
+      p_po_ref: poRef, p_new_amount: amount, p_new_delivery: delivery || null, p_reason: reason || null,
+    });
+    if (error) { toast("Amendment failed", error.message); return; }
+    setPoAmendFor(null);
+    await loadFromDb();
+    toast(`${poRef} amended`, data.reapproval ? `+${data.deltaPct}% — routed for re-approval` : "Within tolerance — applied");
+  }
+  async function approvePoAmendment(poRef: string) {
+    const { error } = await supabase.rpc("approve_po_amendment", { p_po_ref: poRef });
+    if (error) { toast("Approval failed", error.message); return; }
+    await loadFromDb();
+    toast(`${poRef} amendment approved`, "Cleared to receive and invoice");
+  }
+
+  /* ---------- v2: vendor bank-detail change (callback verification) ---------- */
+  async function requestBankChange(vendor: string, newBank: string) {
+    const { error } = await supabase.rpc("request_vendor_bank_change", { p_vendor_name: vendor, p_new_bank: newBank });
+    if (error) { toast("Change not requested", error.message); return; }
+    setBankChangeFor(null);
+    await loadFromDb();
+    toast("Bank change pending", "Verify by callback before it takes effect — the old details stay in use until then");
+  }
+  async function approveBankChange(id: string, callbackNote: string) {
+    const { error } = await supabase.rpc("approve_vendor_bank_change", { p_change_id: id, p_callback_note: callbackNote });
+    if (error) { toast("Verification failed", error.message); return; }
+    await loadFromDb();
+    toast("Bank details verified", "New account is now on file");
+  }
+
+  /* ---------- v2: settings (approval & matching rules) ---------- */
+  async function setAppConfig(key: string, value: number | boolean | string) {
+    const { error } = await supabase.rpc("set_app_config", { p_key: key, p_value: value });
+    if (error) { toast("Setting not saved", error.message); return; }
+    setAppConfigState((prev) => ({ ...prev, [key]: value }));
+    toast("Setting saved", `${key} = ${value}`);
   }
 
   /* ---------- sales invoice (VAT + GL + eTIMS intent in the DB) ---------- */
@@ -736,7 +1108,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const si = data as NewInvoice;
     setNewInvoices((prev) => [si, ...prev]);
     setInvOpen(false);
+    await loadFromDb();
     toast(si.id + " issued to " + cust, "Filed to eTIMS · total KES " + si.tot.toLocaleString());
+  }
+  async function recordReceipt(invRef: string, amount: number, method: string) {
+    const { data, error } = await supabase.rpc("record_ar_receipt", { p_inv_ref: invRef, p_amount: amount, p_method: method });
+    if (error) { toast("Receipt not recorded", error.message); return; }
+    setReceiptFor(null);
+    await loadFromDb();
+    toast(`${invRef} settled`, `Collection posted · journal ${data.journal}`);
   }
 
   /* ---------- won deal → project ---------- */
@@ -758,10 +1138,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- standalone new project (not from a CRM engagement) ---------- */
-  async function createProject(v: { name: string; funder: string; budget: string; timeline: string; team: string; status: string }) {
+  async function createProject(v: { name: string; funder: string; budgetAmount: number; startDate: string; endDate: string; team: string; status: string }) {
     const { data, error } = await supabase.rpc("create_project", {
-      p_name: v.name, p_funder: v.funder || null, p_budget_txt: v.budget || null,
-      p_timeline: v.timeline || null, p_team: v.team || null, p_status: v.status || null,
+      p_name: v.name, p_funder: v.funder || null, p_budget_amount: v.budgetAmount || 0,
+      p_start_date: v.startDate || null, p_end_date: v.endDate || null,
+      p_team: v.team || null, p_status: v.status || null,
     });
     if (error) { toast("Project not created", error.message); return; }
     const name = data.name as string;
@@ -782,8 +1163,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setProjectDetails((prev) => ({ ...prev, [name]: data.detail as ProjectDetail }));
     toast(okTitle, okSub);
   }
-  const addMilestone = (projectId: string, title: string, status = "todo") =>
-    projectRpc("add_project_milestone", { p_project_id: projectId, p_title: title, p_status: status }, "Milestone added", title);
+  const addMilestone = (projectId: string, title: string, amount: number, startDate: string, endDate: string, status = "todo") =>
+    projectRpc("add_project_milestone", {
+      p_project_id: projectId, p_title: title, p_amount: amount || 0,
+      p_start_date: startDate || null, p_end_date: endDate || null, p_status: status,
+    }, "Milestone added", title);
   const setMilestoneStatus = (milestoneId: string, status: string) =>
     projectRpc("set_milestone_status", { p_milestone_id: milestoneId, p_status: status }, "Milestone updated", "Status saved");
   const addDrawdown = (projectId: string, title: string, amount: string, status = "Requested") =>
@@ -792,6 +1176,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     projectRpc("set_drawdown_status", { p_drawdown_id: drawdownId, p_status: status }, "Drawdown updated", status);
   const logFieldActivity = (projectId: string, kind: string, county: string, note: string) =>
     projectRpc("log_field_activity", { p_project_id: projectId, p_kind: kind, p_county: county || null, p_note: note || null }, "Field activity logged", "Recorded against the project");
+  // Assign someone (free-text name/phone/email) to check a site — a project must be picked by name.
+  async function createFieldActivity(v: { projectName: string; assignee: string; phone: string; email: string; date: string; note: string }) {
+    const projectId = projectDetails[v.projectName]?.id;
+    if (!projectId) { toast("Pick a project", "Choose which project this field activity is for"); return; }
+    const { error } = await supabase.rpc("create_field_activity", {
+      p_project_id: projectId, p_assignee: v.assignee, p_phone: v.phone || null,
+      p_email: v.email || null, p_activity_on: v.date || null, p_note: v.note || null,
+    });
+    if (error) { toast("Field activity not saved", error.message); return; }
+    setFieldActivityOpen(false);
+    await loadFromDb();
+    toast("Field activity assigned", `${v.assignee} · ${v.projectName}`);
+  }
   const setProjectState = (projectId: string, state: string) =>
     projectRpc("set_project_state", { p_project_id: projectId, p_new_state: state }, "Project status updated", state);
 
@@ -882,11 +1279,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- HR module mutations: RPC → toast → reload the module read model ---------- */
-  async function addEmployee(v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string }) {
+  async function addEmployee(v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string; contractEnd: string }) {
     const { data, error } = await supabase.rpc("add_employee", {
       p_name: v.name, p_email: v.email, p_role_title: v.roleTitle || null, p_contract_type: v.contractType,
       p_start_date: v.startDate || null, p_gross_salary: v.grossSalary, p_kra: v.kra || null,
       p_nssf: v.nssf || null, p_shif: v.shif || null, p_bank: v.bank || null,
+      p_contract_end: v.contractType !== "permanent" ? (v.contractEnd || null) : null,
     });
     if (error) { toast("Employee not added", error.message); return; }
     setHrModal(null);
@@ -1166,18 +1564,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   function engDocUrl(path: string, downloadName?: string) {
     return supabase.storage.from("engagement-docs").getPublicUrl(path, downloadName ? { download: downloadName } : undefined).data.publicUrl;
   }
-  async function createEngagement(name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string, file?: File | null) {
+  async function createEngagement(name: string, owner: string, pipeline: "up" | "down", dueKey: string, note: string, taggedEmail: string, file?: File | null) {
     // stage isn't collected on the form — the RPC starts new engagements at the top of the
-    // funnel; the note ("where we are on the discussion") seeds the engagement's update log
+    // funnel; the note ("where we are on the discussion") seeds the engagement's update log.
+    // A tagged teammate gets an in-app notification (RPC) + an email (below).
     const { data, error } = await supabase.rpc("create_engagement", {
       p_name: name, p_stage: null, p_owner_name: owner, p_pipeline: pipeline,
-      p_next_action: note.trim() || null, p_due_key: dueKey,
+      p_next_action: note.trim() || null, p_due_key: dueKey, p_tagged_email: taggedEmail || null,
     });
     if (error) { toast("Engagement not created", error.message); return; }
     if (file) await uploadEngagementDoc(data.id, file, owner);
     setEngFormOpen(false);
+    // Email the tagged teammate (the in-app notification was already written by the RPC).
+    if (data.taggedEmail) {
+      const tagged = members.find((m) => m.email === data.taggedEmail);
+      try {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+          body: JSON.stringify({
+            to: data.taggedEmail,
+            subject: `You were tagged on ${data.id}`,
+            text: `Hi ${tagged?.name ?? ""},\n\n${me?.name ?? "A teammate"} tagged you on engagement ${data.id} — ${name}.\n\nOpen Jikoni Tool → Partnerships CRM to take a look.`,
+            html: `<p>Hi ${tagged?.name ?? ""},</p><p><strong>${me?.name ?? "A teammate"}</strong> tagged you on engagement <strong>${data.id}</strong> — ${name}.</p><p>Open <strong>Jikoni Tool → Partnerships CRM</strong> to take a look.</p>`,
+          }),
+        });
+      } catch { /* email is best-effort; the in-app notification still lands */ }
+    }
     await loadFromDb();
-    toast(`${data.id} created`, `${name} · ${owner}${note.trim() ? " · note logged" : ""}${file ? " · document attached" : ""}`);
+    toast(`${data.id} created`, `${name} · ${owner}${data.taggedEmail ? " · teammate tagged" : ""}${file ? " · document attached" : ""}`);
   }
   async function logEngagementNote(ref: string, v: { channel: string; who: string; note: string; stageTo: string; file?: File | null }) {
     const { data, error } = await supabase.rpc("log_engagement_note", {
@@ -1196,14 +1611,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadFromDb();
     toast(`${ref} — partners linked`, partnerIds.length ? `${partnerIds.length} linked` : "All links cleared");
   }
-  async function createPartner(name: string, type: string, country: string, owner: string, status: string) {
+  async function createPartner(v: { name: string; type: string; country: string; owner: string; status: string; contactName: string; email: string; phone: string }) {
     const { error } = await supabase.rpc("create_partner", {
-      p_name: name, p_type: type, p_country: country, p_owner_name: owner, p_status: status,
+      p_name: v.name, p_type: v.type, p_country: v.country, p_owner_name: v.owner, p_status: v.status,
+      p_contact_name: v.contactName || null, p_email: v.email || null, p_phone: v.phone || null,
     });
     if (error) { toast("Partner not added", error.message); return; }
     setPartnerOpen(false);
     await loadFromDb();
-    toast(name + " added to the registry", `${type} · ${country} · ${owner}`);
+    toast(v.name + " added to the registry", `${v.type} · ${v.country} · ${v.owner}`);
   }
   async function createOpportunity(name: string, type: string, deadline: string, linkedTo: string, status: string) {
     const { error } = await supabase.rpc("create_opportunity", {
@@ -1213,6 +1629,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setOppOpen(false);
     await loadFromDb();
     toast(name + " added to the map", `${type} · ${status}`);
+  }
+
+  /* ---------- in-app notifications ---------- */
+  // Flip seen locally for snappy UI, then persist (pass ids to mark specific ones, none = all).
+  async function markNotificationsSeen(ids?: string[]) {
+    if (!notifications.some((n) => !n.seen && (!ids || ids.includes(n.id)))) return;
+    setNotifications((prev) => prev.map((n) => (!ids || ids.includes(n.id)) ? { ...n, seen: true } : n));
+    await supabase.rpc("mark_notifications_seen", { p_ids: ids ?? null });
   }
 
   /* ---------- Compliance & Governance: create-forms hit SECURITY DEFINER RPCs
@@ -1387,12 +1811,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- stock item registry (create / edit) ---------- */
-  async function createStockItem(v: { name: string; category: string; unit: string; unitCost: number; reorderLevel: number; reorderQty: number; budgetCode: string }) {
-    // SKU is auto-generated server-side (the form no longer asks for one)
+  async function createStockItem(v: { name: string; category: string; unit: string; unitCost: number; reorderLevel: number; reorderQty: number; budgetCode: string; supplier: string }) {
+    // SKU is auto-generated server-side (the form no longer asks for one); the
+    // budget code is auto-assigned by the caller (the form no longer asks either)
     const { data, error } = await supabase.rpc("create_stock_item", {
       p_name: v.name, p_category: v.category || null, p_unit: v.unit || "unit",
       p_unit_cost: v.unitCost, p_reorder_level: v.reorderLevel, p_reorder_qty: v.reorderQty,
-      p_budget_code: v.budgetCode || null,
+      p_budget_code: v.budgetCode || null, p_supplier: v.supplier || null,
     });
     if (error) { toast("Item not created", error.message); return; }
     setItemModal(null);
@@ -1410,15 +1835,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- assets (register / dispose / depreciate) ---------- */
-  async function registerAsset(v: { name: string; category: string; cost: number; lifeMonths: number; acquired: string; salvage: number }) {
+  async function registerAsset(v: { name: string; category: string; quantity: number; acquired: string }) {
     const { data, error } = await supabase.rpc("register_asset", {
-      p_name: v.name, p_category: v.category || null, p_cost: v.cost,
-      p_life_months: v.lifeMonths, p_acquired: v.acquired, p_salvage: v.salvage || 0,
+      p_name: v.name, p_category: v.category || null, p_quantity: v.quantity, p_acquired: v.acquired,
     });
     if (error) { toast("Asset not registered", error.message); return; }
     setAssetOpen(false);
     await loadFromDb();
-    toast(data.id + " registered", `${v.name} — straight-line over ${v.lifeMonths} months`);
+    toast(data.id + " registered", `${v.name} — ${v.quantity} on the register`);
+  }
+  async function assignAsset(assetRef: string, employee: string, qty: number) {
+    const { data, error } = await supabase.rpc("assign_asset", { p_asset_ref: assetRef, p_employee: employee, p_qty: qty });
+    if (error) { toast("Couldn't assign asset", error.message); return; }
+    await loadFromDb();
+    toast(`${data.asset} assigned`, `${data.qty} to ${data.employee}`);
   }
   async function disposeAsset(ref: string, reason: string) {
     const { error } = await supabase.rpc("dispose_asset", { p_ref: ref, p_reason: reason || null });
@@ -1452,13 +1882,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     members,
     inviteOpen, setInviteOpen, sendInvite,
     reqOpen, openReq: () => setReqOpen(true), closeReq: () => setReqOpen(false),
-    reqs, submitReq, approvePR,
+    reqs, submitReq, submitReqFinal, withdrawReq, approvePR,
+    costCentres, createCostCentre,
     poFor, raisePO, closePO: () => setPoFor(null), submitPO, newPOs,
+    poPickerOpen, openPoPicker: () => setPoPickerOpen(true), closePoPicker: () => setPoPickerOpen(false),
+    vendors, poRows, grns,
+    vendorOpen, openVendorForm: () => setVendorOpen(true), closeVendorForm: () => setVendorOpen(false), createVendor, screenVendor,
+    grnFor, openGrn: (po: PORow) => setGrnFor(po), closeGrn: () => setGrnFor(null), recordGrn,
     invOpen, openInvoice: () => setInvOpen(true), closeInvoice: () => setInvOpen(false),
     submitInvoice, newInvoices,
+    apInvoices, payments, journals, accounts,
+    invoiceFor, openCaptureInvoice: (po: PORow) => setInvoiceFor(po), closeCaptureInvoice: () => setInvoiceFor(null), captureInvoice, approveInvoice, payInvoice,
+    receiptFor, openReceipt: (inv: NewInvoice) => setReceiptFor(inv), closeReceipt: () => setReceiptFor(null), recordReceipt,
+    poAmendFor, openPoAmend: (po: PORow) => setPoAmendFor(po), closePoAmend: () => setPoAmendFor(null), amendPo, approvePoAmendment,
+    bankChangeFor, openBankChange: (v: string) => setBankChangeFor(v), closeBankChange: () => setBankChangeFor(null), requestBankChange, approveBankChange, bankChanges,
+    appConfig, setAppConfig, audit,
     projectDetails, extraProjects, engToProject, projectToEng, createProjectFromEng,
     projectFormOpen, openProjectForm: () => setProjectFormOpen(true), closeProjectForm: () => setProjectFormOpen(false), createProject,
     addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
+    fieldActivities,
+    fieldActivityOpen, openFieldActivity: () => setFieldActivityOpen(true), closeFieldActivity: () => setFieldActivityOpen(false), createFieldActivity,
     addProjectDocument, projectDocUrl,
     hrMe, leaveOpen, leaveEdit,
     openLeave: () => { setLeaveEdit(null); setLeaveOpen(true); },
@@ -1478,6 +1921,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     logEngagementNote, setEngagementPartners, engDocUrl,
     partnerOpen, openPartnerForm: () => setPartnerOpen(true), closePartnerForm: () => setPartnerOpen(false), createPartner,
     oppOpen, openOppForm: () => setOppOpen(true), closeOppForm: () => setOppOpen(false), createOpportunity,
+    notifications, markNotificationsSeen,
     compliance, markObligationFiled,
     riskOpen, openRiskForm: () => setRiskOpen(true), closeRiskForm: () => setRiskOpen(false), createRisk,
     policyOpen, openPolicyForm: () => setPolicyOpen(true), closePolicyForm: () => setPolicyOpen(false), addPolicy,
@@ -1490,7 +1934,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     itemModal, openItemModal: (m) => setItemModal(m), closeItemModal: () => setItemModal(null),
     createStockItem, updateStockItem,
     assetOpen, openAssetForm: () => setAssetOpen(true), closeAssetForm: () => setAssetOpen(false),
-    registerAsset, disposeAsset, runDepreciation,
+    registerAsset, assignAsset, disposeAsset, runDepreciation,
   };
 
   if (!authReady) return null;

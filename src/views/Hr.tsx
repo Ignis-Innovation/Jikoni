@@ -45,17 +45,28 @@ function Check({ done, children }: { done: boolean; children: React.ReactNode })
 function EmployeeModal() {
   const { hrModal, closeHrModal, addEmployee, toast } = useApp();
   const open = hrModal?.kind === "employee";
-  const [f, setF] = useState({ name: "", email: "", roleTitle: "", contractType: "permanent", startDate: new Date().toISOString().slice(0, 10), grossSalary: "", kra: "", nssf: "", shif: "", bank: "" });
-  useEffect(() => { if (open) setF({ name: "", email: "", roleTitle: "", contractType: "permanent", startDate: new Date().toISOString().slice(0, 10), grossSalary: "", kra: "", nssf: "", shif: "", bank: "" }); }, [open]);
+  const blank = { name: "", email: "", roleTitle: "", contractType: "permanent", startDate: new Date().toISOString().slice(0, 10), contractEnd: "", grossSalary: "", kra: "", nssf: "", shif: "", bank: "" };
+  const [f, setF] = useState(blank);
+  useEffect(() => { if (open) setF(blank); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
+  const permanent = f.contractType === "permanent";
   function submit() {
+    // Every field is required so the staff file opens complete.
     if (!f.name.trim()) { toast("Name is required", "Give the employee a name"); return; }
     if (!f.email.trim()) { toast("Email is required", "They link to a login by this email"); return; }
+    if (!f.roleTitle.trim()) { toast("Role title is required", "e.g. Field Officer"); return; }
+    if (!f.startDate) { toast("Start date is required", "When do they start?"); return; }
+    if (!permanent && !f.contractEnd) { toast("Contract end date is required", "Non-permanent contracts need an end date"); return; }
+    if (!f.grossSalary.trim() || parseFloat(f.grossSalary) <= 0) { toast("Gross salary is required", "Enter a monthly gross greater than zero"); return; }
+    if (!f.kra.trim()) { toast("KRA PIN is required", "Statutory — needed for payroll"); return; }
+    if (!f.nssf.trim()) { toast("NSSF no. is required", "Statutory — needed for payroll"); return; }
+    if (!f.shif.trim()) { toast("SHIF no. is required", "Statutory — needed for payroll"); return; }
+    if (!f.bank.trim()) { toast("Bank is required", "Where net pay is sent"); return; }
     addEmployee({ ...f, grossSalary: parseFloat(f.grossSalary) || 0 });
   }
   return (
     <ModalShell open={open} onClose={closeHrModal} width={560}>
-      <div className="mh"><h3>Add employee</h3><p>Creates the staff file and opening leave balances. The person links to a login the first time they sign in with this email — no password is set here.</p></div>
+      <div className="mh"><h3>Add employee</h3><p>Creates the staff file and opening leave balances. All fields are required. The person links to a login the first time they sign in with this email — no password is set here.</p></div>
       <div className="mb">
         <div className="mrow c2">
           <div><label>Full name</label><input className="field" placeholder="Jane Wanjiru" value={f.name} onChange={(e) => set("name", e.target.value)} /></div>
@@ -69,8 +80,9 @@ function EmployeeModal() {
             </select>
           </div>
         </div>
-        <div className="mrow c2">
+        <div className={`mrow ${permanent ? "c2" : "c3"}`}>
           <div><label>Start date</label><input className="field" type="date" value={f.startDate} onChange={(e) => set("startDate", e.target.value)} /></div>
+          {!permanent && <div><label>Contract end date</label><input className="field" type="date" value={f.contractEnd} onChange={(e) => set("contractEnd", e.target.value)} /></div>}
           <div><label>Gross salary (KES / month)</label><input className="field" type="number" min="0" placeholder="0" value={f.grossSalary} onChange={(e) => set("grossSalary", e.target.value)} /></div>
         </div>
         <div className="mrow c3">
@@ -1317,6 +1329,21 @@ export default function HrView() {
 
       {tab === "h-exit" && (
         <div className="hr-panel active">
+          {(() => {
+            const inProg = exits.filter((x) => x.state === "in_progress");
+            const cleared = exits.filter((x) => x.state === "cleared");
+            const clearancePct = exits.length
+              ? Math.round(exits.reduce((s, x) => s + (x.clearance.length ? x.clearance.filter((c) => c.done).length / x.clearance.length : 0), 0) / exits.length * 100)
+              : 0;
+            return (
+              <Pulse data={[
+                { k: "Total exits", tick: "t-blue", v: String(exits.length), d: exits.length ? "recorded" : "none yet", dc: "flat" as const },
+                { k: "In progress", tick: inProg.length ? "t-ember" : "t-green", v: String(inProg.length), d: inProg.length ? "clearance open" : "none open", dc: "flat" as const },
+                { k: "Fully cleared", tick: "t-green", v: String(cleared.length), d: "offboarded", dc: "flat" as const },
+                { k: "Avg clearance", tick: "t-blue", v: `${clearancePct}%`, d: "areas signed off", dc: "flat" as const },
+              ]} />
+            );
+          })()}
           <div className="panel" style={{ marginBottom: 18 }}>
             <div className="panel-h"><h3>Exits</h3><span className="meta">click one to open the clearance</span></div>
             {exits.length === 0 ? (

@@ -315,7 +315,6 @@ export function VendorDrawer() {
 
 /* ================= PROJECT ================= */
 const MS_OPTS: [string, string][] = [["done", "Complete"], ["now", "In progress"], ["todo", "Upcoming"]];
-const DD_OPTS = ["Requested", "Received", "On schedule", "Cancelled"];
 const STATE_NEXT: Record<string, { to: string; label: string }> = {
   setup: { to: "active", label: "Activate project" },
   active: { to: "reporting", label: "Move to reporting" },
@@ -327,23 +326,31 @@ const smallField = { padding: "4px 8px", fontSize: 11.5, width: "auto" } as cons
 export function ProjectDrawer() {
   const {
     projectName, closeProject, toast, projectDetails,
-    addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
+    addMilestone, setMilestoneStatus, logFieldActivity, setProjectState,
     addProjectDocument, projectDocUrl,
   } = useApp();
   const p = projectName ? projectDetails[projectName] : null;
   const ms: Record<string, [string, string]> = { done: ["done", "Complete"], now: ["today", "In progress"], todo: ["week", "Upcoming"] };
 
   const [msTitle, setMsTitle] = useState("");
-  const [ddTitle, setDdTitle] = useState("");
-  const [ddAmt, setDdAmt] = useState("");
+  const [msAmt, setMsAmt] = useState("");
+  const [msStart, setMsStart] = useState("");
+  const [msEnd, setMsEnd] = useState("");
   const [showAct, setShowAct] = useState(false);
   const [actKind, setActKind] = useState("site_visit");
   const [actCounty, setActCounty] = useState("");
   const [actNote, setActNote] = useState("");
   useEffect(() => {
-    setMsTitle(""); setDdTitle(""); setDdAmt("");
+    setMsTitle(""); setMsAmt(""); setMsStart(""); setMsEnd("");
     setShowAct(false); setActKind("site_visit"); setActCounty(""); setActNote("");
   }, [projectName]);
+
+  const kes0 = (n: number) => "KES " + Math.round(n).toLocaleString();
+  const budgetAmount = p?.budgetAmount ?? 0;
+  const usedTotal = (p?.milestones ?? []).reduce((s, m) => s + (m.amount ?? 0), 0);
+  const remaining = budgetAmount - usedTotal;
+  const newAmt = parseFloat(msAmt) || 0;
+  const overBudget = newAmt > remaining + 0.001;
 
   const next = p?.state ? STATE_NEXT[p.state] : undefined;
   const submitActivity = () => {
@@ -417,7 +424,13 @@ export function ProjectDrawer() {
                     style={{ cursor: "pointer", width: 16, height: 16, accentColor: "var(--flame)", flexShrink: 0 }}
                     title={m.s === "done" ? "Mark not complete" : "Mark complete"} />
                 )}
-                <span style={{ flex: 1, textDecoration: m.s === "done" ? "line-through" : "none", color: m.s === "done" ? "var(--ink-soft)" : "inherit" }}>{m.t}</span>
+                <span style={{ flex: 1, textDecoration: m.s === "done" ? "line-through" : "none", color: m.s === "done" ? "var(--ink-soft)" : "inherit" }}>
+                  {m.t}
+                  <br />
+                  <small style={{ color: "var(--ink-soft)", fontFamily: "var(--mono)" }}>
+                    {kes0(m.amount ?? 0)}{m.start ? ` · ${m.start}${m.end ? ` → ${m.end}` : ""}` : ""}
+                  </small>
+                </span>
                 {m.id
                   ? <select className="field" style={smallField} value={m.s} onChange={(e) => setMilestoneStatus(m.id!, e.target.value)}>
                       {MS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -426,15 +439,28 @@ export function ProjectDrawer() {
               </div>
             ))}
             {p.id && (
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} placeholder="New milestone…" value={msTitle} onChange={(e) => setMsTitle(e.target.value)} />
-                <button className="btn" style={{ padding: "5px 10px", fontSize: 11.5 }} disabled={!msTitle.trim()}
-                  onClick={() => { addMilestone(p.id!, msTitle.trim()); setMsTitle(""); }}><PlusI />Add</button>
+              <div style={{ marginTop: 6 }}>
+                <div className="recon" style={{ padding: "6px 0", fontSize: 11.5, color: overBudget ? "var(--flame)" : "var(--ink-soft)" }}>
+                  <span>Milestones {kes0(usedTotal)} of {kes0(budgetAmount)}</span>
+                  <span className="mono">{kes0(Math.max(remaining, 0))} left</span>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input className="field" style={{ flex: 2, padding: "5px 9px", fontSize: 12 }} placeholder="New milestone…" value={msTitle} onChange={(e) => setMsTitle(e.target.value)} />
+                  <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} type="number" min="0" placeholder="Amount" value={msAmt} onChange={(e) => setMsAmt(e.target.value)} />
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                  <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} type="date" title="Start date" value={msStart} onChange={(e) => setMsStart(e.target.value)} />
+                  <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} type="date" title="End date" value={msEnd} onChange={(e) => setMsEnd(e.target.value)} />
+                  <button className="btn" style={{ padding: "5px 10px", fontSize: 11.5 }} disabled={!msTitle.trim() || newAmt <= 0 || overBudget}
+                    onClick={() => { addMilestone(p.id!, msTitle.trim(), newAmt, msStart, msEnd); setMsTitle(""); setMsAmt(""); setMsStart(""); setMsEnd(""); }}><PlusI />Add</button>
+                </div>
+                {overBudget && <div style={{ fontSize: 11, color: "var(--flame)", marginTop: 5 }}>That would push milestones past the budget — only {kes0(Math.max(remaining, 0))} left.</div>}
               </div>
             )}
           </div>
-          <div className="eng-sec">Drawdowns</div>
+          <div className="eng-sec">Drawdowns <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0, color: "var(--ink-soft)", fontSize: 11 }}>· recognised when a milestone is completed</span></div>
           <div>
+            {p.drawdowns.length === 0 && <div style={{ color: "var(--ink-soft)", fontSize: 12, padding: "6px 0" }}>None yet — complete a milestone to draw down its amount.</div>}
             {p.drawdowns.map((d, i) => (
               <div className="recon" style={{ padding: "8px 0" }} key={d.id ?? i}>
                 <span>
@@ -442,21 +468,9 @@ export function ProjectDrawer() {
                   <br />
                   <small style={{ color: "var(--ink-soft)", fontFamily: "var(--mono)" }}>{d.v}</small>
                 </span>
-                {d.id
-                  ? <select className="field" style={smallField} value={DD_OPTS.includes(d.s) ? d.s : "Requested"} onChange={(e) => setDrawdownStatus(d.id!, e.target.value)}>
-                      {DD_OPTS.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  : <span className={`pill ${d.s === "Received" ? "done" : "today"}`}>{d.s}</span>}
+                <span className={`pill ${d.s === "Received" ? "done" : "today"}`}>{d.s}</span>
               </div>
             ))}
-            {p.id && (
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <input className="field" style={{ flex: 2, padding: "5px 9px", fontSize: 12 }} placeholder="Tranche…" value={ddTitle} onChange={(e) => setDdTitle(e.target.value)} />
-                <input className="field" style={{ flex: 1, padding: "5px 9px", fontSize: 12 }} placeholder="Amount" value={ddAmt} onChange={(e) => setDdAmt(e.target.value)} />
-                <button className="btn" style={{ padding: "5px 10px", fontSize: 11.5 }} disabled={!ddTitle.trim() || !ddAmt.trim()}
-                  onClick={() => { addDrawdown(p.id!, ddTitle.trim(), ddAmt.trim()); setDdTitle(""); setDdAmt(""); }}><PlusI />Add</button>
-              </div>
-            )}
           </div>
           <div className="eng-sec">Documents</div>
           <div>

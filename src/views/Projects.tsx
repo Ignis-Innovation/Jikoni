@@ -11,19 +11,12 @@ const COLORS = ["#12A3BE", "#E2632A", "#3C8A5E", "#6D28D9", "#A89C8E", "#C99A2E"
 
 // short label for charts: "Makueni VTC rollout" → "Makueni", "5-County …" → "5-County"
 const short = (name: string) => name.split(" ")[0];
-// spent-vs-budget percentage as a number, from the "59%" string
-const pctNum = (p: ProjectDetail) => parseInt(p.pct || "0", 10) || 0;
-// parse a money string ("KES 3.2M", "$240k") to a KES-millions number for charts/totals
-function amtM(s?: string | null): number {
-  if (!s) return 0;
-  const usd = /\$/.test(s);
-  const num = parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
-  const millions = /k/i.test(s) ? num / 1000 : num; // "M" (or bare) is already millions
-  return usd ? millions * 130 : millions;           // rough USD→KES so magnitudes compare
-}
-const fmtM = (n: number) => `KES ${n.toFixed(1)}M`;
-// first number in a free-text field string ("214 assessments · …") → 214
-const leadNum = (s?: string) => parseInt((s || "").replace(/[^0-9].*$/, ""), 10) || 0;
+// money now lives on the project as numeric KES (budgetAmount / spentAmount)
+const budgetOf = (p: ProjectDetail) => p.budgetAmount ?? 0;
+const spentOf = (p: ProjectDetail) => p.spentAmount ?? 0;
+const burnOf = (p: ProjectDetail) => { const b = budgetOf(p); return b > 0 ? Math.round((spentOf(p) / b) * 100) : 0; };
+// format KES: millions get an "M" suffix, smaller amounts show in full
+const fmtKes = (n: number) => n >= 1e6 ? `KES ${(n / 1e6).toFixed(1)}M` : `KES ${Math.round(n).toLocaleString()}`;
 
 const statusPill = (status: string) => {
   const s = (status || "").toLowerCase();
@@ -40,7 +33,7 @@ const ddPill = (s: string) =>
   /received/i.test(s) ? "done" : /request|pending|due/i.test(s) ? "today" : "week";
 
 export default function ProjectsView() {
-  const { tabs, goTab, openProject, projectDetails, openProjectForm, setMilestoneStatus } = useApp();
+  const { tabs, goTab, openProject, projectDetails, openProjectForm, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
   const tab = tabs.projects;
 
   // one source of truth: every project the backend returns, keyed by name
@@ -50,19 +43,19 @@ export default function ProjectsView() {
 
   const allMilestones = list.flatMap((p) => p.milestones.map((m) => ({ ...m, project: p.name })));
   const allDrawdowns = list.flatMap((p) => p.drawdowns.map((d) => ({ ...d, project: p.name })));
-  const fieldRows = list.filter((p) => p.field && p.field !== "—");
   // Aggregate tabs (Budgets / Grants / burn charts) only show projects that
   // actually carry that data — a bare new project lives in the registry until
   // it has a budget, a funder/drawdown or a reporting date.
-  const budgeted = list.filter((p) => amtM(p.budget) > 0);
+  const budgeted = list.filter((p) => budgetOf(p) > 0);
   const grantRows = list.filter((p) => (p.funder && p.funder !== "—") || p.drawdowns.length > 0);
   const reportingRows = list.filter((p) => p.reporting && !/to be set/i.test(p.reporting));
 
-  const budgetTotal = list.reduce((a, p) => a + amtM(p.budget), 0);
-  const spentTotal = list.reduce((a, p) => a + amtM(p.spent), 0);
+  const budgetTotal = list.reduce((a, p) => a + budgetOf(p), 0);
+  const spentTotal = list.reduce((a, p) => a + spentOf(p), 0);
   const remaining = budgetTotal - spentTotal;
   const burnPct = budgetTotal ? Math.round((spentTotal / budgetTotal) * 100) : 0;
-  const overBurn = list.filter((p) => pctNum(p) >= 80).length;
+  const overBurn = list.filter((p) => burnOf(p) >= 80).length;
+  const milestonesDone = allMilestones.filter((m) => m.s === "done").length;
 
   const milestonesDue = allMilestones.filter((m) => m.s === "now");
   const drawdownsPending = allDrawdowns.filter((d) => !/received/i.test(d.s));
@@ -70,14 +63,15 @@ export default function ProjectsView() {
 
   const pulse = [
     { k: "Active projects", tick: "t-blue", v: String(list.length), d: `${new Set(grantRows.map((p) => p.funder)).size} funders`, dc: "flat" as const },
-    { k: "Portfolio budget", tick: "t-blue", v: fmtM(budgetTotal), d: "across projects", dc: "flat" as const },
-    { k: "Spent to date", tick: "t-ember", v: fmtM(spentTotal), d: `${burnPct}%`, dc: "flat" as const },
-    { k: "Milestones due", tick: "t-ember", v: String(milestonesDue.length), d: "in progress", dc: "flat" as const },
+    { k: "Portfolio budget", tick: "t-blue", v: fmtKes(budgetTotal), d: "across projects", dc: "flat" as const },
+    { k: "Spent to date", tick: "t-ember", v: fmtKes(spentTotal), d: `${burnPct}%`, dc: "flat" as const },
+    { k: "Milestones done", tick: "t-green", v: String(milestonesDone), d: `of ${allMilestones.length}`, dc: "flat" as const },
     { k: "Reports due", tick: reportsDue.length ? "t-red" : "t-blue", v: String(reportsDue.length), d: "funder obligations", dc: "flat" as const },
-    { k: "Drawdowns pending", tick: "t-ember", v: String(drawdownsPending.length), d: "awaiting sign-off", dc: "flat" as const },
+    { k: "Field activities", tick: "t-blue", v: String(fieldActivities.length), d: "assigned", dc: "flat" as const },
   ];
-  const donutSegs = budgeted.map((p) => ({ l: p.short, v: amtM(p.budget), c: p.c, d: p.budget || "TBD" }));
-  const burnRows = budgeted.map((p) => ({ l: p.short, n: p.pct || "0%", w: pctNum(p), c: pctNum(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
+  const donutSegs = budgeted.map((p) => ({ l: p.short, v: budgetOf(p), c: p.c, d: p.budget || "TBD" }));
+  // budget-vs-spent per project: the bar fills to burn %, labelled "spent / budget"
+  const burnRows = budgeted.map((p) => ({ l: p.short, n: `${fmtKes(spentOf(p))} / ${fmtKes(budgetOf(p))}`, w: burnOf(p), c: burnOf(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
 
   return (
     <>
@@ -87,7 +81,8 @@ export default function ProjectsView() {
           <p>Every funded project and deployment on one code — budget, milestones, deliverables, drawdowns and field activity, tying CRM, Finance and Deployment together.</p>
         </div>
         <div className="actions">
-          <button className="btn primary" onClick={openProjectForm}><PlusI />New project</button>
+          {tab === "pr-projects" && <button className="btn primary" onClick={openProjectForm}><PlusI />New project</button>}
+          {tab === "pr-field" && <button className="btn primary" onClick={openFieldActivity}><PlusI />Add field activity</button>}
         </div>
       </div>
       <Crumb view="projects" />
@@ -99,13 +94,13 @@ export default function ProjectsView() {
             <div className="panel">
               <div className="panel-h"><h3>Portfolio budget by project</h3><span className="meta">allocation</span></div>
               <div className="pad" style={{ display: "flex", alignItems: "center", gap: 24 }}>
-                <Donut segs={donutSegs} big={fmtM(budgetTotal)} small="budget" />
+                <Donut segs={donutSegs} big={fmtKes(budgetTotal)} small="budget" />
                 <div style={{ flex: 1 }}><ChartLegend segs={donutSegs} /></div>
               </div>
             </div>
             <div className="panel">
-              <div className="panel-h"><h3>Burn by project</h3><span className="meta">spent as % of budget</span></div>
-              <div className="pad"><Bars rows={burnRows} /></div>
+              <div className="panel-h"><h3>Budget vs spent by project</h3><span className="meta">spent as % of budget</span></div>
+              <div className="pad">{burnRows.length ? <Bars rows={burnRows} /> : <Note>No budgeted projects yet.</Note>}</div>
             </div>
           </div>
           <div className="panel" style={{ marginTop: 18 }}>
@@ -166,15 +161,15 @@ export default function ProjectsView() {
           <div className="grid g-2">
             <div className="panel">
               <div className="panel-h"><h3>Budget vs actual</h3><span className="meta">spent as % of budget</span></div>
-              <div className="pad"><StaticBars rows={burnRows} /></div>
+              <div className="pad">{burnRows.length ? <StaticBars rows={burnRows} /> : <Note>No budgeted projects yet.</Note>}</div>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Variance &amp; forecast</h3><span className="meta">portfolio</span></div>
-              <div className="recon"><span>Total portfolio budget</span><span className="mono">{fmtM(budgetTotal)}</span></div>
-              <div className="recon"><span>Committed &amp; spent</span><span className="mono">{fmtM(spentTotal)} · {burnPct}%</span></div>
-              <div className="recon"><span>Remaining</span><span className="mono">{fmtM(remaining)}</span></div>
+              <div className="recon"><span>Total portfolio budget</span><span className="mono">{fmtKes(budgetTotal)}</span></div>
+              <div className="recon"><span>Recognised spend</span><span className="mono">{fmtKes(spentTotal)} · {burnPct}%</span></div>
+              <div className="recon"><span>Remaining</span><span className="mono">{fmtKes(remaining)}</span></div>
               <div className="recon"><span>Projects over 80% burn</span><span className={`pill ${overBurn ? "today" : "done"}`}>{overBurn}</span></div>
-              <Note>Project budgets, cost centres and procurement all post to the same project codes in Finance. USD grants are shown at an indicative KES rate for the portfolio total.</Note>
+              <Note>Spend is recognised as milestones are completed — each completed milestone draws down its amount. Project budgets and cost centres post to the same project codes in Finance.</Note>
             </div>
           </div>
         </div>
@@ -247,25 +242,23 @@ export default function ProjectsView() {
 
       {tab === "pr-field" && (
         <div className="proj-panel active">
-          <div className="grid g-2">
-            <div className="panel">
-              <div className="panel-h"><h3>Field activity by project</h3><span className="meta">visits · installs · assessments</span></div>
-              {fieldRows.map((p) => (
-                <div className="task" key={p.name} onClick={() => openProject(p.name)} style={{ cursor: "pointer" }}>
-                  <span className="id" style={{ color: p.c }}>{p.short}</span>
-                  <span className="txt">{p.field}<small>{p.team}</small></span>
-                  <span className="pill done">Logged</span>
-                </div>
-              ))}
-              {!fieldRows.length && <Note>No field activity logged yet.</Note>}
-            </div>
-            <div className="panel">
-              <div className="panel-h"><h3>Activity summary</h3><span className="meta">across projects</span></div>
-              <div className="recon"><span>Projects with field activity</span><span className="mono">{fieldRows.length}</span></div>
-              <div className="recon"><span>Logged activities (approx.)</span><span className="mono">{fieldRows.reduce((a, p) => a + leadNum(p.field), 0)}</span></div>
-              <div className="recon"><span>Field teams engaged</span><span className="mono">{new Set(fieldRows.map((p) => p.team)).size}</span></div>
-              <Note>Field activity carries the readiness-scoring assessment data and flows to Deployment and project cost allocation.</Note>
-            </div>
+          <div className="panel">
+            <div className="panel-h"><h3>Field activity</h3><span className="meta">people assigned to check sites</span></div>
+            <table className="tbl">
+              <thead><tr><th>Project</th><th>Assignee</th><th>Contact</th><th>Date</th><th>Task</th></tr></thead>
+              <tbody>
+                {fieldActivities.map((a) => (
+                  <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => openProject(a.project)}>
+                    <td><strong>{a.project}</strong></td>
+                    <td>{a.assignee}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{[a.phone, a.email].filter(Boolean).join(" · ") || "—"}</td>
+                    <td className="mono">{a.date}</td>
+                    <td>{a.note || "—"}</td>
+                  </tr>
+                ))}
+                {!fieldActivities.length && <tr><td colSpan={5}><Note>No field activity yet — click <strong>+ Add field activity</strong> to assign someone to check a site.</Note></td></tr>}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
