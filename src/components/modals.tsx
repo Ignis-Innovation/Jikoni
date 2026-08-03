@@ -53,38 +53,57 @@ export function InviteModal() {
   );
 }
 
-/* ================= ASSIGN TASK ================= */
+/* ================= ADD / ASSIGN TASK (with mini-tasks) ================= */
 export function TaskModal() {
-  const { taskOpen, closeTask, saveTask, toast } = useApp();
+  const { taskOpen, taskMode, closeTask, createTask, members, me, toast } = useApp();
+  const assign = taskMode === "assign";
+  const others = members.filter((m) => m.email !== me?.email && m.state !== "invited");
   const [title, setTitle] = useState("");
-  const [owner, setOwner] = useState("Wanjiku");
+  const [assignee, setAssignee] = useState("");
   const [due, setDue] = useState("week");
   const [link, setLink] = useState("");
+  const [subs, setSubs] = useState<string[]>([]);
+  const [subDraft, setSubDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (taskOpen) {
-      setTitle(""); setOwner("Wanjiku"); setDue("week"); setLink("");
+      setTitle(""); setAssignee(others[0]?.email ?? ""); setDue("week"); setLink(""); setSubs([]); setSubDraft("");
       setTimeout(() => inputRef.current?.focus(), 60);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskOpen]);
 
+  function addSub() {
+    const t = subDraft.trim();
+    if (!t) return;
+    setSubs((s) => [...s, t]); setSubDraft("");
+  }
   function save() {
     if (!title.trim()) { toast("Add a task description", "It can't be empty"); return; }
-    saveTask(title.trim(), owner, due, link);
+    if (assign && !assignee) { toast("Pick who it's for", "Choose a teammate to assign this to"); return; }
+    // fold any half-typed sub-task into the list
+    const allSubs = subDraft.trim() ? [...subs, subDraft.trim()] : subs;
+    createTask({ title: title.trim(), due, link: link.trim(), assigneeEmail: assign ? assignee : undefined, subtasks: allSubs });
   }
 
   return (
     <ModalShell open={taskOpen} onClose={closeTask}>
-      <div className="mh"><h3>Assign a task</h3><p>It lands in the assignee's My Week and notifies them.</p></div>
+      <div className="mh">
+        <h3>{assign ? "Assign a task" : "Add a task"}</h3>
+        <p>{assign ? "It lands in the assignee's My Week, notifies them and emails them." : "It's added to your own My Week. Break it into mini-tasks if you like."}</p>
+      </div>
       <div className="mb">
         <div><label>Task</label><input ref={inputRef} className="field" placeholder="e.g. Send EAIF the updated financial model" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
         <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label>Assign to</label>
-            <select className="field" style={{ width: "100%" }} value={owner} onChange={(e) => setOwner(e.target.value)}>
-              <option>Wanjiku</option><option>Dennis</option><option>Brian</option><option>Joan</option><option>Wilson</option><option>Elizabeth</option><option>Lily</option>
-            </select>
-          </div>
+          {assign && (
+            <div style={{ flex: 1 }}>
+              <label>Assign to</label>
+              <select className="field" style={{ width: "100%" }} value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+                {others.length === 0 && <option value="">No teammates yet</option>}
+                {others.map((m) => <option key={m.email} value={m.email}>{m.name}</option>)}
+              </select>
+            </div>
+          )}
           <div style={{ flex: 1 }}>
             <label>Due</label>
             <select className="field" style={{ width: "100%" }} value={due} onChange={(e) => setDue(e.target.value)}>
@@ -92,18 +111,31 @@ export function TaskModal() {
             </select>
           </div>
         </div>
+        <div><label>Link / context <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" placeholder="e.g. ENG-012 · Charm Impact" value={link} onChange={(e) => setLink(e.target.value)} /></div>
         <div>
-          <label>Link to (optional)</label>
-          <select className="field" style={{ width: "100%" }} value={link} onChange={(e) => setLink(e.target.value)}>
-            <option value="">— none —</option>
-            <option>ENG-002 · IEA</option><option>ENG-012 · Charm Impact</option><option>DST-004 · Makueni VTC</option>
-            <option>Finance &amp; Accounting</option><option>Deployment &amp; Carbon</option><option>Fundraise &amp; Diligence</option>
-          </select>
+          <label>Mini-tasks <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          {subs.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+              {subs.map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                  <span style={{ color: "var(--ink-soft)" }}>•</span>
+                  <span style={{ flex: 1 }}>{s}</span>
+                  <button className="btn" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setSubs((x) => x.filter((_, j) => j !== i))}>Remove</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <input className="field" style={{ flex: 1 }} placeholder="Add a mini-task and press Enter" value={subDraft}
+              onChange={(e) => setSubDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSub(); } }} />
+            <button className="btn" onClick={addSub}>Add</button>
+          </div>
         </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeTask}>Cancel</button>
-        <button className="btn primary" onClick={save}>Assign task</button>
+        <button className="btn primary" onClick={save}>{assign ? "Assign task" : "Add task"}</button>
       </div>
     </ModalShell>
   );

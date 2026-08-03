@@ -167,9 +167,13 @@ interface AppApi {
   taskFilter: "mine" | "team";
   setTaskFilter: (f: "mine" | "team") => void;
   taskOpen: boolean;
-  openTask: () => void;
+  taskMode: "personal" | "assign";
+  openTask: (mode?: "personal" | "assign") => void;
   closeTask: () => void;
-  saveTask: (title: string, owner: string, due: string, link: string) => void;
+  createTask: (v: { title: string; due: string; link: string; assigneeEmail?: string; subtasks: string[] }) => void;
+  addSubtask: (ref: string, text: string) => void;
+  toggleSubtask: (ref: string, idx: number) => void;
+  setTaskDone: (ref: string, done: boolean) => void;
 
   engId: string | null;
   vendorName: string | null;
@@ -448,6 +452,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [myWeek, setMyWeek] = useState<WeekTask[]>(initialMyWeek);
   const [taskFilter, setTaskFilter] = useState<"mine" | "team">("mine");
   const [taskOpen, setTaskOpen] = useState(false);
+  const [taskMode, setTaskMode] = useState<"personal" | "assign">("personal");
 
   const [engId, setEngId] = useState<string | null>(null);
   const [vendorName, setVendorName] = useState<string | null>(null);
@@ -549,6 +554,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { toast("Couldn't load records", error.message); return false; }
     setMe((data.me as Me) ?? null);   // who's actually signed in — drives the sidebar identity
     setMyWeek(data.tasks as WeekTask[]);
+    // Richer task read: subtasks + owner/assigner, so My Week can expand mini-tasks and
+    // filter "Mine" by the real signed-in user. Overrides bootstrap's lean tasks payload.
+    const { data: taskRows } = await supabase
+      .from("tasks")
+      .select("ref, title, sub, owner_name, due_pill, due_label, subtasks, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
+      .eq("state", "open")
+      .order("created_at", { ascending: false });
+    if (taskRows) setMyWeek((taskRows as any[]).map((r) => {
+      const owner = Array.isArray(r.owner) ? r.owner[0] : r.owner;
+      const assigner = Array.isArray(r.assigner) ? r.assigner[0] : r.assigner;
+      return {
+        id: r.ref, t: r.title, s: r.sub, o: r.owner_name, p: r.due_pill, pl: r.due_label,
+        subtasks: (r.subtasks ?? []) as { text: string; done: boolean }[],
+        ownerEmail: owner?.email, assignedBy: assigner?.name && assigner.name !== r.owner_name ? assigner.name : undefined,
+      } as WeekTask;
+    }));
     setReqs(data.reqs as Req[]);
     setNewPOs(data.pos as NewPO[]);
     setNewInvoices(data.salesInvoices as NewInvoice[]);
@@ -905,16 +926,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- tasks ---------- */
-  async function saveTask(title: string, owner: string, due: string, link: string) {
-    const { data, error } = await supabase.rpc("save_task", {
-      p_title: title, p_owner: owner, p_due_key: due, p_link: link,
+  // Replace or update one task in My Week from a returned task_json (drop it if done/absent).
+  const upsertTask = (t: WeekTask | null, ref?: string) =>
+    setMyWeek((w) => {
+      const key = t?.id ?? ref;
+      const without = w.filter((x) => x.id !== key);
+      return t ? [t, ...without] : without;
+    });
+  async function createTask(v: { title: string; due: string; link: string; assigneeEmail?: string; subtasks: string[] }) {
+    const assignee = v.assigneeEmail && v.assigneeEmail !== me?.email ? v.assigneeEmail : null;
+    const { data, error } = await supabase.rpc("create_task", {
+      p_title: v.title, p_owner_email: assignee, p_due_key: v.due, p_link: v.link || "",
+      p_subtasks: v.subtasks.filter((s) => s.trim()),
     });
     if (error) { toast("Task not saved", error.message); return; }
-    setMyWeek((w) => [data as WeekTask, ...w]);
+    const task = data as WeekTask;
+    setMyWeek((w) => [task, ...w.filter((x) => x.id !== task.id)]);
     setTaskOpen(false);
-    if (owner !== "Wanjiku") setTaskFilter("team");
-    toast("Task assigned to " + owner, owner === "Wanjiku" ? "Added to your My Week" : `Now in ${owner}'s My Week — switched to Team view so you can see it`);
+    // assigned to someone else → email them too (best-effort; the in-app bell is already written)
+    if (assignee) {
+      setTaskFilter("team");
+      const who = members.find((m) => m.email === assignee);
+      try {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+          body: JSON.stringify({
+            to: assignee,
+            subject: `${me?.name ?? "A teammate"} assigned you a task`,
+            text: `Hi ${who?.name ?? ""},\n\n${me?.name ?? "A teammate"} assigned you a task: ${v.title}.${v.subtasks.filter((s) => s.trim()).length ? `\n\nSub-tasks:\n- ${v.subtasks.filter((s) => s.trim()).join("\n- ")}` : ""}\n\nOpen Jikoni Tool → Home → My Week to see it.`,
+            html: `<p>Hi ${who?.name ?? ""},</p><p><strong>${me?.name ?? "A teammate"}</strong> assigned you a task: <strong>${v.title}</strong>.</p>${v.subtasks.filter((s) => s.trim()).length ? `<p>Sub-tasks:</p><ul>${v.subtasks.filter((s) => s.trim()).map((s) => `<li>${s}</li>`).join("")}</ul>` : ""}<p>Open <strong>Jikoni Tool → Home → My Week</strong> to see it.</p>`,
+          }),
+        });
+      } catch { /* email is best-effort; the in-app notification still lands */ }
+      toast("Task assigned to " + task.o, `Now in ${task.o}'s My Week · emailed`);
+    } else {
+      toast("Task added", "It's in your My Week");
+    }
   }
+  const applyTaskRpc = async (fn: string, args: Record<string, unknown>, ref: string, doneRemoved = false) => {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) { toast("Couldn't update task", error.message); return; }
+    upsertTask(doneRemoved ? null : (data as WeekTask), ref);
+  };
+  const addSubtask = (ref: string, text: string) => applyTaskRpc("add_task_subtask", { p_ref: ref, p_text: text }, ref);
+  const toggleSubtask = (ref: string, idx: number) => applyTaskRpc("toggle_task_subtask", { p_ref: ref, p_idx: idx }, ref);
+  const setTaskDone = (ref: string, done: boolean) => applyTaskRpc("set_task_done", { p_ref: ref, p_done: done }, ref, done);
 
   /* ---------- drawers & cross-links ---------- */
   function closeAllDrawers() {
@@ -1920,7 +1977,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     entity, cycleEntity,
     toasts, toast,
     myWeek, taskFilter, setTaskFilter,
-    taskOpen, openTask: () => setTaskOpen(true), closeTask: () => setTaskOpen(false), saveTask,
+    taskOpen, taskMode, openTask: (mode: "personal" | "assign" = "personal") => { setTaskMode(mode); setTaskOpen(true); },
+    closeTask: () => setTaskOpen(false), createTask, addSubtask, toggleSubtask, setTaskDone,
     engId, vendorName, projectName, accessEmail,
     openEng, closeEng: () => setEngId(null),
     openVendor: (n) => setVendorName(n), closeVendor: () => setVendorName(null),

@@ -1,6 +1,6 @@
 import { useApp } from "../store";
 import { Pulse, Note } from "../components/ui";
-import { Bars, StaticBars, GroupedBars } from "../components/charts";
+import { StaticBars } from "../components/charts";
 import { useUsdKesRate } from "../lib/fx";
 import { useState } from "react";
 import { Crumb } from "../nav";
@@ -48,10 +48,6 @@ export default function ProjectsView() {
     if (usd) return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n).toLocaleString()}`;
     return fmtKes(kes);
   };
-  const moneyShort = (kes: number) => {                       // compact label for graph bars
-    const n = conv(kes), sym = usd ? "$" : "";
-    return n >= 1e6 ? `${sym}${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${sym}${Math.round(n / 1e3)}k` : `${sym}${Math.round(n)}`;
-  };
 
   // one source of truth: every project the backend returns, keyed by name
   const list = Object.entries(projectDetails).map(([name, d], i) => ({
@@ -86,10 +82,8 @@ export default function ProjectsView() {
     { k: "Reports due", tick: reportsDue.length ? "t-red" : "t-blue", v: String(reportsDue.length), d: "funder obligations", dc: "flat" as const },
     { k: "Field activities", tick: "t-blue", v: String(fieldActivities.length), d: "assigned", dc: "flat" as const },
   ];
-  // budget-vs-spent per project: the bar fills to burn %, labelled "spent / budget" (in the view currency)
+  // budget-vs-spent per project (used by the Budgets tab): fill = burn %, labelled "spent / budget"
   const burnRows = budgeted.map((p) => ({ l: p.short, n: `${money(spentOf(p))} / ${money(budgetOf(p))}`, w: burnOf(p), c: burnOf(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
-  // grouped bar graph: budget vs spent (stored KES) for each budgeted project
-  const budgetGroups = budgeted.map((p) => ({ l: p.short, a: budgetOf(p), b: spentOf(p) }));
 
   return (
     <>
@@ -123,7 +117,7 @@ export default function ProjectsView() {
               </div>
             </div>
             <div className="pad">
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: burnRows.length ? 20 : 0 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: budgeted.length ? 22 : 0 }}>
                 {[
                   { k: "Portfolio budget", v: money(budgetTotal), c: "var(--ink)" },
                   { k: "Spent to date", v: money(spentTotal), c: "var(--ember)" },
@@ -136,23 +130,27 @@ export default function ProjectsView() {
                   </div>
                 ))}
               </div>
-              {burnRows.length
-                ? <Bars rows={burnRows} />
-                : <Note>No budgeted projects yet — add a budget on a project to see its burn here.</Note>}
+              {budgeted.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+                  {budgeted.map((p) => {
+                    const pct = burnOf(p);
+                    const barC = pct >= 80 ? "var(--red)" : pct >= 50 ? "var(--ember)" : "var(--flame)";
+                    return (
+                      <div key={p.name}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, gap: 12 }}>
+                          <span style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}</span>
+                          <span className="mono" style={{ fontSize: 12, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{money(spentOf(p))} / {money(budgetOf(p))} · {pct}%</span>
+                        </div>
+                        <div style={{ height: 12, borderRadius: 6, background: "var(--line)", overflow: "hidden" }}>
+                          <div style={{ width: `${Math.min(pct, 100)}%`, height: "100%", borderRadius: 6, background: barC, transition: "width .6s ease" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <Note>No budgeted projects yet — add a budget on a project to see it here.</Note>}
             </div>
           </div>
-          {budgetGroups.length > 0 && (
-            <div className="panel" style={{ marginTop: 18 }}>
-              <div className="panel-h"><h3>Budget vs spent by project</h3><span className="meta">{view} per project</span></div>
-              <div className="pad">
-                <GroupedBars groups={budgetGroups} fmt={moneyShort} />
-                <div style={{ display: "flex", gap: 20, justifyContent: "center", marginTop: 6, fontSize: 12.5 }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--flame)" }} />Budget</span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--ember)" }} />Spent</span>
-                </div>
-              </div>
-            </div>
-          )}
           <div className="panel" style={{ marginTop: 18 }}>
             <div className="panel-h"><h3>Needs attention</h3><span className="meta">across the portfolio</span></div>
             {milestonesDue.slice(0, 2).map((m) => (
@@ -200,11 +198,11 @@ export default function ProjectsView() {
                     <td><span className={`pill ${statusPill(p.status)}`}>{p.status || "Setup"}</span></td>
                     <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                       {p.createdByMe && (
-                        <>
-                          <button className="btn" style={{ padding: "5px 10px", fontSize: 12 }} onClick={() => openProjectEdit(p.name)}>Edit</button>{" "}
-                          <button className="btn" style={{ padding: "5px 10px", fontSize: 12, color: "var(--red)" }}
+                        <div style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", whiteSpace: "nowrap" }}>
+                          <button className="btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => openProjectEdit(p.name)}>Edit</button>
+                          <button className="btn" style={{ padding: "5px 12px", fontSize: 12, color: "var(--red)" }}
                             onClick={() => { if (confirm(`Delete "${p.name}"? This removes its milestones, drawdowns and field activity. This can't be undone.`)) deleteProject(p.name); }}>Delete</button>
-                        </>
+                        </div>
                       )}
                     </td>
                   </tr>

@@ -36,13 +36,17 @@ export const teamColors: Record<string, string> = {
   Lily: "#A16207",
 };
 
+export interface SubTask { text: string; done: boolean }
 export interface WeekTask {
   id: string;
   t: string;
   s: string;
-  o: string;
+  o: string;              // owner (assignee) name — denormalised
   p: string;
   pl: string;
+  subtasks?: SubTask[];   // mini-tasks
+  assignedBy?: string;    // set when someone else assigned it to the owner
+  ownerEmail?: string;    // owner's email — drives the "Mine" filter
 }
 
 // Seeded demo rows removed — these start empty and fill from real data.

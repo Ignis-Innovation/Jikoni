@@ -180,7 +180,7 @@ function Topbar() {
           onKeyDown={(e) => { if (e.key === "Enter") toast("Search", "Global search across every module"); }}
         />
       </div>
-      <div className="iconbtn" onClick={openTask} title="Add task" style={{ fontWeight: 600 }}>
+      <div className="iconbtn" onClick={() => openTask("personal")} title="Add task" style={{ fontWeight: 600 }}>
         <PlusI width={18} height={18} />
       </div>
       <NotifBell />
