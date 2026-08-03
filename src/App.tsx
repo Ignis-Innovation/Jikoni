@@ -76,8 +76,9 @@ function NavModule({ v, icon, badge, badgeCls, collapsed, setCollapsed }: {
 }
 
 function Sidebar() {
-  const { view, entity, cycleEntity, me, perms, notifications, signOut } = useApp();
+  const { view, entity, cycleEntity, me, perms, notifications, signOut, go, setSettingsTab } = useApp();
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
+  const openProfile = () => { setSettingsTab("s-profile"); go("settings"); };
   const canUsers = canManageUsers(perms, me?.email);
   // CRM badge counts only unseen CRM notifications — it appears only when there's
   // something new the user hasn't opened yet.
@@ -138,8 +139,8 @@ function Sidebar() {
       </nav>
 
       <div className="me">
-        <div className="av">{initial}</div>
-        <div className="info">
+        <div className="av" style={{ background: me?.color || undefined, cursor: "pointer" }} onClick={openProfile} title="Edit profile">{initial}</div>
+        <div className="info" onClick={openProfile} style={{ cursor: "pointer" }} title="Edit profile">
           <div className="n">{me?.name || "…"}</div>
           <div className="r">{me?.roleTitle || "Member"}</div>
         </div>

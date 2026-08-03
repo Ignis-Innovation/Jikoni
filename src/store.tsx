@@ -136,7 +136,8 @@ export interface ComplianceData {
 }
 
 // the signed-in person (from bootstrap's `me`, keyed off the JWT email)
-export interface Me { name: string; email: string; roleTitle: string | null }
+export interface Me { name: string; email: string; roleTitle: string | null; color?: string | null }
+export interface OAuthStatus { google?: { connected: boolean; email?: string | null } | null; claude?: { connected: boolean } | null }
 
 // a real member row from public.app_users (replaces the old hardcoded demo list)
 export interface Member {
@@ -274,6 +275,16 @@ interface AppApi {
   appConfig: Record<string, number | boolean | string>;
   setAppConfig: (key: string, value: number | boolean | string) => void;
   audit: AuditRow[];
+
+  // Settings: profile self-edit, password, deep-link tab, and live integration status
+  settingsTab: string;
+  setSettingsTab: (t: string) => void;
+  updateMyProfile: (v: { name: string; roleTitle: string; color: string }) => void;
+  changePassword: (password: string) => Promise<string | null>;
+  oauthStatus: OAuthStatus;
+  refreshOAuthStatus: () => void;
+  connectClaude: (key: string) => Promise<string | null>;
+  sendMyDigest: () => void;
 
   projectDetails: Record<string, ProjectDetail>;
   extraProjects: { name: string; funder: string }[];
@@ -462,6 +473,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [perms, setPerms] = useState(initialPerms);
   const [me, setMe] = useState<Me | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [settingsTab, setSettingsTab] = useState("s-org");
+  const [oauthStatus, setOauthStatus] = useState<OAuthStatus>({});
   const [inviteOpen, setInviteOpen] = useState(false);
 
   const [reqOpen, setReqOpen] = useState(false);
@@ -584,6 +597,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       name: m.name, email: m.email, roleKey: m.role_key, roleTitle: m.role_title,
       twoFa: !!m.two_fa, status: m.status, state: m.state, color: m.color,
     })));
+    // my avatar colour (for the profile editor) + live integration status
+    const myColor = ((memberRows ?? []) as any[]).find((m) => m.email === (data.me as Me)?.email)?.color;
+    if (myColor) setMe((prev) => (prev ? { ...prev, color: myColor } : prev));
+    const { data: oa } = await supabase.rpc("oauth_status");
+    if (oa) setOauthStatus(oa as OAuthStatus);
     setProjectDetails(data.projects as Record<string, ProjectDetail>);
     setExtraProjects(data.extraProjects as { name: string; funder: string }[]);
     setEngToProject(data.engToProject as Record<string, string>);
@@ -899,6 +917,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
+  // Returning from the Google OAuth consent screen (api/google-callback → ?connected=…).
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get("connected");
+    if (!p) return;
+    if (p === "google") { setView("settings"); setSettingsTab("s-integ"); toast("Google connected", "Gmail & Drive are now linked"); refreshOAuthStatus(); }
+    else if (p === "google_error") toast("Google not connected", "The connection was cancelled or failed");
+    window.history.replaceState({}, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clicking a module header lands on its overview/home tab. Inventory & HR have
   // no visible "Overview" subnav item, so this is what shows their overview.
   const MODULE_HOME: Record<string, string> = {
@@ -1160,6 +1188,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { toast("Setting not saved", error.message); return; }
     setAppConfigState((prev) => ({ ...prev, [key]: value }));
     toast("Setting saved", `${key} = ${value}`);
+  }
+
+  /* ---------- settings: my profile, password, integrations, digest ---------- */
+  async function updateMyProfile(v: { name: string; roleTitle: string; color: string }) {
+    const { data, error } = await supabase.rpc("update_my_profile", { p_name: v.name, p_role_title: v.roleTitle, p_color: v.color });
+    if (error) { toast("Profile not saved", error.message); return; }
+    setMe(data as Me);
+    await loadFromDb();   // refresh the roster so avatars/names update everywhere
+    toast("Profile updated", "Your details are saved");
+  }
+  // Change the signed-in user's password. Returns an error string, or null on success.
+  async function changePassword(password: string): Promise<string | null> {
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) return error.message;
+    toast("Password changed", "Use your new password next time you sign in");
+    return null;
+  }
+  async function refreshOAuthStatus() {
+    const { data } = await supabase.rpc("oauth_status");
+    if (data) setOauthStatus(data as OAuthStatus);
+  }
+  // Validate + vault an Anthropic key server-side. Returns an error string, or null on success.
+  async function connectClaude(key: string): Promise<string | null> {
+    try {
+      const res = await fetch("/api/connect-claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+        body: JSON.stringify({ key }),
+      });
+      const j = await res.json();
+      if (!res.ok) return j.error || "Couldn't connect Claude";
+      await refreshOAuthStatus();
+      toast("Claude connected", "AI features can now use your Anthropic key");
+      return null;
+    } catch (e: any) { return e.message || "Network error"; }
+  }
+  async function sendMyDigest() {
+    try {
+      const res = await fetch("/api/digest?me=1", { method: "POST", headers: { Authorization: `Bearer ${session?.access_token ?? ""}` } });
+      const j = await res.json();
+      if (!res.ok) { toast("Digest not sent", j.error || "Try again"); return; }
+      toast("Digest sent", `Check ${me?.email ?? "your inbox"} — sent via Gmail`);
+    } catch (e: any) { toast("Digest not sent", e.message || "Network error"); }
   }
 
   /* ---------- sales invoice (VAT + GL + eTIMS intent in the DB) ---------- */
@@ -2006,6 +2077,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     poAmendFor, openPoAmend: (po: PORow) => setPoAmendFor(po), closePoAmend: () => setPoAmendFor(null), amendPo, approvePoAmendment,
     bankChangeFor, openBankChange: (v: string) => setBankChangeFor(v), closeBankChange: () => setBankChangeFor(null), requestBankChange, approveBankChange, bankChanges,
     appConfig, setAppConfig, audit,
+    settingsTab, setSettingsTab, updateMyProfile, changePassword,
+    oauthStatus, refreshOAuthStatus, connectClaude, sendMyDigest,
     projectDetails, extraProjects, engToProject, projectToEng, createProjectFromEng,
     projectFormOpen, openProjectForm: () => setProjectFormOpen(true), closeProjectForm: () => setProjectFormOpen(false), createProject,
     projectEdit, openProjectEdit: (name: string) => setProjectEdit(name), closeProjectEdit: () => setProjectEdit(null), updateProject, deleteProject,
