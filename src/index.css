@@ -417,7 +417,10 @@
   @media(prefers-reduced-motion){*{animation:none!important;transition:none!important}}
 
   /* ===================== Public careers page ===================== */
-  .careers{min-height:100vh;background:var(--counter);display:flex;flex-direction:column}
+  /* Public pages scroll as a normal document — undo the app-shell body layout. */
+  body.public{display:block;overflow:auto}
+  body.public #root{display:block;height:auto;min-height:100vh}
+  .careers{width:100%;min-height:100vh;background:var(--counter);display:flex;flex-direction:column}
   .crs-nav{display:flex;align-items:center;gap:12px;padding:14px 26px;background:rgba(255,255,255,.82);backdrop-filter:saturate(140%) blur(10px);
     border-bottom:1px solid var(--hairline-2);position:sticky;top:0;z-index:10}
   .crs-nav .mark{width:36px;height:36px;border-radius:10px;background:#fff;border:1px solid var(--hairline-2);display:grid;place-items:center;flex-shrink:0;
