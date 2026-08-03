@@ -1,6 +1,6 @@
 import { useApp } from "../store";
 import { Pulse, Note } from "../components/ui";
-import { Bars, StaticBars } from "../components/charts";
+import { Bars, StaticBars, GroupedBars } from "../components/charts";
 import { Crumb } from "../nav";
 import { PlusI } from "../components/icons";
 import type { ProjectDetail } from "../data";
@@ -71,6 +71,10 @@ export default function ProjectsView() {
   ];
   // budget-vs-spent per project: the bar fills to burn %, labelled "spent / budget"
   const burnRows = budgeted.map((p) => ({ l: p.short, n: `${fmtKes(spentOf(p))} / ${fmtKes(budgetOf(p))}`, w: burnOf(p), c: burnOf(p) >= 67 ? "var(--ember)" : "var(--flame)" }));
+  // grouped bar graph: budget vs spent (absolute KES) for each budgeted project
+  const budgetGroups = budgeted.map((p) => ({ l: p.short, a: budgetOf(p), b: spentOf(p) }));
+  // compact money for the graph's bar labels: "12.0M" / "850k" / "0"
+  const fmtShort = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n));
 
   return (
     <>
@@ -110,6 +114,18 @@ export default function ProjectsView() {
                 : <Note>No budgeted projects yet — add a budget on a project to see its burn here.</Note>}
             </div>
           </div>
+          {budgetGroups.length > 0 && (
+            <div className="panel" style={{ marginTop: 18 }}>
+              <div className="panel-h"><h3>Budget vs spent by project</h3><span className="meta">KES per project</span></div>
+              <div className="pad">
+                <GroupedBars groups={budgetGroups} fmt={fmtShort} />
+                <div style={{ display: "flex", gap: 20, justifyContent: "center", marginTop: 6, fontSize: 12.5 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--flame)" }} />Budget</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "var(--ember)" }} />Spent</span>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="panel" style={{ marginTop: 18 }}>
             <div className="panel-h"><h3>Needs attention</h3><span className="meta">across the portfolio</span></div>
             {milestonesDue.slice(0, 2).map((m) => (

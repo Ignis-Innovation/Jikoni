@@ -64,6 +64,35 @@ export function VBars({ items, color }: { items: { l: string; v: number }[]; col
   );
 }
 
+// Grouped vertical bar chart — two bars per group (e.g. budget vs spent per project),
+// value labels above each bar and the group label below. Scales to the tallest bar.
+export interface BarGroup { l: string; a: number; b: number }
+export function GroupedBars({ groups, aColor = "var(--flame)", bColor = "var(--ember)", fmt = (n: number) => String(n) }:
+  { groups: BarGroup[]; aColor?: string; bColor?: string; fmt?: (n: number) => string }) {
+  const max = Math.max(...groups.flatMap((g) => [g.a, g.b]), 1);
+  const groupW = 120, bw = 32, gap = 10, top = 24, plotH = 150, bottom = 28;
+  const H = top + plotH + bottom, W = Math.max(groups.length * groupW, groupW);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="xMidYMid meet">
+      <line x1="0" y1={top + plotH} x2={W} y2={top + plotH} stroke="var(--line)" strokeWidth="1" />
+      {groups.map((g, i) => {
+        const cx = i * groupW + groupW / 2;
+        const ax = cx - bw - gap / 2, bx = cx + gap / 2;
+        const ah = (g.a / max) * plotH, bh = (g.b / max) * plotH;
+        return (
+          <g key={i}>
+            <rect x={ax.toFixed(1)} y={(top + plotH - ah).toFixed(1)} width={bw} height={Math.max(ah, 1).toFixed(1)} rx="3" fill={aColor} />
+            <rect x={bx.toFixed(1)} y={(top + plotH - bh).toFixed(1)} width={bw} height={Math.max(bh, 1).toFixed(1)} rx="3" fill={bColor} />
+            <text x={(ax + bw / 2).toFixed(1)} y={(top + plotH - ah - 6).toFixed(1)} textAnchor="middle" fontSize="9.5" fontFamily="IBM Plex Mono,monospace" fill="#74695D">{fmt(g.a)}</text>
+            <text x={(bx + bw / 2).toFixed(1)} y={(top + plotH - bh - 6).toFixed(1)} textAnchor="middle" fontSize="9.5" fontFamily="IBM Plex Mono,monospace" fill="#74695D">{fmt(g.b)}</text>
+            <text x={cx.toFixed(1)} y={top + plotH + 18} textAnchor="middle" fontSize="11" fill="#1A1512">{g.l}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export interface BarRow { l: string; n: string; w: number; c: string }
 
 // Animated horizontal bar rows — fill widths transition in on mount.
