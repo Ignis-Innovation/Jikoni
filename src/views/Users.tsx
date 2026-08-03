@@ -124,7 +124,7 @@ export default function UsersView() {
                   <td><span className={`tag ${rm[0]}`}>{rm[1]}</span></td>
                   <td><span className="acc-chip none">Set on first sign-in</span></td>
                   <td>—</td>
-                  <td><span className="dot-s"><i className="away-i" />Invited</span></td>
+                  <td><span className="dot-s" title="Invited — hasn't signed in yet"><i className="away-i" />Pending sign-in</span></td>
                   <td>
                     <button className="btn" style={{ padding: "6px 11px", fontSize: 12 }} onClick={() => openAccess(u.email)}>
                       <LockSmI />Manage access
