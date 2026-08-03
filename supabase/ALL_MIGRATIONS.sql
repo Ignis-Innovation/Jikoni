@@ -8172,3 +8172,37 @@ begin
     execute format('grant execute on function public.%s to authenticated', fn);
   end loop;
 end $$;
+
+-- ===================================================================
+-- 0042_invited_stay_pending_until_signin.sql
+-- Invited members stay "Pending sign-in" until they actually log in.
+-- ===================================================================
+create or replace function public.link_auth_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update public.app_users set auth_id = new.id, updated_at = now()
+  where email = new.email and auth_id is null;
+
+  if new.last_sign_in_at is not null then
+    update public.app_users set state = 'active', status = 'active', updated_at = now()
+    where email = new.email and state = 'invited';
+    update public.invites set state = 'accepted', updated_at = now()
+    where email = new.email and state = 'sent';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert or update on auth.users
+  for each row execute function public.link_auth_user();
+
+alter table public.app_users disable trigger state_machine;
+update public.app_users au
+set state = 'invited', status = 'off', updated_at = now()
+where au.state = 'active'
+  and not exists (
+    select 1 from auth.users u
+    where u.email = au.email and u.last_sign_in_at is not null
+  );
+alter table public.app_users enable trigger state_machine;
