@@ -47,6 +47,7 @@ export interface WeekTask {
   subtasks?: SubTask[];   // mini-tasks
   assignedBy?: string;    // set when someone else assigned it to the owner
   ownerEmail?: string;    // owner's email — drives the "Mine" filter
+  due?: string;           // ISO due date (YYYY-MM-DD) — drives overdue/due-soon flags
 }
 
 // Seeded demo rows removed — these start empty and fill from real data.
@@ -177,6 +178,7 @@ export interface ProjectDetail {
   spentAmount?: number;    // sum of completed-milestone amounts, recognised as spend
   startDate?: string;
   endDate?: string;
+  updatedAt?: string;      // last time the project record changed — drives "Last update" + stale flag
   timeline: string;
   team: string;
   location?: string;       // free-text site/location; feeds the field-activity email

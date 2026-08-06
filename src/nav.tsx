@@ -15,7 +15,6 @@ export const moduleLabels: Record<string, string> = {
 
 export const subnavs: Record<string, { t: string; l: string }[]> = {
   finance: [
-    { t: "f-over", l: "Overview" },
     { t: "f-gl", l: "General Ledger" },
     { t: "f-ap", l: "Payables" },
     { t: "f-ar", l: "Receivables" },
@@ -31,12 +30,10 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "i-assets", l: "Asset Register" },
   ],
   procurement: [
-    { t: "p-over", l: "Overview" },
     { t: "p-vendors", l: "Vendors" },
     { t: "p-req", l: "Requisitions" },
     { t: "p-po", l: "Purchase Orders" },
     { t: "p-grn", l: "Goods Received" },
-    { t: "p-rfq", l: "Sourcing / RFQ" },
     { t: "p-contracts", l: "Contracts" },
   ],
   hr: [
@@ -53,6 +50,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
   staffportal: [
     { t: "sp-me", l: "This Month" },
     { t: "sp-leave", l: "Leave" },
+    { t: "sp-petty", l: "Petty Cash" },
     { t: "sp-perf", l: "Performance" },
     { t: "sp-files", l: "Documents" },
     { t: "sp-fb", l: "Give Feedback" },
@@ -85,7 +83,8 @@ export function Crumb({ view }: { view: string }) {
   // Inventory, HR, Projects & CRM drop their "Overview" subnav entry — the module
   // lands on the overview tab directly, so fall back to that label for the breadcrumb.
   const overviewTab = view === "inventory" ? "i-over" : view === "hr" ? "h-over"
-    : view === "projects" ? "pr-over" : view === "crm" ? "cr-over" : null;
+    : view === "projects" ? "pr-over" : view === "crm" ? "cr-over"
+    : view === "finance" ? "f-over" : view === "procurement" ? "p-over" : null;
   const label = subnavs[view]?.find((s) => s.t === tab)?.l || (tab === overviewTab ? "Overview" : "");
   return (
     <div className="crumb">

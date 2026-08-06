@@ -50,6 +50,13 @@ export interface StaffDoc { name: string; version: number; uploaded: string; pat
 export interface HrSummary { leave: LeaveBalance[]; applications: LeaveApp[]; payslips: Payslip[]; docs: StaffDoc[] }
 export interface HrLeaveReq { id: string; who: string; kind: string; from: string; to: string; days: number; reason: string | null; state: string; docPath?: string | null }
 export interface HrBalanceRow { who: string; entitled: number; used: number; reserved: number }
+// Petty-cash request raised from the Staff Portal, decided in Finance → Petty Cash.
+export interface PettyRequest {
+  id: string; item: string; amount: number; needBy: string | null; reason: string | null;
+  state: "pending" | "approved" | "rejected" | "cancelled";
+  requester: string; requesterEmail: string;
+  decidedBy: string | null; decidedAt: string | null; note: string | null; createdAt: string;
+}
 
 /* ---------- HR module read model (staff / payroll / recruitment / field) ---------- */
 export interface KinRow { name: string; relationship: string; phone?: string; cover?: string }
@@ -171,7 +178,7 @@ interface AppApi {
   taskMode: "personal" | "assign";
   openTask: (mode?: "personal" | "assign") => void;
   closeTask: () => void;
-  createTask: (v: { title: string; due: string; link: string; assigneeEmail?: string; subtasks: string[] }) => void;
+  createTask: (v: { title: string; due: string; dueDate?: string; link: string; assigneeEmail?: string; subtasks: string[] }) => void;
   addSubtask: (ref: string, text: string) => void;
   toggleSubtask: (ref: string, idx: number) => void;
   setTaskDone: (ref: string, done: boolean) => void;
@@ -255,6 +262,7 @@ interface AppApi {
   captureInvoice: (v: { poRef: string; amount: number; invoiceNumber: string; invoiceDate: string; currency: string; wht: boolean }) => void;
   approveInvoice: (invRef: string) => void;
   payInvoice: (invRef: string, method: string) => void;
+  markInvoicePaid: (invRef: string, method?: string) => void;
   receiptFor: NewInvoice | null;
   openReceipt: (inv: NewInvoice) => void;
   closeReceipt: () => void;
@@ -326,6 +334,18 @@ interface AppApi {
   addStaffDocument: (file: File, name: string, category: string) => void;
   deleteStaffDocument: (path: string, name: string) => void;
   staffDocUrl: (path: string) => Promise<string | null>;
+  // Petty-cash requests (Staff Portal ↔ Finance Petty Cash)
+  pettyRequests: PettyRequest[];
+  pettyOpen: boolean;
+  pettyEdit: PettyRequest | null;
+  canDecidePetty: boolean;
+  openPetty: () => void;
+  openPettyEdit: (r: PettyRequest) => void;
+  closePetty: () => void;
+  submitPettyRequest: (v: { item: string; amount: number; needBy: string; reason: string }) => void;
+  updatePettyRequest: (ref: string, v: { item: string; amount: number; needBy: string; reason: string }) => void;
+  deletePettyRequest: (ref: string) => void;
+  decidePettyRequest: (ref: string, approve: boolean, note?: string) => void;
   hrLeaveQueue: HrLeaveReq[];
   hrBalances: HrBalanceRow[];
   decideLeave: (ref: string, approve: boolean) => void;
@@ -521,6 +541,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [hrMe, setHrMe] = useState<HrSummary | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [leaveEdit, setLeaveEdit] = useState<LeaveApp | null>(null);
+  const [pettyRequests, setPettyRequests] = useState<PettyRequest[]>([]);
+  const [pettyOpen, setPettyOpen] = useState(false);
+  const [pettyEdit, setPettyEdit] = useState<PettyRequest | null>(null);
   const [hrLeaveQueue, setHrLeaveQueue] = useState<HrLeaveReq[]>([]);
   const [hrBalances, setHrBalances] = useState<HrBalanceRow[]>([]);
   const [hrData, setHrData] = useState<HrData | null>(null);
@@ -571,7 +594,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // filter "Mine" by the real signed-in user. Overrides bootstrap's lean tasks payload.
     const { data: taskRows } = await supabase
       .from("tasks")
-      .select("ref, title, sub, owner_name, due_pill, due_label, subtasks, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
+      .select("ref, title, sub, owner_name, due_pill, due_label, due_date, subtasks, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
       .eq("state", "open")
       .order("created_at", { ascending: false });
     if (taskRows) setMyWeek((taskRows as any[]).map((r) => {
@@ -579,6 +602,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const assigner = Array.isArray(r.assigner) ? r.assigner[0] : r.assigner;
       return {
         id: r.ref, t: r.title, s: r.sub, o: r.owner_name, p: r.due_pill, pl: r.due_label,
+        due: r.due_date ?? undefined,
         subtasks: (r.subtasks ?? []) as { text: string; done: boolean }[],
         ownerEmail: owner?.email, assignedBy: assigner?.name && assigner.name !== r.owner_name ? assigner.name : undefined,
       } as WeekTask;
@@ -649,6 +673,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       id: r.id, kind: r.kind, title: r.title, body: r.body,
       linkView: r.link_view, linkRef: r.link_ref, seen: r.seen, createdAt: r.created_at,
     })));
+    // Petty-cash requests — the Staff Portal shows the caller's own, the Finance
+    // Petty Cash tab shows the queue. RLS returns all rows for authenticated.
+    const { data: pcr } = await supabase
+      .from("petty_cash_requests")
+      .select("ref, item, amount, need_by, reason, state, decided_at, decision_note, created_at, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name)")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    setPettyRequests(((pcr ?? []) as any[]).map((r) => {
+      const rq = Array.isArray(r.requester) ? r.requester[0] : r.requester;
+      const dc = Array.isArray(r.decider) ? r.decider[0] : r.decider;
+      return {
+        id: r.ref, item: r.item, amount: Number(r.amount), needBy: r.need_by, reason: r.reason, state: r.state,
+        requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "", decidedBy: dc?.name ?? null,
+        decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
+      } as PettyRequest;
+    }));
     // Partner contact fields (contact_name/email/phone) aren't in bootstrap — fold them in by id.
     const { data: pc } = await supabase.from("partners").select("id, contact_name, email, phone");
     const contactById = new Map(((pc ?? []) as any[]).map((r) => [r.id as string, r]));
@@ -961,11 +1001,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const without = w.filter((x) => x.id !== key);
       return t ? [t, ...without] : without;
     });
-  async function createTask(v: { title: string; due: string; link: string; assigneeEmail?: string; subtasks: string[] }) {
+  async function createTask(v: { title: string; due: string; dueDate?: string; link: string; assigneeEmail?: string; subtasks: string[] }) {
     const assignee = v.assigneeEmail && v.assigneeEmail !== me?.email ? v.assigneeEmail : null;
     const { data, error } = await supabase.rpc("create_task", {
       p_title: v.title, p_owner_email: assignee, p_due_key: v.due, p_link: v.link || "",
       p_subtasks: v.subtasks.filter((s) => s.trim()),
+      p_due_date: v.dueDate || null,
     });
     if (error) { toast("Task not saved", error.message); return; }
     const task = data as WeekTask;
@@ -1145,6 +1186,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
   async function payInvoice(invRef: string, method: string) {
     const { data, error } = await supabase.rpc("pay_invoice", { p_inv_ref: invRef, p_method: method });
+    if (error) { toast("Payment blocked", error.message); return; }
+    await loadFromDb();
+    toast(`${data.id} paid`, `${invRef} settled · net ${Math.round(data.net).toLocaleString()} · journal ${data.journal}`);
+  }
+  // One-click pay — marks a supplier invoice paid without the separate approve step.
+  async function markInvoicePaid(invRef: string, method = "bank") {
+    const { data, error } = await supabase.rpc("mark_invoice_paid", { p_inv_ref: invRef, p_method: method });
     if (error) { toast("Payment blocked", error.message); return; }
     await loadFromDb();
     toast(`${data.id} paid`, `${invRef} settled · net ${Math.round(data.net).toLocaleString()} · journal ${data.journal}`);
@@ -1455,6 +1503,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await Promise.all([loadLeaveQueue(), loadHr()]);
     toast(`${ref} ${approve ? "approved" : "rejected"}`,
       approve ? "Days deducted from the balance — the employee can see it in their portal" : "Days released back to the balance");
+  }
+
+  /* ---------- petty-cash requests (Staff Portal → Finance Petty Cash) ---------- */
+  async function submitPettyRequest(v: { item: string; amount: number; needBy: string; reason: string }) {
+    const { data, error } = await supabase.rpc("submit_petty_cash_request", {
+      p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null,
+    });
+    if (error) { toast("Request not submitted", error.message); return; }
+    setPettyOpen(false); setPettyEdit(null);
+    await loadFromDb();
+    toast(`${(data as any)?.id ?? "Request"} submitted`, "Routed to Finance / HR for approval — you'll see the decision here");
+  }
+  async function updatePettyRequest(ref: string, v: { item: string; amount: number; needBy: string; reason: string }) {
+    const { error } = await supabase.rpc("edit_petty_cash_request", {
+      p_ref: ref, p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null,
+    });
+    if (error) { toast("Couldn't update request", error.message); return; }
+    setPettyOpen(false); setPettyEdit(null);
+    await loadFromDb();
+    toast(`${ref} updated`, "Still pending — the approver sees the new details");
+  }
+  async function deletePettyRequest(ref: string) {
+    const { error } = await supabase.rpc("delete_petty_cash_request", { p_ref: ref });
+    if (error) { toast("Couldn't withdraw request", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} withdrawn`, "Removed from the approval queue");
+  }
+  async function decidePettyRequest(ref: string, approve: boolean, note?: string) {
+    const { error } = await supabase.rpc("decide_petty_cash_request", { p_ref: ref, p_approve: approve, p_note: note || null });
+    if (error) { toast(approve ? "Approval failed" : "Rejection failed", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} ${approve ? "approved" : "rejected"}`,
+      approve ? "The requester can see it approved in their portal" : "The requester is notified");
   }
 
   /* ---------- HR module mutations: RPC → toast → reload the module read model ---------- */
@@ -2072,7 +2153,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     invOpen, openInvoice: () => setInvOpen(true), closeInvoice: () => setInvOpen(false),
     submitInvoice, newInvoices,
     apInvoices, payments, journals, accounts,
-    invoiceFor, openCaptureInvoice: (po: PORow) => setInvoiceFor(po), closeCaptureInvoice: () => setInvoiceFor(null), captureInvoice, approveInvoice, payInvoice,
+    invoiceFor, openCaptureInvoice: (po: PORow) => setInvoiceFor(po), closeCaptureInvoice: () => setInvoiceFor(null), captureInvoice, approveInvoice, payInvoice, markInvoicePaid,
     receiptFor, openReceipt: (inv: NewInvoice) => setReceiptFor(inv), closeReceipt: () => setReceiptFor(null), recordReceipt,
     poAmendFor, openPoAmend: (po: PORow) => setPoAmendFor(po), closePoAmend: () => setPoAmendFor(null), amendPo, approvePoAmendment,
     bankChangeFor, openBankChange: (v: string) => setBankChangeFor(v), closeBankChange: () => setBankChangeFor(null), requestBankChange, approveBankChange, bankChanges,
@@ -2091,6 +2172,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openLeaveEdit: (a) => { setLeaveEdit(a); setLeaveOpen(true); },
     closeLeave: () => { setLeaveOpen(false); setLeaveEdit(null); },
     applyLeave, updateLeave, deleteLeave, addStaffDocument, deleteStaffDocument, staffDocUrl,
+    pettyRequests, pettyOpen, pettyEdit,
+    canDecidePetty: (perms[me?.email ?? ""]?.finance ?? 0) >= 2 || (perms[me?.email ?? ""]?.hr ?? 0) >= 2,
+    openPetty: () => { setPettyEdit(null); setPettyOpen(true); },
+    openPettyEdit: (r) => { setPettyEdit(r); setPettyOpen(true); },
+    closePetty: () => { setPettyOpen(false); setPettyEdit(null); },
+    submitPettyRequest, updatePettyRequest, deletePettyRequest, decidePettyRequest,
     hrLeaveQueue, hrBalances, decideLeave,
     hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
     addEmployee, preparePayroll, approvePayroll, postPayroll,

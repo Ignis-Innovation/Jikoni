@@ -1,6 +1,8 @@
-import type { ReactNode } from "react";
-import { useApp } from "../store";
+import { useState, type ReactNode } from "react";
+import { useApp, type PettyRequest } from "../store";
 import { Pulse, Note } from "../components/ui";
+import { ModalShell } from "../components/modals";
+import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 import { budgetLines } from "../data";
 
@@ -8,6 +10,71 @@ const kes = (n: number) => "KES " + Math.round(n).toLocaleString();
 
 function EmptyBody({ children = "No data yet." }: { children?: ReactNode }) {
   return <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>{children}</div>;
+}
+
+// Create a cost centre / budget line (name + budget) so Budgets & Costing has a
+// line to track against — surfaces the existing upsert_cost_centre RPC.
+function CostCentreModal({ open, onClose, onSave }: {
+  open: boolean; onClose: () => void; onSave: (name: string, budget: number) => void;
+}) {
+  const [name, setName] = useState("");
+  const [budget, setBudget] = useState("");
+  return (
+    <ModalShell open={open} onClose={onClose} width={460}>
+      <div className="mh">
+        <h3>New cost centre</h3>
+        <p>Adds a budget line. Requisitions check against it, and it fills the Budgets &amp; Costing table.</p>
+      </div>
+      <div className="mb">
+        <div><label>Cost centre / budget line</label><input className="field" autoFocus placeholder="e.g. Field / MRV" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div><label>Budget (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 900000" value={budget} onChange={(e) => setBudget(e.target.value)} /></div>
+        <Note>Committed rises when a requisition is raised against this line and moves to actual when the invoice is paid.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" onClick={() => onSave(name.trim(), Number(budget))}>Add cost centre</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// In-app popup to approve or reject a petty-cash request (replaces browser prompts).
+function PettyDecideModal({ decision, onClose, onConfirm }: {
+  decision: { req: PettyRequest; approve: boolean } | null;
+  onClose: () => void;
+  onConfirm: (ref: string, approve: boolean, note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const open = !!decision;
+  const approve = decision?.approve ?? false;
+  const req = decision?.req;
+  return (
+    <ModalShell open={open} onClose={onClose} width={460}>
+      {req && (
+        <>
+          <div className="mh">
+            <h3>{approve ? "Approve petty cash" : "Reject petty cash"}</h3>
+            <p>{req.requester} · {req.item} · <strong>{kes(req.amount)}</strong>{req.needBy ? ` · needed ${new Date(req.needBy + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</p>
+          </div>
+          <div className="mb">
+            {req.reason && <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}><div className="rl">Reason given</div>{req.reason}</div>}
+            <div>
+              <label>{approve ? "Note" : "Reason for rejecting"} <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+              <textarea className="field" rows={3} autoFocus placeholder={approve ? "e.g. Approved — collect from the float on Monday" : "e.g. Use the project card instead"} value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+            <Note>The requester is notified of the decision and any note. This can't be undone from here.</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className={`btn ${approve ? "primary" : ""}`} style={approve ? undefined : { color: "var(--red)" }}
+              onClick={() => { onConfirm(req.id, approve, note); }}>
+              {approve ? "Approve request" : "Reject request"}
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
 }
 
 const apPill: Record<string, { cls: string; txt: string }> = {
@@ -19,8 +86,17 @@ const apPill: Record<string, { cls: string; txt: string }> = {
 };
 
 export default function FinanceView() {
-  const { tabs, toast, accounts, journals, apInvoices, approveInvoice, payInvoice, openCaptureInvoice, poRows } = useApp();
+  const { tabs, toast, accounts, journals, apInvoices, approveInvoice, payInvoice, openCaptureInvoice, poRows, markInvoicePaid,
+    pettyRequests, decidePettyRequest, canDecidePetty, openInvoice, createCostCentre } = useApp();
   const tab = tabs.finance;
+  const [costOpen, setCostOpen] = useState(false);
+
+  const pettyPending = pettyRequests.filter((r) => r.state === "pending");
+  const pettyDecided = pettyRequests.filter((r) => r.state === "approved" || r.state === "rejected");
+  const pettyPendingTotal = pettyPending.reduce((s, r) => s + r.amount, 0);
+  const fmtDate = (iso: string | null) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
+  // which petty-cash request is being approved/rejected — drives the popup (no browser prompts)
+  const [pettyDecide, setPettyDecide] = useState<{ req: PettyRequest; approve: boolean } | null>(null);
 
   const bal = (code: string) => accounts.find((a) => a.code === code)?.balance ?? 0;
   const sumKind = (k: string) => accounts.filter((a) => a.kind === k).reduce((s, a) => s + a.balance, 0);
@@ -56,6 +132,8 @@ export default function FinanceView() {
           <p>One chart of accounts across the business — every module posts a balanced journal here. Covers GL, payables, receivables, bank &amp; cash, petty cash, costing, tax and audit controls.</p>
         </div>
         <div className="actions">
+          {tab === "f-ar" && <button className="btn primary" onClick={openInvoice}><PlusI />New invoice</button>}
+          {tab === "f-budget" && <button className="btn primary" onClick={() => setCostOpen(true)}><PlusI />New cost centre</button>}
           <button className="btn" onClick={() => toast("Period open", "Postings land in the current period until it is closed")}>Current period · Open</button>
         </div>
       </div>
@@ -189,12 +267,9 @@ export default function FinanceView() {
                       <td className="mono">{i.amount.toLocaleString()}</td>
                       <td><span className={`pill ${apPill[i.state]?.cls || "week"}`} title={i.matchNote || ""}>{apPill[i.state]?.txt || i.state}</span></td>
                       <td style={{ textAlign: "right" }}>
-                        {i.state === "matched"
-                          ? (i.capturedByMe
-                              ? <span className="pill week" title="Segregation of duties">you captured</span>
-                              : <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approveInvoice(i.ref)}>Approve for Payment</button>)
-                          : i.state === "approved" ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => payInvoice(i.ref, "bank")}>Pay</button>
-                          : i.state === "paid" ? <span className="pill done">Paid</span> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>{i.state === "exception" ? "held" : "—"}</span>}
+                        {i.state === "paid"
+                          ? <span className="pill done">Paid</span>
+                          : <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} title={i.state === "exception" ? (i.matchNote || "Match exception — pay anyway") : "Mark this invoice paid"} onClick={() => markInvoicePaid(i.ref)}>Pay</button>}
                       </td>
                     </tr>
                   ))}
@@ -232,10 +307,60 @@ export default function FinanceView() {
 
       {tab === "f-petty" && (
         <div className="fin-panel active">
-          <div className="panel">
-            <div className="panel-h"><h3>Petty cash</h3><span className="meta">floats · vouchers</span></div>
-            <EmptyBody>Petty-cash floats and vouchers are a later increment.</EmptyBody>
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h">
+                <h3>Petty-cash requests</h3>
+                <span className="meta">{pettyPending.length} awaiting approval{canDecidePetty ? "" : " · view only"}</span>
+              </div>
+              <table className="tbl">
+                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Needed</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {pettyPending.length === 0 ? (
+                    <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No requests awaiting approval. Staff raise these in the Staff Portal → Petty Cash.</td></tr>
+                  ) : pettyPending.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono">{r.id}</td>
+                      <td>{r.requester}{r.reason ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{r.reason}</small> : null}</td>
+                      <td>{r.item}</td>
+                      <td className="mono">{kes(r.amount)}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.needBy)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {canDecidePetty ? (
+                          <span style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end" }}>
+                            <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => setPettyDecide({ req: r, approve: true })}>Approve</button>
+                            <button className="btn" style={{ padding: "4px 9px", fontSize: 11, color: "var(--red)" }} onClick={() => setPettyDecide({ req: r, approve: false })}>Reject</button>
+                          </span>
+                        ) : <span className="pill today">Pending</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Note>Requests come from the Staff Portal. Approving records the decision and notifies the requester; a request can't be approved by the person who raised it.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>
+              <div className="pad">
+                <div className="recon"><span>Awaiting approval</span><span className="mono">{pettyPending.length}</span></div>
+                <div className="recon"><span>Value pending</span><span className="mono">{kes(pettyPendingTotal)}</span></div>
+                <div className="recon"><span>Approved to date</span><span className="mono">{kes(pettyRequests.filter((r) => r.state === "approved").reduce((s, r) => s + r.amount, 0))}</span></div>
+              </div>
+              <div className="panel-h" style={{ borderTop: "1px solid var(--line)" }}><h3>Recent decisions</h3><span className="meta">last {Math.min(pettyDecided.length, 8)}</span></div>
+              {pettyDecided.length === 0 ? <EmptyBody>No decisions yet.</EmptyBody> : (
+                <div>
+                  {pettyDecided.slice(0, 8).map((r) => (
+                    <div className="task" key={r.id}>
+                      <span className="id" style={{ color: r.state === "approved" ? "var(--green)" : "var(--red)" }}>{r.id}</span>
+                      <span className="txt">{r.item} — {kes(r.amount)}<small>{r.requester}{r.decidedBy ? ` · by ${r.decidedBy}` : ""}{r.note ? ` · ${r.note}` : ""}</small></span>
+                      <span className={`pill ${r.state === "approved" ? "done" : "over"}`}>{r.state === "approved" ? "Approved" : "Rejected"}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
+          <Note>Floats and vouchers (drawing down an approved amount, then reconciling receipts) build on this queue in a later increment.</Note>
         </div>
       )}
 
@@ -295,12 +420,31 @@ export default function FinanceView() {
           </div>
         </div>
       )}
+
+      <PettyDecideModal
+        key={pettyDecide ? pettyDecide.req.id + (pettyDecide.approve ? "-a" : "-r") : "none"}
+        decision={pettyDecide}
+        onClose={() => setPettyDecide(null)}
+        onConfirm={(ref, approve, note) => { decidePettyRequest(ref, approve, note); setPettyDecide(null); }}
+      />
+
+      <CostCentreModal
+        key={costOpen ? "cost-open" : "cost-closed"}
+        open={costOpen}
+        onClose={() => setCostOpen(false)}
+        onSave={(name, budget) => {
+          if (!name) { toast("Name the cost centre", "e.g. Field / MRV"); return; }
+          if (!budget || budget <= 0) { toast("Enter a budget", "How much is allocated to this line? (KES)"); return; }
+          createCostCentre(name, budget);
+          setCostOpen(false);
+        }}
+      />
     </>
   );
 }
 
 function Receivables() {
-  const { openInvoice, newInvoices, openReceipt } = useApp();
+  const { newInvoices, openReceipt } = useApp();
   const outstanding = newInvoices.filter((i) => i.pillTxt !== "Paid");
   return (
     <div className="fin-panel active">
@@ -319,7 +463,7 @@ function Receivables() {
         <div className="panel">
           <div className="panel-h">
             <h3>Customer invoices</h3>
-            <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openInvoice(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ New invoice</a></span>
+            <span className="meta">issue · file eTIMS · collect</span>
           </div>
           <table className="tbl">
             <thead><tr><th>Institution</th><th>Invoice</th><th>Amount</th><th>eTIMS</th><th>Due</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>

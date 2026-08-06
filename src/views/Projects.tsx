@@ -5,7 +5,7 @@ import { useUsdKesRate } from "../lib/fx";
 import { useState } from "react";
 import { Crumb } from "../nav";
 import { PlusI } from "../components/icons";
-import type { ProjectDetail } from "../data";
+import { budgetOf, spentOf, burnOf, progressOf, projectHealth, buildAttention } from "../lib/attention";
 
 /* Chart palette — projects are coloured by position so the donut, legend and
    burn bars all agree on a colour per project. */
@@ -13,12 +13,17 @@ const COLORS = ["#12A3BE", "#E2632A", "#3C8A5E", "#6D28D9", "#A89C8E", "#C99A2E"
 
 // short label for charts: "Makueni VTC rollout" → "Makueni", "5-County …" → "5-County"
 const short = (name: string) => name.split(" ")[0];
-// money now lives on the project as numeric KES (budgetAmount / spentAmount)
-const budgetOf = (p: ProjectDetail) => p.budgetAmount ?? 0;
-const spentOf = (p: ProjectDetail) => p.spentAmount ?? 0;
-const burnOf = (p: ProjectDetail) => { const b = budgetOf(p); return b > 0 ? Math.round((spentOf(p) / b) * 100) : 0; };
+// project money helpers (budgetOf / spentOf / burnOf) now live in ../lib/attention
+// so the dashboard and this view score budgets and health identically.
 // format KES: millions get an "M" suffix, smaller amounts show in full
 const fmtKes = (n: number) => n >= 1e6 ? `KES ${(n / 1e6).toFixed(1)}M` : `KES ${Math.round(n).toLocaleString()}`;
+// relative "last update" label, e.g. "3d ago" / "just now" / "—"
+const updatedAgo = (iso?: string) => {
+  if (!iso) return "—";
+  const d = Math.round((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (isNaN(d)) return "—";
+  return d <= 0 ? "today" : d === 1 ? "1d ago" : d < 30 ? `${d}d ago` : `${Math.round(d / 30)}mo ago`;
+};
 
 const statusPill = (status: string) => {
   const s = (status || "").toLowerCase();
@@ -35,7 +40,7 @@ const ddPill = (s: string) =>
   /received/i.test(s) ? "done" : /request|pending|due/i.test(s) ? "today" : "week";
 
 export default function ProjectsView() {
-  const { tabs, goTab, openProject, projectDetails, openProjectForm, openProjectEdit, deleteProject, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
+  const { tabs, goTab, go, openProject, projectDetails, apInvoices, openProjectForm, openProjectEdit, deleteProject, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
   const tab = tabs.projects;
 
   // Overview currency toggle: money is stored in KES; USD view converts at the live rate.
@@ -79,6 +84,13 @@ export default function ProjectsView() {
   const milestonesDue = allMilestones.filter((m) => m.s === "now");
   const drawdownsPending = allDrawdowns.filter((d) => !/received/i.test(d.s));
   const reportsDue = list.filter((p) => /jul|next|due/i.test(p.reporting || ""));
+  // projects that are amber/red on the shared health rule → surfaced on the overview
+  const atRisk = list.map((p) => ({ p, h: projectHealth(p) })).filter((x) => x.h.level !== "green");
+  // extra needs-attention items (budget variances, stale projects, outstanding
+  // approvals) from the shared selector — appended below the existing rows so
+  // nothing is removed, only enriched.
+  const extraAttention = buildAttention({ projectDetails, apInvoices, myWeek: [], meEmail: null })
+    .filter((it) => it.cat === "budget" || it.cat === "stale" || it.cat === "approval");
 
   const pulse = [
     { k: "Active projects", tick: "t-blue", v: String(list.length), d: `${new Set(grantRows.map((p) => p.funder)).size} funders`, dc: "flat" as const },
@@ -179,6 +191,18 @@ export default function ProjectsView() {
               )}
             </div>
           </div>
+          {atRisk.length > 0 && (
+            <div className="panel" style={{ marginTop: 18 }}>
+              <div className="panel-h"><h3>Project health</h3><span className="meta">🟢 on track · 🟡 needs attention · 🔴 at risk</span></div>
+              {atRisk.map(({ p, h }) => (
+                <div className="task" key={"risk" + p.name} onClick={() => openProject(p.name)} style={{ cursor: "pointer" }}>
+                  <span className="id" style={{ color: h.color }}>{h.dot}</span>
+                  <span className="txt">{p.name}<small>{burnOf(p)}% budget used · {progressOf(p)}% complete</small></span>
+                  <span className={`pill ${h.level === "red" ? "over" : "today"}`}>{h.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="panel" style={{ marginTop: 18 }}>
             <div className="panel-h"><h3>Needs attention</h3><span className="meta">across the portfolio</span></div>
             {milestonesDue.slice(0, 2).map((m) => (
@@ -202,7 +226,14 @@ export default function ProjectsView() {
                 <span className="pill over">Report</span>
               </div>
             ))}
-            {!milestonesDue.length && !drawdownsPending.length && !reportsDue.length && (
+            {extraAttention.map((it) => (
+              <div className="task" key={it.key} onClick={() => (it.view === "projects" && it.tab ? goTab("projects", it.tab) : go(it.view))} style={{ cursor: "pointer" }}>
+                <span className="id" style={{ color: it.codeColor }}>{it.code}</span>
+                <span className="txt">{it.title}<small>{it.sub}</small></span>
+                <span className={`pill ${it.pill.cls}`}>{it.pill.txt}</span>
+              </div>
+            ))}
+            {!milestonesDue.length && !drawdownsPending.length && !reportsDue.length && !extraAttention.length && (
               <Note>Nothing outstanding across the portfolio right now.</Note>
             )}
           </div>
@@ -214,15 +245,28 @@ export default function ProjectsView() {
           <div className="panel">
             <div className="panel-h"><h3>Project registry</h3><span className="meta">click a project for the full record</span></div>
             <table className="tbl">
-              <thead><tr><th>Project</th><th>Funder</th><th>Location</th><th>Budget</th><th>Spent</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Project</th><th>Owner</th><th>Funder</th><th>Budget</th><th>Spent</th><th>Progress</th><th>Last update</th><th>Health</th><th>Status</th><th></th></tr></thead>
               <tbody>
-                {list.map((p) => (
+                {list.map((p) => {
+                  const h = projectHealth(p);
+                  const prog = progressOf(p);
+                  return (
                   <tr key={p.name} style={{ cursor: "pointer" }} onClick={() => openProject(p.name)}>
-                    <td><strong>{p.name}</strong></td>
+                    <td><strong>{p.name}</strong>{p.location ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{p.location}</small> : null}</td>
+                    <td>{p.team || "—"}</td>
                     <td>{p.funder || "—"}</td>
-                    <td>{p.location || "—"}</td>
                     <td className="mono">{p.budget || "TBD"}</td>
                     <td className="mono">{p.spent || "0"}</td>
+                    <td>
+                      <div title={`${prog}%`} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 74 }}>
+                        <div style={{ flex: 1, height: 7, borderRadius: 4, background: "var(--line)", overflow: "hidden" }}>
+                          <div style={{ width: `${Math.min(prog, 100)}%`, height: "100%", background: h.color }} />
+                        </div>
+                        <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>{prog}%</span>
+                      </div>
+                    </td>
+                    <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{updatedAgo(p.updatedAt)}</td>
+                    <td><span title={h.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: h.color }} />{h.label}</span></td>
                     <td><span className={`pill ${statusPill(p.status)}`}>{p.status || "Setup"}</span></td>
                     <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                       {p.createdByMe && (
@@ -234,8 +278,9 @@ export default function ProjectsView() {
                       )}
                     </td>
                   </tr>
-                ))}
-                {!list.length && <tr><td colSpan={7}><Note>No projects yet — click <strong>+ New project</strong>, or convert a won CRM engagement to create one.</Note></td></tr>}
+                  );
+                })}
+                {!list.length && <tr><td colSpan={10}><Note>No projects yet — click <strong>+ New project</strong>, or convert a won CRM engagement to create one.</Note></td></tr>}
               </tbody>
             </table>
           </div>

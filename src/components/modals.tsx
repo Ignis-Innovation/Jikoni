@@ -61,13 +61,14 @@ export function TaskModal() {
   const [title, setTitle] = useState("");
   const [assignee, setAssignee] = useState("");
   const [due, setDue] = useState("week");
+  const [dueDate, setDueDate] = useState("");
   const [link, setLink] = useState("");
   const [subs, setSubs] = useState<string[]>([]);
   const [subDraft, setSubDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (taskOpen) {
-      setTitle(""); setAssignee(others[0]?.email ?? ""); setDue("week"); setLink(""); setSubs([]); setSubDraft("");
+      setTitle(""); setAssignee(others[0]?.email ?? ""); setDue("week"); setDueDate(""); setLink(""); setSubs([]); setSubDraft("");
       setTimeout(() => inputRef.current?.focus(), 60);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -83,7 +84,7 @@ export function TaskModal() {
     if (assign && !assignee) { toast("Pick who it's for", "Choose a teammate to assign this to"); return; }
     // fold any half-typed sub-task into the list
     const allSubs = subDraft.trim() ? [...subs, subDraft.trim()] : subs;
-    createTask({ title: title.trim(), due, link: link.trim(), assigneeEmail: assign ? assignee : undefined, subtasks: allSubs });
+    createTask({ title: title.trim(), due, dueDate: dueDate || undefined, link: link.trim(), assigneeEmail: assign ? assignee : undefined, subtasks: allSubs });
   }
 
   return (
@@ -105,10 +106,14 @@ export function TaskModal() {
             </div>
           )}
           <div style={{ flex: 1 }}>
-            <label>Due</label>
-            <select className="field" style={{ width: "100%" }} value={due} onChange={(e) => setDue(e.target.value)}>
+            <label>Due {dueDate && <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0, color: "var(--ink-soft)" }}>· using the date</span>}</label>
+            <select className="field" style={{ width: "100%", opacity: dueDate ? 0.5 : 1 }} value={due} disabled={!!dueDate} onChange={(e) => setDue(e.target.value)}>
               <option value="today">Today</option><option value="week">This week</option><option value="nweek">Next week</option>
             </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>Or pick a date <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+            <input type="date" className="field" style={{ width: "100%" }} value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </div>
         </div>
         <div><label>Link / context <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" placeholder="e.g. ENG-012 · Charm Impact" value={link} onChange={(e) => setLink(e.target.value)} /></div>

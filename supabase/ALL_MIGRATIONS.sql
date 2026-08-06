@@ -8731,3 +8731,371 @@ begin
     execute format('grant execute on function public.%s to authenticated', fn);
   end loop;
 end $$;
+
+
+-- ===================================================================
+-- 0047_task_due_dates.sql
+-- ===================================================================
+-- Task due dates: let a task carry an explicit calendar date, not just a quick
+-- "today / this week / next week" key. Elizabeth's review asked for real dates.
+--
+--  * tasks.due_date date — the concrete due date (nullable; back-compat with key-only tasks)
+--  * task_json now returns 'due' (ISO date) so My Week can show it + flag overdue
+--  * create_task gains p_due_date; when given it overrides the key and drives the
+--    pill/label (Overdue / Today / Due DD Mon). When absent we still derive a
+--    concrete date from the key so "due this week" filtering has something to read.
+-- Idempotent throughout.
+
+-- ---------- schema ----------
+alter table public.tasks add column if not exists due_date date;
+
+-- Backfill a concrete date for existing key-only tasks so filters have a value.
+update public.tasks set due_date = case due_pill
+    when 'today' then current_date
+    when 'over'  then current_date - 1
+    else (date_trunc('week', current_date) + interval '6 days')::date
+  end
+where due_date is null and state = 'open';
+
+-- ---------- read shape (adds 'due') ----------
+create or replace function public.task_json(p_ref text) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', t.ref, 't', t.title, 's', t.sub, 'o', t.owner_name,
+    'p', t.due_pill, 'pl', t.due_label,
+    'due', to_char(t.due_date, 'YYYY-MM-DD'),
+    'subtasks', coalesce(t.subtasks, '[]'::jsonb),
+    'ownerEmail', ow.email,
+    'assignedBy', case when t.assigned_by_id is not null and t.assigned_by_id <> t.owner_id
+                       then (select name from public.app_users where id = t.assigned_by_id) end)
+  from public.tasks t left join public.app_users ow on ow.id = t.owner_id
+  where t.ref = p_ref
+$$;
+
+-- ---------- create a task (now with an optional explicit due date) ----------
+-- Drop the old 5-arg signature so only the dated version remains.
+drop function if exists public.create_task(text, text, text, text, jsonb);
+
+create or replace function public.create_task(
+  p_title text, p_owner_email text default null, p_due_key text default 'week',
+  p_link text default '', p_subtasks jsonb default '[]'::jsonb, p_due_date date default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_ref text; v_pill text; v_label text; v_subs jsonb; v_due date;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_my_email text; v_owner uuid; v_owner_name text; v_owner_email text;
+begin
+  if v_me is null then raise exception 'No user is linked to this login'; end if;
+  if nullif(trim(coalesce(p_title, '')), '') is null then raise exception 'A task description is required'; end if;
+  select email into v_my_email from public.app_users where id = v_me;
+  if nullif(trim(coalesce(p_owner_email, '')), '') is null or lower(p_owner_email) = lower(v_my_email) then
+    v_owner := v_me;
+  else
+    select id into v_owner from public.app_users where lower(email) = lower(trim(p_owner_email));
+    if v_owner is null then raise exception 'No user with email %', p_owner_email; end if;
+  end if;
+  select name, email into v_owner_name, v_owner_email from public.app_users where id = v_owner;
+
+  if p_due_date is not null then
+    -- explicit calendar date drives everything
+    v_due := p_due_date;
+    if    v_due <  current_date then v_pill := 'over';  v_label := 'Overdue · ' || to_char(v_due, 'DD Mon');
+    elsif v_due =  current_date then v_pill := 'today'; v_label := 'Today';
+    else                             v_pill := 'week';  v_label := 'Due ' || to_char(v_due, 'DD Mon');
+    end if;
+  else
+    -- quick-key path: derive both the pill/label and a concrete date
+    select case p_due_key when 'today' then 'today' when 'over' then 'over' else 'week' end,
+           case p_due_key when 'today' then 'Today' when 'nweek' then 'Next week' when 'over' then 'Overdue' else 'This week' end
+      into v_pill, v_label;
+    v_due := case p_due_key
+        when 'today' then current_date
+        when 'nweek' then (date_trunc('week', current_date) + interval '13 days')::date
+        else (date_trunc('week', current_date) + interval '6 days')::date
+      end;
+  end if;
+
+  -- normalise subtasks: accept ["a","b"] or [{"text":"a"}] → [{"text","done":false}]
+  select coalesce(jsonb_agg(jsonb_build_object('text', txt, 'done', false)), '[]'::jsonb) into v_subs
+  from (
+    select case when jsonb_typeof(e) = 'string' then trim(e #>> '{}') else trim(coalesce(e ->> 'text', '')) end as txt
+    from jsonb_array_elements(coalesce(p_subtasks, '[]'::jsonb)) e
+  ) s where txt is not null and txt <> '';
+  v_ref := public.next_ref('TSK');
+  insert into public.tasks(ref, entity_id, owner_id, assigned_by_id, title, sub, owner_name, due_pill, due_label, due_date, subtasks)
+  values (v_ref, v_entity, v_owner, v_me, trim(p_title), coalesce(p_link, ''), v_owner_name, v_pill, v_label, v_due, v_subs);
+  -- assigned to someone else → in-app bell (email is sent client-side via /api/notify)
+  if v_owner <> v_me then
+    insert into public.notifications(entity_id, recipient_email, kind, title, body, link_view, link_ref)
+    values (v_entity, lower(v_owner_email), 'task_assigned',
+            (select name from public.app_users where id = v_me) || ' assigned you a task',
+            trim(p_title), 'home', v_ref);
+  end if;
+  perform public.audit_write('task.created', 'task', v_ref,
+    jsonb_build_object('title', p_title, 'owner', v_owner_name, 'due', v_label));
+  return public.task_json(v_ref);
+end $$;
+
+-- ---------- grants ----------
+revoke execute on function public.create_task(text, text, text, text, jsonb, date) from public, anon;
+grant execute on function public.create_task(text, text, text, text, jsonb, date) to authenticated;
+
+
+-- ===================================================================
+-- 0048_project_last_update.sql
+-- ===================================================================
+-- Expose each project's last-updated timestamp so the registry can show a
+-- "Last update" column and the dashboard can flag projects with no recent
+-- activity (Elizabeth's review: stronger project summaries + Needs Attention).
+-- Only adds 'updatedAt' to the existing projection — everything else is 1:1
+-- with 0043. Idempotent (create or replace).
+
+create or replace function public.project_detail_json(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', p.id, 'state', p.state,
+    'funder', p.funder, 'status', p.status, 'budget', p.budget_txt, 'spent', p.spent_txt,
+    'pct', p.pct, 'timeline', p.timeline, 'team', p.team, 'reporting', p.reporting, 'field', p.field,
+    'budgetAmount', p.budget_amount,
+    'spentAmount', coalesce((select sum(amount) from public.project_milestones
+                             where project_id = p.id and status = 'done'), 0),
+    'startDate', p.start_date, 'endDate', p.end_date,
+    'updatedAt', p.updated_at,
+    'location', p.location, 'docs', p.docs,
+    'createdByMe', (
+      (p.created_by is not null and p.created_by = (select id from public.app_users where auth_id = auth.uid()))
+      or coalesce((select level from public.user_permissions
+                   where email = lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''))
+                     and module = 'projects'), 0) >= 3
+    ),
+    'milestones', coalesce((select jsonb_agg(jsonb_build_object('id', id, 't', title, 's', status,
+                             'amount', amount, 'start', start_date, 'end', end_date) order by sort)
+                            from public.project_milestones where project_id = p.id), '[]'::jsonb),
+    'drawdowns',  coalesce((select jsonb_agg(jsonb_build_object('id', id, 't', title, 'v', amount_txt, 's', status) order by sort)
+                            from public.project_drawdowns where project_id = p.id), '[]'::jsonb))
+  from public.projects p where p.id = p_id
+$$;
+
+-- ===================================================================
+-- 0049_petty_cash_requests.sql
+-- ===================================================================
+-- Petty-cash requests: staff raise a request from the Staff Portal (item, amount,
+-- date needed, reason). It routes to the Finance → Petty Cash tab where HR or
+-- Finance approve or reject. The requester sees the decision and can edit or
+-- withdraw their own request while it is still pending. Mirrors the leave
+-- self-service flow (apply → decide, editable while pending). Idempotent.
+
+-- ---------- schema ----------
+create table if not exists public.petty_cash_requests (
+  id             uuid primary key default gen_random_uuid(),
+  ref            text unique not null,
+  entity_id      uuid references public.entities(id),
+  requester_id   uuid references public.app_users(id),
+  requester_name text,
+  item           text not null,
+  amount         numeric(14,2) not null check (amount > 0),
+  need_by        date,
+  reason         text,
+  state          text not null default 'pending' check (state in ('pending','approved','rejected','cancelled')),
+  decided_by     uuid references public.app_users(id),
+  decided_at     timestamptz,
+  decision_note  text,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+-- ref counter for PCR-001, PCR-002, … (next_ref requires the kind to exist)
+insert into public.ref_counters(kind, prefix, n) values ('PCR', 'PCR-00', 0) on conflict (kind) do nothing;
+
+alter table public.petty_cash_requests enable row level security;
+drop policy if exists "read petty cash requests" on public.petty_cash_requests;
+-- readable by any signed-in user (same model as leave_applications); the Staff
+-- Portal only shows the caller's own rows, the Petty Cash tab shows the queue.
+create policy "read petty cash requests" on public.petty_cash_requests for select to authenticated using (true);
+
+-- ---------- frontend read shape ----------
+create or replace function public.pcr_json(p_ref text) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', r.ref, 'item', r.item, 'amount', r.amount,
+    'needBy', to_char(r.need_by, 'YYYY-MM-DD'), 'reason', r.reason, 'state', r.state,
+    'requester', rq.name, 'requesterEmail', rq.email,
+    'decidedBy', dc.name, 'decidedAt', r.decided_at, 'note', r.decision_note,
+    'createdAt', r.created_at)
+  from public.petty_cash_requests r
+  left join public.app_users rq on rq.id = r.requester_id
+  left join public.app_users dc on dc.id = r.decided_by
+  where r.ref = p_ref
+$$;
+
+-- true when the caller may decide petty-cash requests (HR or Finance, edit+).
+create or replace function public.can_decide_petty() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.user_permissions
+    where email = lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''))
+      and module in ('hr', 'finance') and level >= 2
+  )
+$$;
+
+-- ---------- submit (staff) ----------
+create or replace function public.submit_petty_cash_request(
+  p_item text, p_amount numeric, p_need_by date default null, p_reason text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_ref text;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_name text; v_email text;
+begin
+  if v_me is null then raise exception 'No user is linked to this login'; end if;
+  if nullif(trim(coalesce(p_item, '')), '') is null then raise exception 'What is the money for? An item is required'; end if;
+  if coalesce(p_amount, 0) <= 0 then raise exception 'Enter an amount greater than zero'; end if;
+  select name, email into v_name, v_email from public.app_users where id = v_me;
+  v_ref := public.next_ref('PCR');
+  insert into public.petty_cash_requests(ref, entity_id, requester_id, requester_name, item, amount, need_by, reason)
+  values (v_ref, v_entity, v_me, v_name, trim(p_item), p_amount, p_need_by, nullif(trim(coalesce(p_reason, '')), ''));
+  -- bell the approvers (HR + Finance, edit+)
+  insert into public.notifications(entity_id, recipient_email, kind, title, body, link_view, link_ref)
+  select v_entity, lower(u.email), 'petty_cash_request',
+         v_name || ' requested petty cash',
+         trim(p_item) || ' — KES ' || to_char(p_amount, 'FM999,999,990'), 'finance', v_ref
+  from public.app_users u
+  join public.user_permissions p on p.email = lower(u.email)
+  where p.module in ('hr', 'finance') and p.level >= 2 and lower(u.email) <> lower(v_email);
+  perform public.audit_write('petty_cash.requested', 'petty_cash_request', v_ref,
+    jsonb_build_object('item', p_item, 'amount', p_amount));
+  return public.pcr_json(v_ref);
+end $$;
+
+-- ---------- edit / withdraw (owner, while pending) ----------
+create or replace function public.edit_petty_cash_request(
+  p_ref text, p_item text, p_amount numeric, p_need_by date default null, p_reason text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_me uuid := (select id from public.app_users where auth_id = auth.uid()); r record;
+begin
+  select * into r from public.petty_cash_requests where ref = p_ref;
+  if not found then raise exception 'Request not found'; end if;
+  if v_me is null or r.requester_id <> v_me then raise exception 'This is not your request'; end if;
+  if r.state <> 'pending' then raise exception 'Only a pending request can be edited'; end if;
+  if nullif(trim(coalesce(p_item, '')), '') is null then raise exception 'An item is required'; end if;
+  if coalesce(p_amount, 0) <= 0 then raise exception 'Enter an amount greater than zero'; end if;
+  update public.petty_cash_requests
+    set item = trim(p_item), amount = p_amount, need_by = p_need_by,
+        reason = nullif(trim(coalesce(p_reason, '')), ''), updated_at = now()
+    where ref = p_ref;
+  perform public.audit_write('petty_cash.edited', 'petty_cash_request', p_ref,
+    jsonb_build_object('item', p_item, 'amount', p_amount));
+  return public.pcr_json(p_ref);
+end $$;
+
+create or replace function public.delete_petty_cash_request(p_ref text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_me uuid := (select id from public.app_users where auth_id = auth.uid()); r record;
+begin
+  select * into r from public.petty_cash_requests where ref = p_ref;
+  if not found then raise exception 'Request not found'; end if;
+  if v_me is null or r.requester_id <> v_me then raise exception 'This is not your request'; end if;
+  if r.state <> 'pending' then raise exception 'Only a pending request can be withdrawn'; end if;
+  delete from public.petty_cash_requests where ref = p_ref;
+  perform public.audit_write('petty_cash.withdrawn', 'petty_cash_request', p_ref, '{}'::jsonb);
+  return jsonb_build_object('id', p_ref, 'deleted', true);
+end $$;
+
+-- ---------- decide (HR / Finance) ----------
+create or replace function public.decide_petty_cash_request(p_ref text, p_approve boolean, p_note text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_me uuid := (select id from public.app_users where auth_id = auth.uid());
+  v_entity uuid := (select id from public.entities where code = 'KE');
+  v_who text; r record;
+begin
+  if not public.can_decide_petty() then raise exception 'Only HR or Finance can decide petty-cash requests'; end if;
+  select * into r from public.petty_cash_requests where ref = p_ref;
+  if not found then raise exception 'Request not found'; end if;
+  if r.state <> 'pending' then raise exception 'This request was already decided'; end if;
+  if r.requester_id = v_me then raise exception 'You cannot decide your own request'; end if;
+  update public.petty_cash_requests
+    set state = case when p_approve then 'approved' else 'rejected' end,
+        decided_by = v_me, decided_at = now(), decision_note = nullif(trim(coalesce(p_note, '')), ''), updated_at = now()
+    where ref = p_ref;
+  select name into v_who from public.app_users where id = v_me;
+  -- tell the requester
+  insert into public.notifications(entity_id, recipient_email, kind, title, body, link_view, link_ref)
+  values (v_entity, lower((select email from public.app_users where id = r.requester_id)),
+          'petty_cash_decided',
+          'Petty cash ' || case when p_approve then 'approved' else 'rejected' end,
+          r.item || ' — KES ' || to_char(r.amount, 'FM999,999,990') || case when p_note is not null and trim(p_note) <> '' then ' · ' || trim(p_note) else '' end,
+          'staffportal', p_ref);
+  perform public.audit_write(case when p_approve then 'petty_cash.approved' else 'petty_cash.rejected' end,
+    'petty_cash_request', p_ref, jsonb_build_object('amount', r.amount, 'note', p_note));
+  return public.pcr_json(p_ref);
+end $$;
+
+-- ---------- grants ----------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'submit_petty_cash_request(text,numeric,date,text)',
+    'edit_petty_cash_request(text,text,numeric,date,text)',
+    'delete_petty_cash_request(text)',
+    'decide_petty_cash_request(text,boolean,text)',
+    'can_decide_petty()',
+    'pcr_json(text)']
+  loop
+    execute format('revoke execute on function public.%s from public, anon', fn);
+    execute format('grant execute on function public.%s to authenticated', fn);
+  end loop;
+end $$;
+
+
+-- ===================================================================
+-- 0050_one_click_pay_invoice.sql
+-- ===================================================================
+-- One-click pay for supplier invoices: HR/Finance can mark an invoice paid in a
+-- single click, without the separate "Approve for Payment" step. Posts the same
+-- payment journal, records the payment, moves the budget line committed→actual
+-- and decrements the vendor's open POs — exactly like pay_invoice, but it can be
+-- called from any non-paid state (captured/matched/approved/exception).
+--
+-- NOTE: this deliberately relaxes the approve-then-pay segregation of duties, per
+-- an explicit product decision. pay_invoice (the two-step control) is left intact
+-- and still used elsewhere. Idempotent.
+
+create or replace function public.mark_invoice_paid(p_inv_ref text, p_method text default 'bank')
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  inv record; po record; v_ref text; je text; bcode text; net numeric; lines jsonb;
+  v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  perform public.assert_access('finance', 2);
+  select * into inv from public.invoices_ap where ref = p_inv_ref;
+  if not found then raise exception 'Invoice % not found', p_inv_ref; end if;
+  if inv.state = 'paid' then raise exception 'Invoice % is already paid', p_inv_ref; end if;
+  select * into po from public.purchase_orders where id = inv.po_id;
+  net := inv.amount - coalesce(inv.wht_amount, 0);
+  v_ref := public.next_ref('PAY');
+  lines := jsonb_build_array(
+    jsonb_build_object('account', '2000', 'debit', inv.amount),
+    jsonb_build_object('account', '1000', 'credit', net));
+  if coalesce(inv.wht_amount, 0) > 0 then
+    lines := lines || jsonb_build_object('account', '2200', 'credit', inv.wht_amount);
+  end if;
+  je := public.post_journal('Payment ' || v_ref || ' — ' || po.vendor_name, 'payment', v_ref, lines);
+  insert into public.payments(ref, entity_id, invoice_ap_id, method, amount, journal_ref)
+  values (v_ref, v_entity, inv.id, p_method, net, je);
+  update public.invoices_ap set state = 'paid' where id = inv.id;
+  update public.vendors set open_pos = greatest(open_pos - 1, 0) where id = inv.vendor_id;
+  select budget_code into bcode from public.requisitions where id = po.requisition_id;
+  if bcode is not null then
+    update public.budget_lines set committed = greatest(committed - inv.amount, 0), actual = actual + inv.amount where code = bcode;
+  end if;
+  perform public.audit_write('payment.made', 'payment', v_ref,
+    jsonb_build_object('invoice', p_inv_ref, 'method', p_method, 'net', net, 'wht', inv.wht_amount, 'journal', je, 'oneClick', true));
+  return jsonb_build_object('id', v_ref, 'invoice', p_inv_ref, 'journal', je, 'net', net);
+end $$;
+
+revoke execute on function public.mark_invoice_paid(text, text) from public, anon;
+grant execute on function public.mark_invoice_paid(text, text) to authenticated;

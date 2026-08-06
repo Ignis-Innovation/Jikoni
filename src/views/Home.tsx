@@ -1,13 +1,19 @@
 import { useState, type ReactNode } from "react";
 import { useApp } from "../store";
-import { pulseData, teamColors } from "../data";
+import { teamColors } from "../data";
 import type { WeekTask } from "../data";
-import { Pulse } from "../components/ui";
-import { ExportI, CheckSqI, FlameGlyphI, PlusI } from "../components/icons";
+import type { PulseStat } from "../data";
+import { Pulse, Note } from "../components/ui";
+import { buildAttention, orderForRole, type AttentionItem } from "../lib/attention";
+import { ExportI, CheckSqI, FlameGlyphI, PlusI, BellI } from "../components/icons";
 
-// Panels with no live data source yet render a placeholder until they're wired.
-function EmptyPad({ children }: { children: ReactNode }) {
-  return <div className="pad" style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "34px 20px", textAlign: "center" }}>{children}</div>;
+// relative time, e.g. "3h ago" / "2d ago" — for the recent-activity feed
+function timeAgo(iso: string): string {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60); if (m < 60) return m + "m ago";
+  const h = Math.round(m / 60); if (h < 24) return h + "h ago";
+  const d = Math.round(h / 24); return d + "d ago";
 }
 
 // One My Week row — click to expand its mini-tasks (checkboxes, add, mark done).
@@ -61,17 +67,60 @@ function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
   );
 }
 
+// One row in the "Needs attention" action feed.
+function FeedRow({ it, onGo }: { it: AttentionItem; onGo: () => void }) {
+  return (
+    <div className="task" onClick={onGo} style={{ cursor: "pointer" }}>
+      <span className="id" style={{ color: it.codeColor }}>{it.code}</span>
+      <span className="txt">{it.title}<small>{it.sub}</small></span>
+      <span className={`pill ${it.pill.cls}`}>{it.pill.txt}</span>
+    </div>
+  );
+}
+
+function Quick({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button className="btn" style={{ justifyContent: "flex-start", width: "100%" }} onClick={onClick}>{label}</button>
+  );
+}
+
 export default function HomeView() {
-  const { entity, toast, myWeek, taskFilter, setTaskFilter, openTask, me } = useApp();
+  const {
+    toast, myWeek, taskFilter, setTaskFilter, openTask, me,
+    projectDetails, apInvoices, notifications, markNotificationsSeen, perms, go, goTab,
+  } = useApp();
   const mine = taskFilter === "mine";
   const list = mine ? myWeek.filter((t) => t.ownerEmail === me?.email) : myWeek;
+
+  // Build the action feed from live data, ordered by the signed-in user's role.
+  const attention = buildAttention({ projectDetails, apInvoices, myWeek, meEmail: me?.email });
+  const order = orderForRole(perms[me?.email ?? ""]);
+  const rank = (c: AttentionItem["cat"]) => { const i = order.indexOf(c); return i < 0 ? 99 : i; };
+  const feed = [...attention].sort((a, b) => rank(a.cat) - rank(b.cat));
+  const feedTop = feed.slice(0, 8);
+
+  const goItem = (it: AttentionItem) => (it.tab ? goTab(it.view, it.tab) : go(it.view));
+
+  // Real dashboard KPIs, replacing the empty placeholder pulse.
+  const count = (c: AttentionItem["cat"]) => attention.filter((a) => a.cat === c).length;
+  const overdueTasks = attention.filter((a) => a.cat === "task" && a.pill.txt === "Overdue").length;
+  const pulse: PulseStat[] = [
+    { k: "Pending approvals", tick: count("approval") ? "t-ember" : "t-blue", v: String(count("approval")), d: "waiting on the team", dc: "flat" },
+    { k: "Reports due", tick: count("report") ? "t-red" : "t-blue", v: String(count("report")), d: "funder obligations", dc: "flat" },
+    { k: "My tasks due", tick: overdueTasks ? "t-red" : "t-blue", v: String(count("task")), d: overdueTasks ? `${overdueTasks} overdue` : "due soon", dc: "flat" },
+    { k: "Milestones", tick: count("milestone") ? "t-ember" : "t-blue", v: String(count("milestone")), d: "in progress / behind", dc: "flat" },
+    { k: "Budget alerts", tick: count("budget") ? "t-red" : "t-blue", v: String(count("budget")), d: "lines over 80%", dc: "flat" },
+    { k: "Needs attention", tick: attention.length ? "t-ember" : "t-green", v: String(attention.length), d: "items in total", dc: "flat" },
+  ];
+
+  const recent = notifications.slice(0, 6);
 
   return (
     <>
       <div className="vhead">
         <div>
           <h1>What's on every burner</h1>
-          <p>Live across finance, deployment, partnerships and the raise.</p>
+          <p>Everything that needs your attention right now — approvals, reports, deadlines, milestones and your tasks across the business, newest first.</p>
         </div>
         <div className="actions">
           <button className="btn" onClick={() => toast("Snapshot saved", "Exported to the board pack as a live snapshot")}>
@@ -81,20 +130,29 @@ export default function HomeView() {
         </div>
       </div>
 
-      <Pulse data={pulseData[entity]} />
+      <Pulse data={pulse} />
 
       <div className="grid g-2">
         <div className="panel">
-          <div className="panel-h"><h3>Capital raised</h3><span className="meta">toward $3.0M target</span></div>
-          <EmptyPad>No fundraise recorded yet.</EmptyPad>
+          <div className="panel-h">
+            <h3><span className="glyph ember"><FlameGlyphI /></span> Needs attention</h3>
+            <span className="meta">{attention.length ? `${attention.length} items · your priorities first` : "across the business"}</span>
+          </div>
+          <div>
+            {feedTop.length ? (
+              feedTop.map((it) => <FeedRow key={it.key} it={it} onGo={() => goItem(it)} />)
+            ) : (
+              <div className="empty" style={{ padding: "34px 20px" }}>
+                <div className="e-t">You're all clear</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>No approvals, reports, overdue milestones or due tasks right now.</div>
+              </div>
+            )}
+            {feed.length > feedTop.length && (
+              <Note>+ {feed.length - feedTop.length} more — open the relevant module to see them all.</Note>
+            )}
+          </div>
         </div>
-        <div className="panel">
-          <div className="panel-h"><h3>Cookstoves deployed</h3><span className="meta">last 6 months · cumulative</span></div>
-          <EmptyPad>No deployment data yet.</EmptyPad>
-        </div>
-      </div>
 
-      <div className="grid g-2" style={{ marginTop: 18 }}>
         <div className="panel">
           <div className="panel-h">
             <h3>
@@ -127,15 +185,38 @@ export default function HomeView() {
             )}
           </div>
         </div>
+      </div>
 
+      <div className="grid g-2" style={{ marginTop: 18 }}>
         <div className="panel">
           <div className="panel-h">
-            <h3><span className="glyph blue"><FlameGlyphI /></span> Status Board</h3>
-            <span className="meta">where things stand</span>
+            <h3><span className="glyph blue"><BellI /></span> Recent activity</h3>
+            <span className="meta">across the business</span>
           </div>
-          <div className="empty" style={{ padding: "34px 20px" }}>
-            <div className="e-t">Nothing on the board yet</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>Key items across the business will surface here.</div>
+          <div>
+            {recent.length ? recent.map((n) => (
+              <div className="task" key={n.id} style={{ cursor: n.linkView ? "pointer" : "default", opacity: n.seen ? 0.7 : 1 }}
+                onClick={() => { markNotificationsSeen([n.id]); if (n.linkView) go(n.linkView); }}>
+                <span className="txt" style={{ paddingLeft: 4 }}>{n.title}{n.body ? <small>{n.body}</small> : null}</span>
+                <span className="meta" style={{ whiteSpace: "nowrap" }}>{timeAgo(n.createdAt)}</span>
+              </div>
+            )) : (
+              <div className="empty" style={{ padding: "34px 20px" }}>
+                <div className="e-t">Nothing recent</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Assignments, approvals and partner updates will surface here.</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-h"><h3>Quick links</h3><span className="meta">jump straight in</span></div>
+          <div className="pad" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Quick label="Add a task" onClick={() => openTask("personal")} />
+            <Quick label="Approvals waiting in Finance" onClick={() => goTab("finance", "f-ap")} />
+            <Quick label="Projects & Programmes overview" onClick={() => go("projects")} />
+            <Quick label="Partnerships CRM" onClick={() => go("crm")} />
+            <Quick label="Reporting & board pack" onClick={() => goTab("finance", "f-report")} />
           </div>
         </div>
       </div>

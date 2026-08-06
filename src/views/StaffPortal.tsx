@@ -81,8 +81,57 @@ function MyCertModal() {
   );
 }
 
+// Raise or edit a petty-cash request from the portal — routes to Finance/HR.
+function PettyCashModal() {
+  const { pettyOpen, pettyEdit, closePetty, submitPettyRequest, updatePettyRequest, toast } = useApp();
+  const [item, setItem] = useState("");
+  const [amount, setAmount] = useState("");
+  const [needBy, setNeedBy] = useState("");
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    if (pettyOpen) {
+      setItem(pettyEdit?.item ?? "");
+      setAmount(pettyEdit ? String(pettyEdit.amount) : "");
+      setNeedBy(pettyEdit?.needBy ?? "");
+      setReason(pettyEdit?.reason ?? "");
+    }
+  }, [pettyOpen, pettyEdit]);
+
+  function save() {
+    const amt = Number(amount);
+    if (!item.trim()) { toast("What is it for?", "Add the item you're requesting money for"); return; }
+    if (!amt || amt <= 0) { toast("Enter an amount", "How much do you need? (KES)"); return; }
+    const v = { item: item.trim(), amount: amt, needBy, reason };
+    if (pettyEdit) updatePettyRequest(pettyEdit.id, v);
+    else submitPettyRequest(v);
+  }
+
+  return (
+    <ModalShell open={pettyOpen} onClose={closePetty} width={480}>
+      <div className="mh">
+        <h3>{pettyEdit ? `Edit request ${pettyEdit.id}` : "Request petty cash"}</h3>
+        <p>{pettyEdit ? "You can change it until it's decided — it stays pending." : "Say what it's for, how much, when you need it and why. It routes to Finance / HR for approval."}</p>
+      </div>
+      <div className="mb">
+        <div><label>Item</label><input className="field" placeholder="e.g. Fuel for the Makueni site visit" value={item} onChange={(e) => setItem(e.target.value)} /></div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}><label>Amount (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 3500" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+          <div style={{ flex: 1 }}><label>Needed by <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" type="date" style={{ width: "100%" }} value={needBy} onChange={(e) => setNeedBy(e.target.value)} /></div>
+        </div>
+        <div><label>Reason <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="What's it for and why now?" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+        <Note>Approved requests show as <strong>Approved</strong> here; if it's turned down you'll see <strong>Rejected</strong> with any note.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closePetty}>Cancel</button>
+        <button className="btn primary" onClick={save}>{pettyEdit ? "Save changes" : "Submit request"}</button>
+      </div>
+    </ModalShell>
+  );
+}
+
 export default function StaffPortalView() {
-  const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment, signMyExitStep, refreshHr } = useApp();
+  const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment, signMyExitStep, refreshHr,
+    pettyRequests, openPetty, openPettyEdit, deletePettyRequest } = useApp();
   const tab = tabs.staffportal;
   // HR may have opened a cycle, signed off a review or cleared an exit area
   // since last look — pull fresh state each time one of these tabs opens
@@ -113,6 +162,9 @@ export default function StaffPortalView() {
   const annualLeft = annual ? annual.entitled - annual.used - annual.reserved : null;
   const latestSlip = payslips[0];
   const pendingApps = apps.filter((a) => a.state === "pending");
+  // my own petty-cash requests (the queue lives in Finance → Petty Cash)
+  const myPetty = pettyRequests.filter((r) => r.requesterEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
+  const pendingPetty = myPetty.filter((r) => r.state === "pending");
 
   // me, from the module read model (matched by login email)
   const me = (hrData?.staff ?? []).find((s) => s.email.toLowerCase() === (meEmail ?? "").toLowerCase());
@@ -154,6 +206,7 @@ export default function StaffPortalView() {
         </div>
         <div className="actions">
           {tab === "sp-leave" && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
+          {tab === "sp-petty" && <button className="btn primary" onClick={openPetty}><PlusI />Request petty cash</button>}
           {tab === "sp-perf" && selfOpen && <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>}
           {tab === "sp-files" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
           {tab === "sp-fb" && <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />New feedback</button>}
@@ -179,6 +232,9 @@ export default function StaffPortalView() {
               )}
               {pendingApps.length > 0 && (
                 <div className="task" onClick={() => goTab("staffportal", "sp-leave")}><span className="id" style={{ color: "var(--ember)" }}>LV</span><span className="txt">{pendingApps.length} leave request{pendingApps.length > 1 ? "s" : ""} with HR<small>you can edit or withdraw while pending</small></span><span className="pill week">Pending</span></div>
+              )}
+              {pendingPetty.length > 0 && (
+                <div className="task" onClick={() => goTab("staffportal", "sp-petty")}><span className="id" style={{ color: "var(--ember)" }}>PCR</span><span className="txt">{pendingPetty.length} petty-cash request{pendingPetty.length > 1 ? "s" : ""} awaiting approval<small>you can edit or withdraw while pending</small></span><span className="pill week">Pending</span></div>
               )}
               {myExit && myExit.state === "in_progress" && (
                 <div className="task" onClick={() => goTab("staffportal", "sp-exit")}><span className="id" style={{ color: "var(--ember)" }}>EXT</span><span className="txt">Exit clearance in progress<small>{exitDone} of {myExit.clearance.length} areas cleared</small></span><span className="pill today">Continue</span></div>
@@ -257,6 +313,48 @@ export default function StaffPortalView() {
                 : <div className="recon"><span>Balances</span><span className="mono">loading…</span></div>}
               <Note>Weekends and public holidays are excluded from the day count.</Note>
             </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-petty" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>My petty-cash requests</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openPetty(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Request petty cash</a></span></div>
+            {myPetty.length ? (
+              <table className="tbl">
+                <thead><tr><th>Ref</th><th>Item</th><th>Amount</th><th>Needed by</th><th>Reason</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {myPetty.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono">{r.id}</td>
+                      <td>{r.item}</td>
+                      <td className="mono">{kes(r.amount)}</td>
+                      <td className="mono">{r.needBy ? fmtD(r.needBy) : "—"}</td>
+                      <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{r.reason || "—"}</td>
+                      <td>
+                        <span className={`pill ${statePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state !== "pending" && r.decidedBy ? `${r.decidedBy}${r.note ? " · " + r.note : ""}` : ""}>
+                          {r.state === "pending" ? "Awaiting approval" : statePill[r.state]?.txt || r.state}
+                        </span>
+                      </td>
+                      <td>
+                        {r.state === "pending" ? (
+                          <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openPettyEdit(r)}>Edit</button>
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deletePettyRequest(r.id)}>Withdraw</button>
+                          </span>
+                        ) : (
+                          <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "rejected" && r.note ? r.note : "locked"}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No petty-cash requests yet — use “Request petty cash”. Give the item, amount, the date you need it and a reason; it routes to Finance / HR for approval.</Note>
+            )}
+            <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once approved or rejected it locks, and the decision shows here{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
           </div>
         </div>
       )}
@@ -481,6 +579,7 @@ export default function StaffPortalView() {
       )}
 
       <MyCertModal />
+      <PettyCashModal />
       <FeedbackModal />
     </>
   );

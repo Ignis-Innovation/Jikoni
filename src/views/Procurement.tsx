@@ -56,8 +56,11 @@ export default function ProcurementView() {
     tabs, openReq, openVendor, reqs, vendors, poRows, grns, apInvoices,
     openVendorForm, screenVendor, openGrn, openCaptureInvoice, approveInvoice, payInvoice, goTab,
     openPoAmend, approvePoAmendment, openBankChange, approveBankChange, bankChanges, openPoPicker,
+    openContractForm, compliance,
   } = useApp();
   const tab = tabs.procurement;
+  // supplier contracts come from the shared contracts registry (kind = vendor)
+  const supplierContracts = (compliance?.contracts ?? []).filter((c) => c.kind === "vendor");
   const pendingBankChanges = bankChanges.filter((b) => b.state === "pending");
 
   const openPOs = poRows.filter((p) => p.state === "open" || p.state === "partially_received");
@@ -87,6 +90,7 @@ export default function ProcurementView() {
           {tab === "p-req" && <button className="btn primary" onClick={openReq}><PlusI />New requisition</button>}
           {tab === "p-vendors" && <button className="btn primary" onClick={openVendorForm}><PlusI />Add vendor</button>}
           {tab === "p-po" && <button className="btn primary" onClick={openPoPicker}><PlusI />New PO</button>}
+          {tab === "p-contracts" && <button className="btn primary" onClick={openContractForm}><PlusI />Add contract</button>}
         </div>
       </div>
       <Crumb view="procurement" />
@@ -99,10 +103,9 @@ export default function ProcurementView() {
             <div className="pad">
               <div className="steps">
                 <div className="step"><span className="sdot">1</span>Requisition</div><div className="step-arrow" />
-                <div className="step"><span className="sdot">2</span>Sourcing / RFQ</div><div className="step-arrow" />
-                <div className="step"><span className="sdot">3</span>Purchase order</div><div className="step-arrow" />
-                <div className="step"><span className="sdot">4</span>Goods received</div><div className="step-arrow" />
-                <div className="step"><span className="sdot">5</span>Match &amp; pay</div>
+                <div className="step"><span className="sdot">2</span>Purchase order</div><div className="step-arrow" />
+                <div className="step"><span className="sdot">3</span>Goods received</div><div className="step-arrow" />
+                <div className="step"><span className="sdot">4</span>Match &amp; pay</div>
               </div>
             </div>
           </div>
@@ -293,22 +296,30 @@ export default function ProcurementView() {
         </div>
       )}
 
-      {tab === "p-rfq" && (
-        <div className="proc-panel active">
-          <div className="panel">
-            <div className="panel-h"><h3>Sourcing events</h3><span className="meta">RFQs &amp; quotes</span></div>
-            <EmptyBody>Competitive sourcing (RFQ scoring) is a later increment — the procure-to-pay chain runs without it today.</EmptyBody>
-            <Note>Award recommendation carries a justification and routes for approval; single-source buys require a documented reason.</Note>
-          </div>
-        </div>
-      )}
-
       {tab === "p-contracts" && (
         <div className="proc-panel active">
           <div className="panel">
-            <div className="panel-h"><h3>Framework agreements &amp; contracts</h3><span className="meta">linked to the contract registry</span></div>
-            <EmptyBody>Framework contracts are managed in Compliance &amp; Governance › contract registry for now.</EmptyBody>
-            <Note>Call-off orders draw against frameworks at agreed rates. Documents live in Compliance &amp; Governance › contract registry.</Note>
+            <div className="panel-h">
+              <h3>Supplier contracts</h3>
+              <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openContractForm(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add contract</a></span>
+            </div>
+            <table className="tbl">
+              <thead><tr><th>Supplier</th><th>Contract</th><th>Detail</th><th>Expiry</th><th>Status</th></tr></thead>
+              <tbody>
+                {supplierContracts.length === 0 ? (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No supplier contracts yet — use “+ Add contract”.</td></tr>
+                ) : supplierContracts.map((c) => (
+                  <tr key={c.counterparty + c.title}>
+                    <td><strong>{c.counterparty}</strong></td>
+                    <td>{c.title}</td>
+                    <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{c.detail || "—"}</td>
+                    <td className="mono">{c.expiry || "—"}</td>
+                    <td><span className={`pill ${c.statusCls}`}>{c.statusTxt}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Note>Framework and supply agreements with vendors. These are the same records as Compliance &amp; Governance › contracts registry — add here or there, one source of truth.</Note>
           </div>
         </div>
       )}
