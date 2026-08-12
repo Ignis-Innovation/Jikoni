@@ -87,9 +87,18 @@ const apPill: Record<string, { cls: string; txt: string }> = {
 
 export default function FinanceView() {
   const { tabs, toast, accounts, journals, apInvoices, approveInvoice, payInvoice, openCaptureInvoice, poRows, markInvoicePaid,
-    pettyRequests, decidePettyRequest, canDecidePetty, openInvoice, createCostCentre } = useApp();
+    pettyRequests, decidePettyRequest, canDecidePetty, openInvoice, createCostCentre, me, perms } = useApp();
   const tab = tabs.finance;
   const [costOpen, setCostOpen] = useState(false);
+
+  // Two-stage petty cash: a request needs a Super Admin (users:3) AND HR (hr>=2)
+  // approval, by two different people. Show each approver only the stage they can act on.
+  const myPerms = perms[me?.email ?? ""];
+  const iAmSuper = (myPerms?.users ?? 0) >= 3;
+  const iAmHr = (myPerms?.hr ?? 0) >= 2;
+  const canApproveSuper = (r: PettyRequest) => iAmSuper && !r.superApprovedBy && r.hrApprovedBy !== me?.name;
+  const canApproveHr = (r: PettyRequest) => iAmHr && !r.hrApprovedBy && r.superApprovedBy !== me?.name;
+  const canApprovePetty = (r: PettyRequest) => canApproveSuper(r) || canApproveHr(r);
 
   const pettyPending = pettyRequests.filter((r) => r.state === "pending");
   const pettyDecided = pettyRequests.filter((r) => r.state === "approved" || r.state === "rejected");
@@ -314,7 +323,7 @@ export default function FinanceView() {
                 <span className="meta">{pettyPending.length} awaiting approval{canDecidePetty ? "" : " · view only"}</span>
               </div>
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Needed</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Approvals</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
                 <tbody>
                   {pettyPending.length === 0 ? (
                     <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No requests awaiting approval. Staff raise these in the Staff Portal → Petty Cash.</td></tr>
@@ -324,11 +333,17 @@ export default function FinanceView() {
                       <td>{r.requester}{r.reason ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{r.reason}</small> : null}</td>
                       <td>{r.item}</td>
                       <td className="mono">{kes(r.amount)}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.needBy)}</td>
+                      <td style={{ fontSize: 11 }}>
+                        <span className={`pill ${r.superApprovedBy ? "done" : "today"}`} title={r.superApprovedBy || "Awaiting a Super Admin"}>Super {r.superApprovedBy ? "✓" : "•"}</span>
+                        {" "}
+                        <span className={`pill ${r.hrApprovedBy ? "done" : "today"}`} title={r.hrApprovedBy || "Awaiting HR"}>HR {r.hrApprovedBy ? "✓" : "•"}</span>
+                      </td>
                       <td style={{ textAlign: "right" }}>
                         {canDecidePetty ? (
                           <span style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end" }}>
-                            <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => setPettyDecide({ req: r, approve: true })}>Approve</button>
+                            {canApprovePetty(r)
+                              ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => setPettyDecide({ req: r, approve: true })}>Approve</button>
+                              : <span className="pill today" title="Waiting on the other approver">Waiting</span>}
                             <button className="btn" style={{ padding: "4px 9px", fontSize: 11, color: "var(--red)" }} onClick={() => setPettyDecide({ req: r, approve: false })}>Reject</button>
                           </span>
                         ) : <span className="pill today">Pending</span>}
@@ -337,7 +352,7 @@ export default function FinanceView() {
                   ))}
                 </tbody>
               </table>
-              <Note>Requests come from the Staff Portal. Approving records the decision and notifies the requester; a request can't be approved by the person who raised it.</Note>
+              <Note>Requests come from the Staff Portal. Each needs a Super Admin <strong>and</strong> HR to approve (two different people, either order); either can reject. A request can't be approved by the person who raised it.</Note>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>

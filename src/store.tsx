@@ -3,16 +3,21 @@
 // mutation became Supabase queries/RPCs returning data in the same shape.
 // Every mutation lands in a Postgres RPC that enforces the document chain,
 // budget commitment, approval routing, sanctions gate and writes the audit log.
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import { LoginGate, SetPassword } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
-  FieldActivity, AppNotification,
+  FieldActivity, AppNotification, accessModules,
   kes,
 } from "./data";
+
+// The one HR person who gets the Home-page "Switch to HR / Switch to Employee"
+// toggle. In Employee mode everything is view-only; HR mode unlocks Human
+// Resources, Compliance & Governance (edit) and User-Management invites.
+export const HR_TOGGLE_EMAIL = "jwanjiku@ignis-innovation.com";
 
 export interface Toast { id: number; title: string; sub?: string }
 export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "draft" | "await" | "md" | "approved" | "rejected" | "po"; qty?: number; unit?: string; unitPrice?: number; project?: string | null; justification?: string | null; raisedBy?: string; date?: string }
@@ -55,6 +60,7 @@ export interface PettyRequest {
   id: string; item: string; amount: number; needBy: string | null; reason: string | null;
   state: "pending" | "approved" | "rejected" | "cancelled";
   requester: string; requesterEmail: string;
+  superApprovedBy: string | null; hrApprovedBy: string | null;
   decidedBy: string | null; decidedAt: string | null; note: string | null; createdAt: string;
 }
 
@@ -203,6 +209,11 @@ interface AppApi {
 
   perms: Record<string, Perms>;
   saveAccess: (email: string, p: Perms) => void;
+
+  // "Switch to HR / Switch to Employee" toggle — only meaningful for HR_TOGGLE_EMAIL.
+  hrMode: boolean;
+  setHrMode: (v: boolean) => void;
+  isHrToggleUser: boolean;
 
   me: Me | null;
   signOut: () => void;
@@ -485,6 +496,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskMode, setTaskMode] = useState<"personal" | "assign">("personal");
 
+  const [hrMode, setHrModeState] = useState<boolean>(() => {
+    try { return localStorage.getItem("jikoni.hrMode") === "1"; } catch { return false; }
+  });
+  const setHrMode = (v: boolean) => {
+    setHrModeState(v);
+    try { localStorage.setItem("jikoni.hrMode", v ? "1" : "0"); } catch { /* ignore */ }
+  };
+
   const [engId, setEngId] = useState<string | null>(null);
   const [vendorName, setVendorName] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -677,15 +696,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Petty Cash tab shows the queue. RLS returns all rows for authenticated.
     const { data: pcr } = await supabase
       .from("petty_cash_requests")
-      .select("ref, item, amount, need_by, reason, state, decided_at, decision_note, created_at, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name)")
+      .select("ref, item, amount, need_by, reason, state, decided_at, decision_note, created_at, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
       .order("created_at", { ascending: false })
       .limit(200);
     setPettyRequests(((pcr ?? []) as any[]).map((r) => {
       const rq = Array.isArray(r.requester) ? r.requester[0] : r.requester;
       const dc = Array.isArray(r.decider) ? r.decider[0] : r.decider;
+      const su = Array.isArray(r.superApprover) ? r.superApprover[0] : r.superApprover;
+      const hr = Array.isArray(r.hrApprover) ? r.hrApprover[0] : r.hrApprover;
       return {
         id: r.ref, item: r.item, amount: Number(r.amount), needBy: r.need_by, reason: r.reason, state: r.state,
-        requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "", decidedBy: dc?.name ?? null,
+        requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "",
+        superApprovedBy: su?.name ?? null, hrApprovedBy: hr?.name ?? null, decidedBy: dc?.name ?? null,
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
       } as PettyRequest;
     }));
@@ -1496,13 +1518,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     toast(ref + " deleted", "The held days are back in your balance");
   }
 
-  // HR decision — decide_leave moves reserved days to used (approve) or releases them (reject)
+  // HR decision — decide_leave moves reserved days to used (approve) or releases them (reject).
+  // On approval it also bells every user; here we email the employee the approval.
   async function decideLeave(ref: string, approve: boolean) {
-    const { error } = await supabase.rpc("decide_leave", { p_ref: ref, p_approve: approve, p_note: null });
+    const { data, error } = await supabase.rpc("decide_leave", { p_ref: ref, p_approve: approve, p_note: null });
     if (error) { toast(approve ? "Approval failed" : "Rejection failed", error.message); return; }
+    if (approve && data?.email) {
+      try {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+          body: JSON.stringify({
+            to: data.email,
+            subject: "Your leave has been approved",
+            text: `Hi ${data.who},\n\nYour leave has been approved starting ${data.from} and ending ${data.to}.\n\nOpen Jikoni Tool → Staff Portal to see the details.`,
+            html: `<p>Hi ${data.who},</p><p>Your leave has been <strong>approved</strong> starting <strong>${data.from}</strong> and ending <strong>${data.to}</strong>.</p><p>Open <strong>Jikoni Tool → Staff Portal</strong> to see the details.</p>`,
+          }),
+        });
+      } catch { /* email is best-effort; the in-app notifications still land */ }
+    }
     await Promise.all([loadLeaveQueue(), loadHr()]);
     toast(`${ref} ${approve ? "approved" : "rejected"}`,
-      approve ? "Days deducted from the balance — the employee can see it in their portal" : "Days released back to the balance");
+      approve ? "Days deducted — the employee is emailed and everyone is notified" : "Days released back to the balance");
   }
 
   /* ---------- petty-cash requests (Staff Portal → Finance Petty Cash) ---------- */
@@ -2124,6 +2161,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       data.assets ? `${data.assets} asset${data.assets === 1 ? "" : "s"} · KES ${Number(data.total).toLocaleString()} to the GL` : "Nothing to post — already run or fully depreciated");
   }
 
+  // The HR-toggle user's visible perms are driven by the Home-page toggle, not the
+  // DB grant (which stays full so the unlocked writes are allowed server-side).
+  // Employee = view-only everywhere (HR + User-Management hidden); HR = unlock
+  // Human Resources, Compliance edit and User-Management invite. Everyone else
+  // uses their real perms unchanged.
+  const isHrToggleUser = me?.email === HR_TOGGLE_EMAIL;
+  const effectivePerms = useMemo(() => {
+    if (!isHrToggleUser) return perms;
+    const viewAll: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 1]));
+    const profile: Perms = hrMode
+      ? { ...viewAll, hr: 3, compliance: 2, users: 2 }
+      : { ...viewAll, hr: 0, users: 0 };
+    return { ...perms, [HR_TOGGLE_EMAIL]: profile };
+  }, [perms, isHrToggleUser, hrMode]);
+
   const api: AppApi = {
     view, tabs, go, goTab, mainRef,
     entity, cycleEntity,
@@ -2137,7 +2189,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openProject: (n) => setProjectName(n), closeProject: () => setProjectName(null),
     openAccess: (e) => setAccessEmail(e), closeAccess: () => setAccessEmail(null),
     xEng, xProject, xTab, xView, openRecord,
-    perms, saveAccess: saveAccessFn,
+    perms: effectivePerms, saveAccess: saveAccessFn,
+    hrMode, setHrMode, isHrToggleUser,
     me,
     signOut: async () => { await supabase.auth.signOut(); setMe(null); setMembers([]); },
     members,
@@ -2173,7 +2226,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     closeLeave: () => { setLeaveOpen(false); setLeaveEdit(null); },
     applyLeave, updateLeave, deleteLeave, addStaffDocument, deleteStaffDocument, staffDocUrl,
     pettyRequests, pettyOpen, pettyEdit,
-    canDecidePetty: (perms[me?.email ?? ""]?.finance ?? 0) >= 2 || (perms[me?.email ?? ""]?.hr ?? 0) >= 2,
+    canDecidePetty: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
     openPetty: () => { setPettyEdit(null); setPettyOpen(true); },
     openPettyEdit: (r) => { setPettyEdit(r); setPettyOpen(true); },
     closePetty: () => { setPettyOpen(false); setPettyEdit(null); },

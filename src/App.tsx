@@ -80,6 +80,9 @@ function Sidebar() {
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
   const openProfile = () => { setSettingsTab("s-profile"); go("settings"); };
   const canUsers = canManageUsers(perms, me?.email);
+  // Human Resources is hidden from the nav for anyone without an HR grant — same
+  // pattern as User Management. Drives the Employee-mode view for the HR toggle user.
+  const canHr = (perms[me?.email ?? ""]?.hr ?? 0) >= 1;
   // CRM badge counts only unseen CRM notifications — it appears only when there's
   // something new the user hasn't opened yet.
   const crmUnseen = notifications.filter((n) => !n.seen && n.linkView === "crm").length;
@@ -120,7 +123,7 @@ function Sidebar() {
         <NavModule v="inventory" icon={<BoxI />} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />
 
         <div className="nav-group">People</div>
-        <NavModule v="hr" icon={<HrI />} collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />
+        {canHr && <NavModule v="hr" icon={<HrI />} collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />}
         <NavModule v="staffportal" icon={<PortalI />} collapsed={collapsed("staffportal")} setCollapsed={setCollapsed("staffportal")} />
 
         <div className="nav-group">Deployment</div>

@@ -38,6 +38,7 @@ export function InviteModal() {
         <div>
           <label>Role &amp; access</label>
           <select className="field" value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="super">Super Admin — full access + petty-cash approver</option>
             <option value="admin">Admin — full access</option>
             <option value="fin">Finance — ledgers, payables, approvals</option>
             <option value="std">Standard — assigned modules</option>

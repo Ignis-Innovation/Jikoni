@@ -88,6 +88,7 @@ export default function HomeView() {
   const {
     toast, myWeek, taskFilter, setTaskFilter, openTask, me,
     projectDetails, apInvoices, notifications, markNotificationsSeen, perms, go, goTab,
+    hrMode, setHrMode, isHrToggleUser,
   } = useApp();
   const mine = taskFilter === "mine";
   const list = mine ? myWeek.filter((t) => t.ownerEmail === me?.email) : myWeek;
@@ -123,6 +124,15 @@ export default function HomeView() {
           <p>Everything that needs your attention right now — approvals, reports, deadlines, milestones and your tasks across the business, newest first.</p>
         </div>
         <div className="actions">
+          {isHrToggleUser && (
+            <button
+              className={`btn ${hrMode ? "primary" : ""}`}
+              onClick={() => { const next = !hrMode; setHrMode(next); toast(next ? "Switched to HR" : "Switched to Employee", next ? "Human Resources, Compliance editing and inviting members are unlocked" : "You're back to a view-only employee view"); }}
+              title={hrMode ? "You're in HR mode — click to return to the employee view" : "Unlock HR, Compliance editing and member invites"}
+            >
+              {hrMode ? "Switch to Employee" : "Switch to HR"}
+            </button>
+          )}
           <button className="btn" onClick={() => toast("Snapshot saved", "Exported to the board pack as a live snapshot")}>
             <ExportI />
             Export to board pack

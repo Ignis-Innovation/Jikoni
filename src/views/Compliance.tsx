@@ -5,10 +5,14 @@ import { PlusI } from "../components/icons";
 export default function ComplianceView() {
   const {
     tabs, compliance, complianceDocUrl, markObligationFiled,
-    openPolicyForm, openDocForm, openRiskForm, openContractForm,
+    openPolicyForm, openDocForm, openRiskForm, openContractForm, me, perms,
   } = useApp();
   const tab = tabs.compliance;
   const { policies, companyDocuments, obligations, risks, contracts } = compliance;
+
+  // Editing Compliance & Governance needs an edit+ grant (level >= 2). Without it
+  // the view is read-only — the add/upload actions and "Mark filed" are hidden.
+  const canEdit = (perms[me?.email ?? ""]?.compliance ?? 0) >= 2;
 
   // one primary action per tab, shown top-right of the view header (same pattern as CRM)
   const headerAction =
@@ -25,7 +29,7 @@ export default function ComplianceView() {
           <h1>Compliance &amp; Governance</h1>
           <p>The single home for policies and manuals, the company's statutory documents, the compliance calendar, the risk register and the contracts registry.</p>
         </div>
-        {headerAction && (
+        {headerAction && canEdit && (
           <div className="actions">
             <button className="btn primary" onClick={headerAction.onClick}><PlusI />{headerAction.label}</button>
           </div>
@@ -88,7 +92,7 @@ export default function ComplianceView() {
                 <span className="id">{o.when}</span>
                 <span className="txt">{o.obligation}<small>{[o.authority, o.dueRule].filter(Boolean).join(" · ")}</small></span>
                 <span className={`pill ${o.statusCls}`}>{o.statusTxt}</span>
-                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, marginLeft: 10 }} onClick={() => markObligationFiled(o.obligation)}>Mark filed</button>
+                {canEdit && <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, marginLeft: 10 }} onClick={() => markObligationFiled(o.obligation)}>Mark filed</button>}
               </div>
             ))}
           </div>

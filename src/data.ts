@@ -87,6 +87,7 @@ export const crmData: Record<"up" | "down", { title: string; meta: string; rows:
 // public.app_users (see store.tsx loadFromDb / Member). Invite people to populate it.
 
 export const roleMeta: Record<string, [string, string]> = {
+  super: ["super", "Super Admin"],
   admin: ["admin", "Admin"],
   fin: ["fin", "Finance"],
   std: ["std", "Standard"],
@@ -118,6 +119,7 @@ export type Perms = Record<string, number>;
 const allFull: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 3]));
 
 export const roleTemplates: Record<string, Perms> = {
+  super: { ...allFull },
   admin: { ...allFull },
   fin: { finance: 3, procurement: 3, inventory: 3, hr: 1, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 0, settings: 0, users: 0 },
   std: { finance: 0, procurement: 1, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 1, crm: 3, projects: 1, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
@@ -137,7 +139,7 @@ export function canManageUsers(perms: Record<string, Perms>, email?: string | nu
 // least-privilege grants, set per person (not just by role)
 export const initialPerms: Record<string, Perms> = {
   "dennis@ignis.africa": { ...allFull },
-  "wanjiku@ignis.africa": { ...allFull },
+  "jwanjiku@ignis-innovation.com": { ...allFull },
   "brian@ignis.africa": { finance: 1, procurement: 1, inventory: 3, hr: 1, deploy: 3, readiness: 2, raise: 1, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 1, settings: 3, users: 3 },
   "joan@ignis.africa": { finance: 3, procurement: 3, inventory: 3, hr: 2, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 0, settings: 0, users: 0 },
   "wilson@ignis.africa": { finance: 0, procurement: 0, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 2, crm: 3, projects: 1, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
