@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useApp, StaffRow, ExitStep } from "../store";
+import { useApp, StaffRow, ExitStep, WeeklyReport } from "../store";
 import { Pulse, Note } from "../components/ui";
 import { Donut, ChartLegend, StaticBars } from "../components/charts";
 import { PlusI, CheckBoldI } from "../components/icons";
@@ -847,8 +847,9 @@ function StaffProfileModal() {
 
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl } = useApp();
+  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports } = useApp();
   const tab = tabs.hr;
+  const [reportView, setReportView] = useState<WeeklyReport | null>(null);
   async function openCertDoc(path: string) { const url = await staffDocUrl(path); if (url) window.open(url, "_blank", "noopener"); }
   // the other side of an appraisal/exit/cert acts from the Staff Portal, and job applicants
   // apply from the public careers page — pull fresh state each time these tabs open
@@ -916,6 +917,15 @@ export default function HrView() {
   const decidedLeave = hrLeaveQueue.filter((r) => r.state !== "pending").slice(0, 5);
   const today = new Date().toISOString().slice(0, 10);
   const onLeaveToday = hrLeaveQueue.filter((r) => r.state === "approved" && r.from <= today && r.to >= today);
+
+  // weekly reports: current-week submissions + who's still missing
+  const thisMonday = (() => { const x = new Date(); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; })();
+  const reportsSorted = [...weeklyReports].sort((a, b) => (b.weekStart + b.ref).localeCompare(a.weekStart + a.ref));
+  const thisWeekReports = weeklyReports.filter((r) => r.weekStart === thisMonday);
+  const submittedEmails = new Set(thisWeekReports.map((r) => r.authorEmail.toLowerCase()));
+  const missingThisWeek = staff.filter((s) => s.state === "active" && !submittedEmails.has(s.email.toLowerCase()));
+  const unreviewed = weeklyReports.filter((r) => r.state === "submitted");
+
   const nonPermanent = staff.filter((s) => s.contractType !== "permanent");
   const openRoles = recruitment.filter((r) => r.state !== "filled" && r.state !== "closed");
   const missingFiles = staff.filter((s) => missingIds(s) > 0);
@@ -1455,6 +1465,51 @@ export default function HrView() {
         </div>
       )}
 
+      {tab === "h-reports" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>Weekly reports</h3><span className="meta">{unreviewed.length} awaiting review · week of {fmtD(thisMonday)}</span></div>
+            {reportsSorted.length ? (
+              <table className="tbl">
+                <thead><tr><th>Ref</th><th>Employee</th><th>Week of</th><th>What they did</th><th>Blockers</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {reportsSorted.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono">{r.ref}</td>
+                      <td><strong>{r.author}</strong></td>
+                      <td className="mono">{fmtD(r.weekStart)}</td>
+                      <td style={{ maxWidth: 300, fontSize: 12.5, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.did}</td>
+                      <td style={{ fontSize: 12.5, color: r.blockers ? "var(--ember)" : "var(--ink-soft)" }}>{r.blockers ? "⚑ yes" : "—"}</td>
+                      <td><span className={`pill ${r.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }} title={r.reviewedBy ? `by ${r.reviewedBy}` : ""}>{r.state === "acknowledged" ? "Acknowledged" : "New"}</span></td>
+                      <td>
+                        <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                          <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReportView(r)}>View</button>
+                          {canViewReports && r.state === "submitted" && (
+                            <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => acknowledgeWeeklyReport(r.ref)}>Acknowledge</button>
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>Nothing yet — reports from the Staff Portal land here. Staff are reminded every Friday if they haven't submitted.</Note>
+            )}
+          </div>
+          <div className="panel sm" style={{ marginTop: 14 }}>
+            <div className="panel-h"><h3>Not submitted this week</h3><span className="meta">{missingThisWeek.length} of {staff.filter((s) => s.state === "active").length} active</span></div>
+            {missingThisWeek.length ? (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: 14 }}>
+                {missingThisWeek.map((s) => <span className="acc-chip" key={s.appUserId}>{s.name}</span>)}
+              </div>
+            ) : (
+              <Note noBorder>Everyone active has submitted this week. 🎉</Note>
+            )}
+          </div>
+        </div>
+      )}
+
       {tab === "h-pay" && (
         <div className="hr-panel active">
           <div className="grid g-2">
@@ -1663,6 +1718,27 @@ export default function HrView() {
       <FeedbackModal />
       <ExitStartModal />
       <ExitDetailModal />
+      <ModalShell open={!!reportView} onClose={() => setReportView(null)} width={560}>
+        {reportView && (
+          <>
+            <div className="mh">
+              <h3>{reportView.author} · week of {fmtD(reportView.weekStart)}</h3>
+              <p>{reportView.ref} · submitted {fmtD(reportView.createdAt.slice(0, 10))}{reportView.state === "acknowledged" && reportView.reviewedBy ? ` · acknowledged by ${reportView.reviewedBy}` : ""}</p>
+            </div>
+            <div className="mb">
+              <div><label>What they did</label><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", padding: "4px 0" }}>{reportView.did}</div></div>
+              <div><label>Blockers</label><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", padding: "4px 0", color: reportView.blockers ? "var(--ember)" : "var(--ink-soft)" }}>{reportView.blockers || "None reported"}</div></div>
+              <div><label>Next week's plan</label><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", padding: "4px 0", color: reportView.nextWeek ? undefined : "var(--ink-soft)" }}>{reportView.nextWeek || "—"}</div></div>
+            </div>
+            <div className="mf">
+              <button className="btn" onClick={() => setReportView(null)}>Close</button>
+              {canViewReports && reportView.state === "submitted" && (
+                <button className="btn primary" onClick={() => { acknowledgeWeeklyReport(reportView.ref); setReportView(null); }}>Acknowledge</button>
+              )}
+            </div>
+          </>
+        )}
+      </ModalShell>
     </>
   );
 }

@@ -39,6 +39,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
   hr: [
     { t: "h-personnel", l: "Personnel Management" },
     { t: "h-leave", l: "Leave" },
+    { t: "h-reports", l: "Weekly Reports" },
     { t: "h-pay", l: "Payroll" },
     { t: "h-appraisals", l: "Appraisals & KPIs" },
     { t: "h-certs", l: "Certifications" },
@@ -49,6 +50,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
   ],
   staffportal: [
     { t: "sp-me", l: "This Month" },
+    { t: "sp-reports", l: "Weekly Report" },
     { t: "sp-leave", l: "Leave" },
     { t: "sp-petty", l: "Petty Cash" },
     { t: "sp-perf", l: "Performance" },

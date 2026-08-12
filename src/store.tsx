@@ -64,6 +64,13 @@ export interface PettyRequest {
   decidedBy: string | null; decidedAt: string | null; note: string | null; createdAt: string;
 }
 
+export interface WeeklyReport {
+  id: string; ref: string; author: string; authorEmail: string; weekStart: string;
+  did: string; blockers: string | null; nextWeek: string | null;
+  state: "submitted" | "acknowledged";
+  reviewedBy: string | null; reviewedAt: string | null; createdAt: string;
+}
+
 /* ---------- HR module read model (staff / payroll / recruitment / field) ---------- */
 export interface KinRow { name: string; relationship: string; phone?: string; cover?: string }
 export interface StaffRow {
@@ -357,6 +364,17 @@ interface AppApi {
   updatePettyRequest: (ref: string, v: { item: string; amount: number; needBy: string; reason: string }) => void;
   deletePettyRequest: (ref: string) => void;
   decidePettyRequest: (ref: string, approve: boolean, note?: string) => void;
+
+  // Weekly reports (Staff Portal ↔ HR Weekly Reports)
+  weeklyReports: WeeklyReport[];
+  reportOpen: boolean;
+  reportEdit: WeeklyReport | null;
+  canViewReports: boolean;
+  openReport: () => void;
+  openReportEdit: (r: WeeklyReport) => void;
+  closeReport: () => void;
+  submitWeeklyReport: (v: { did: string; blockers: string; nextWeek: string }) => void;
+  acknowledgeWeeklyReport: (ref: string) => void;
   hrLeaveQueue: HrLeaveReq[];
   hrBalances: HrBalanceRow[];
   decideLeave: (ref: string, approve: boolean) => void;
@@ -563,6 +581,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [pettyRequests, setPettyRequests] = useState<PettyRequest[]>([]);
   const [pettyOpen, setPettyOpen] = useState(false);
   const [pettyEdit, setPettyEdit] = useState<PettyRequest | null>(null);
+  const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([]);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportEdit, setReportEdit] = useState<WeeklyReport | null>(null);
   const [hrLeaveQueue, setHrLeaveQueue] = useState<HrLeaveReq[]>([]);
   const [hrBalances, setHrBalances] = useState<HrBalanceRow[]>([]);
   const [hrData, setHrData] = useState<HrData | null>(null);
@@ -710,6 +731,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         superApprovedBy: su?.name ?? null, hrApprovedBy: hr?.name ?? null, decidedBy: dc?.name ?? null,
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
       } as PettyRequest;
+    }));
+    // Weekly reports — the Staff Portal shows the caller's own; HR / Super Admin see all
+    // (RLS scopes the rows).
+    const { data: wr } = await supabase
+      .from("weekly_reports")
+      .select("ref, week_start, did, blockers, next_week, state, reviewed_at, created_at, author:app_users!weekly_reports_author_id_fkey(name, email), reviewer:app_users!weekly_reports_reviewed_by_fkey(name)")
+      .order("week_start", { ascending: false })
+      .limit(500);
+    setWeeklyReports(((wr ?? []) as any[]).map((r) => {
+      const a = Array.isArray(r.author) ? r.author[0] : r.author;
+      const rv = Array.isArray(r.reviewer) ? r.reviewer[0] : r.reviewer;
+      return {
+        id: r.ref, ref: r.ref, author: a?.name ?? "—", authorEmail: a?.email ?? "",
+        weekStart: r.week_start, did: r.did, blockers: r.blockers, nextWeek: r.next_week, state: r.state,
+        reviewedBy: rv?.name ?? null, reviewedAt: r.reviewed_at, createdAt: r.created_at,
+      } as WeeklyReport;
     }));
     // Partner contact fields (contact_name/email/phone) aren't in bootstrap — fold them in by id.
     const { data: pc } = await supabase.from("partners").select("id, contact_name, email, phone");
@@ -1575,6 +1612,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       approve ? "The requester can see it approved in their portal" : "The requester is notified");
   }
 
+  /* ---------- weekly reports (Staff Portal → HR Weekly Reports) ---------- */
+  async function submitWeeklyReport(v: { did: string; blockers: string; nextWeek: string }) {
+    const { data, error } = await supabase.rpc("submit_weekly_report", {
+      p_did: v.did.trim(), p_blockers: v.blockers.trim() || null, p_next_week: v.nextWeek.trim() || null,
+    });
+    if (error) { toast("Report not submitted", error.message); return; }
+    setReportOpen(false); setReportEdit(null);
+    await loadFromDb();
+    toast(`${(data as any)?.ref ?? "Report"} submitted`, "Sent to HR — thanks for the update");
+  }
+  async function acknowledgeWeeklyReport(ref: string) {
+    const { error } = await supabase.rpc("acknowledge_weekly_report", { p_ref: ref });
+    if (error) { toast("Couldn't acknowledge", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} acknowledged`, "Marked as reviewed");
+  }
+
   /* ---------- HR module mutations: RPC → toast → reload the module read model ---------- */
   async function addEmployee(v: { name: string; email: string; roleTitle: string; contractType: string; startDate: string; grossSalary: number; kra: string; nssf: string; shif: string; bank: string; contractEnd: string }) {
     const { data, error } = await supabase.rpc("add_employee", {
@@ -2231,6 +2285,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openPettyEdit: (r) => { setPettyEdit(r); setPettyOpen(true); },
     closePetty: () => { setPettyOpen(false); setPettyEdit(null); },
     submitPettyRequest, updatePettyRequest, deletePettyRequest, decidePettyRequest,
+    weeklyReports, reportOpen, reportEdit,
+    canViewReports: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 1,
+    openReport: () => { setReportEdit(null); setReportOpen(true); },
+    openReportEdit: (r) => { setReportEdit(r); setReportOpen(true); },
+    closeReport: () => { setReportOpen(false); setReportEdit(null); },
+    submitWeeklyReport, acknowledgeWeeklyReport,
     hrLeaveQueue, hrBalances, decideLeave,
     hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
     addEmployee, preparePayroll, approvePayroll, postPayroll,

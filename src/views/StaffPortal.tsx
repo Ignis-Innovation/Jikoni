@@ -22,6 +22,12 @@ const fileFilters = [
 ];
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+// Monday of a given week, formatted YYYY-MM-DD (matches Postgres date_trunc('week'))
+function mondayOf(d = new Date()) {
+  const x = new Date(d);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
 const fmtD = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 const fmtDT = (ts: string) => new Date(ts).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const fmtPeriod = (p: string) => { const [y, m] = p.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); };
@@ -129,9 +135,49 @@ function PettyCashModal() {
   );
 }
 
+// Submit or edit this week's report — routes to HR's Weekly Reports queue.
+function WeeklyReportModal() {
+  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, toast } = useApp();
+  const [did, setDid] = useState("");
+  const [blockers, setBlockers] = useState("");
+  const [nextWeek, setNextWeek] = useState("");
+  useEffect(() => {
+    if (reportOpen) {
+      setDid(reportEdit?.did ?? "");
+      setBlockers(reportEdit?.blockers ?? "");
+      setNextWeek(reportEdit?.nextWeek ?? "");
+    }
+  }, [reportOpen, reportEdit]);
+
+  function save() {
+    if (!did.trim()) { toast("What did you do?", "Tell HR what you worked on this week"); return; }
+    submitWeeklyReport({ did: did.trim(), blockers, nextWeek });
+  }
+
+  return (
+    <ModalShell open={reportOpen} onClose={closeReport} width={520}>
+      <div className="mh">
+        <h3>{reportEdit ? "Edit this week's report" : "Submit weekly report"}</h3>
+        <p>A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Thursday 5pm.</p>
+      </div>
+      <div className="mb">
+        <div><label>What I did this week</label><textarea className="field" rows={4} placeholder="Key things you worked on and finished…" value={did} onChange={(e) => setDid(e.target.value)} /></div>
+        <div><label>Blockers <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="Anything slowing you down or that you need help with" value={blockers} onChange={(e) => setBlockers(e.target.value)} /></div>
+        <div><label>Next week's plan <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="What you'll focus on next week" value={nextWeek} onChange={(e) => setNextWeek(e.target.value)} /></div>
+        <Note>You can resubmit anytime this week — it replaces the earlier version. HR sees the latest.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeReport}>Cancel</button>
+        <button className="btn primary" onClick={save}>{reportEdit ? "Save report" : "Submit report"}</button>
+      </div>
+    </ModalShell>
+  );
+}
+
 export default function StaffPortalView() {
   const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment, signMyExitStep, refreshHr,
-    pettyRequests, openPetty, openPettyEdit, deletePettyRequest } = useApp();
+    pettyRequests, openPetty, openPettyEdit, deletePettyRequest,
+    weeklyReports, openReport, openReportEdit } = useApp();
   const tab = tabs.staffportal;
   // HR may have opened a cycle, signed off a review or cleared an exit area
   // since last look — pull fresh state each time one of these tabs opens
@@ -165,6 +211,10 @@ export default function StaffPortalView() {
   // my own petty-cash requests (the queue lives in Finance → Petty Cash)
   const myPetty = pettyRequests.filter((r) => r.requesterEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
   const pendingPetty = myPetty.filter((r) => r.state === "pending");
+  // my weekly reports (HR sees the queue in HR → Weekly Reports)
+  const thisMonday = mondayOf();
+  const myReports = weeklyReports.filter((r) => r.authorEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
+  const thisWeekReport = myReports.find((r) => r.weekStart === thisMonday) ?? null;
 
   // me, from the module read model (matched by login email)
   const me = (hrData?.staff ?? []).find((s) => s.email.toLowerCase() === (meEmail ?? "").toLowerCase());
@@ -205,6 +255,8 @@ export default function StaffPortalView() {
           <p>Your own view of yourself — pay, leave, performance, certifications and documents. Nobody else sees this page.</p>
         </div>
         <div className="actions">
+          {tab === "sp-reports" && !thisWeekReport && <button className="btn primary" onClick={openReport}><PlusI />Submit weekly report</button>}
+          {tab === "sp-reports" && thisWeekReport && <button className="btn" onClick={() => openReportEdit(thisWeekReport)}>Edit this week's report</button>}
           {tab === "sp-leave" && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
           {tab === "sp-petty" && <button className="btn primary" onClick={openPetty}><PlusI />Request petty cash</button>}
           {tab === "sp-perf" && selfOpen && <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>}
@@ -262,6 +314,45 @@ export default function StaffPortalView() {
               </table>
             ) : (
               <Note noBorder>No payslips yet — they appear here when payroll posts a run.</Note>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-reports" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>This week</h3><span className="meta">Week of {fmtD(thisMonday)} · due Thursday 5pm</span></div>
+            {thisWeekReport ? (
+              <>
+                <div className="recon"><span>Status</span><span className={`pill ${thisWeekReport.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{thisWeekReport.state === "acknowledged" ? "Acknowledged by HR" : "Submitted"}</span></div>
+                <div style={{ padding: "10px 0", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>What I did</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.did}</div></div>
+                {thisWeekReport.blockers && <div style={{ padding: "10px 0", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Blockers</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.blockers}</div></div>}
+                {thisWeekReport.nextWeek && <div style={{ padding: "10px 0", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Next week's plan</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.nextWeek}</div></div>}
+                <Note>Submitted — thanks. You can <a href="#" onClick={(e) => { e.preventDefault(); openReportEdit(thisWeekReport); }} style={{ color: "var(--flame)", textDecoration: "none" }}>edit it</a> anytime this week; the latest version is what HR sees.</Note>
+              </>
+            ) : (
+              <Note noBorder>You haven't submitted this week's report yet. Use <strong>Submit weekly report</strong> — a quick note on what you did, any blockers, and next week's plan. It's due <strong>Thursday 5pm</strong> and goes to HR.</Note>
+            )}
+          </div>
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>My past reports</h3><span className="meta">{myReports.length} submitted</span></div>
+            {myReports.length ? (
+              <table className="tbl">
+                <thead><tr><th>Ref</th><th>Week of</th><th>What I did</th><th>Status</th></tr></thead>
+                <tbody>
+                  {myReports.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono">{r.ref}</td>
+                      <td className="mono">{fmtD(r.weekStart)}</td>
+                      <td style={{ maxWidth: 380, fontSize: 12.5, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.did}</td>
+                      <td><span className={`pill ${r.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{r.state === "acknowledged" ? "Acknowledged" : "Submitted"}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No reports yet — your submissions will list here.</Note>
             )}
           </div>
         </div>
@@ -580,6 +671,7 @@ export default function StaffPortalView() {
 
       <MyCertModal />
       <PettyCashModal />
+      <WeeklyReportModal />
       <FeedbackModal />
     </>
   );
