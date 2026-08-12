@@ -37,8 +37,12 @@ export default async function handler(req, res) {
   const { name, email } = req.body || {};
   if (!email) return res.status(400).json({ error: "An email is required" });
 
-  // 3) generate a set-password action link (invite for new users, recovery for existing)
-  const redirectTo = process.env.APP_URL || "";
+  // 3) generate a set-password action link (invite for new users, recovery for existing).
+  // After the invitee clicks, Supabase redirects them here to set their password.
+  // Points at the branded app domain; override with INVITE_REDIRECT_URL if needed.
+  // NOTE: this URL must be in the Supabase Auth "Redirect URLs" allow-list AND the
+  // domain must serve the app (Vercel custom domain), or the link won't land.
+  const redirectTo = process.env.INVITE_REDIRECT_URL || "https://app.ignis-innovation.com/";
   let link;
   const inviteLink = await admin.auth.admin.generateLink({ type: "invite", email, options: { redirectTo } });
   if (inviteLink.error) {
