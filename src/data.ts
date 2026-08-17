@@ -88,6 +88,7 @@ export const crmData: Record<"up" | "down", { title: string; meta: string; rows:
 
 export const roleMeta: Record<string, [string, string]> = {
   super: ["super", "Super Admin"],
+  sub: ["sub", "Sub Admin"],
   admin: ["admin", "Admin"],
   fin: ["fin", "Finance"],
   std: ["std", "Standard"],
@@ -120,6 +121,10 @@ const allFull: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 3]));
 
 export const roleTemplates: Record<string, Perms> = {
   super: { ...allFull },
+  // Sub Admin = Admin-tier access, but ALSO sees and edits the two areas a plain
+  // Admin can't: Human Resources (edit) and Compliance & Governance (edit). Not a
+  // super admin (users:2, no grant drawer / not a petty-cash first approver).
+  sub: { ...allFull, users: 2, hr: 2, compliance: 2 },
   // Admin = broad access and can invite/manage members (users:2), but is NOT a super
   // admin: no access grant/revoke drawer and not a petty-cash first approver (those
   // need users:3). HR is hidden (0) — payroll/salaries/records are Super-Admin-only —

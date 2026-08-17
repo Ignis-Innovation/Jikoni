@@ -3,7 +3,7 @@ import { AppProvider, useApp } from "./store";
 import { flagColors, canManageUsers, moduleLevel, gatedViews } from "./data";
 import { moduleLabels, subnavs } from "./nav";
 import {
-  BrandMark, ChevDown, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
+  BrandMark, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
   ProjectsI, RaiseI, CrmI, ComplianceI, UsersI, SettingsI, SearchI, PlusI, BellI, BoxI, LogoutI,
 } from "./components/icons";
 import { Toasts } from "./components/ui";
@@ -76,7 +76,7 @@ function NavModule({ v, icon, badge, badgeCls, collapsed, setCollapsed }: {
 }
 
 function Sidebar() {
-  const { view, entity, cycleEntity, me, perms, notifications, signOut, go, setSettingsTab } = useApp();
+  const { view, me, perms, notifications, signOut, go, setSettingsTab } = useApp();
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
   const openProfile = () => { setSettingsTab("s-profile"); go("settings"); };
   const canUsers = canManageUsers(perms, me?.email);
@@ -103,14 +103,13 @@ function Sidebar() {
         </div>
       </div>
 
-      <div className="entity" onClick={cycleEntity}>
+      <div className="entity" style={{ cursor: "default" }}>
         <div className="lbl">Entity / Country</div>
         <div className="val">
           <span className="flag">
-            {flagColors[entity].map((c, i) => <span key={i} style={{ flex: 1, background: c }} />)}
+            {flagColors.Kenya.map((c, i) => <span key={i} style={{ flex: 1, background: c }} />)}
           </span>
-          <span>{entity}</span>
-          <ChevDown width={13} height={13} />
+          <span>Kenya</span>
         </div>
       </div>
 

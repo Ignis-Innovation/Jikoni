@@ -14,10 +14,10 @@ import {
   kes,
 } from "./data";
 
-// The one HR person who gets the Home-page "Switch to HR / Switch to Employee"
-// toggle. In Employee mode everything is view-only; HR mode unlocks Human
-// Resources, Compliance & Governance (edit) and User-Management invites.
-export const HR_TOGGLE_EMAIL = "jwanjiku@ignis-innovation.com";
+// Retired: HR access used to be a Home-page "Switch to HR / Switch to Employee"
+// toggle for one person. That's now a proper "Sub Admin" role (Human Resources +
+// Compliance & Governance edit), granted per-user. Empty = the toggle is disabled.
+export const HR_TOGGLE_EMAIL = "";
 
 export interface Toast { id: number; title: string; sub?: string }
 export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "draft" | "await" | "md" | "approved" | "rejected" | "po"; qty?: number; unit?: string; unitPrice?: number; project?: string | null; justification?: string | null; raisedBy?: string; date?: string }
@@ -497,6 +497,17 @@ export const useApp = () => useContext(Ctx);
 let toastSeq = 0;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+// Shown after sign-in while the first bootstrap loads, so the sidebar never
+// renders on seed permissions before the real ones arrive.
+function BootSplash() {
+  return (
+    <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "var(--counter)" }}>
+      <img src="/ignis-logo.png" alt="Ignis" style={{ width: 150, height: "auto", opacity: 0.92, animation: "bootpulse 1.2s ease-in-out infinite" }} />
+      <style>{"@keyframes bootpulse{0%,100%{opacity:.45}50%{opacity:.95}}"}</style>
+    </div>
+  );
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [view, setView] = useState("home");
   const [tabs, setTabs] = useState<Record<string, string>>({
@@ -507,6 +518,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  // True once the first bootstrap (me + perms) has loaded. We hold the app behind a
+  // splash until then so the sidebar never flashes the wrong nav on the seed perms.
+  const [bootReady, setBootReady] = useState(false);
   const [needPassword, setNeedPassword] = useState(false);
   const [entity, setEntity] = useState<Entity>("Kenya");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -629,7 +643,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /* ---------- bootstrap: one round-trip, everything in view shapes ---------- */
   async function loadFromDb(): Promise<boolean> {
     const { data, error } = await supabase.rpc("bootstrap");
-    if (error) { toast("Couldn't load records", error.message); return false; }
+    if (error) { toast("Couldn't load records", error.message); setBootReady(true); return false; }
     setMe((data.me as Me) ?? null);   // who's actually signed in — drives the sidebar identity
     setMyWeek(data.tasks as WeekTask[]);
     // Richer task read: subtasks + owner/assigner, so My Week can expand mini-tasks and
@@ -653,6 +667,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNewPOs(data.pos as NewPO[]);
     setNewInvoices(data.salesInvoices as NewInvoice[]);
     setPerms({ ...initialPerms, ...(data.perms as Record<string, Perms>) });
+    setBootReady(true);   // me + perms are in — safe to reveal the app with the right nav
     // User Management runs off the live app_users table (no hardcoded roster) — invited
     // people appear as soon as invite_user inserts them, since sendInvite re-runs loadFromDb.
     const { data: memberRows } = await supabase
@@ -1000,7 +1015,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) { setBootReady(false); return; }
     (async () => {
       // sweep due suspensions, then gate: an exited account is signed out
       // before any module data loads (their exit's 24h grace has passed)
@@ -2325,7 +2340,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   if (!authReady) return null;
   // an invitee with a session but a pending password sees the set-password screen first
   if (session && needPassword) return <SetPassword onDone={() => setNeedPassword(false)} />;
-  return <Ctx.Provider value={api}>{session ? children : <LoginGate />}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={api}>
+      {!session ? <LoginGate /> : bootReady ? children : <BootSplash />}
+    </Ctx.Provider>
+  );
 }
 
 export { roleTemplates };
