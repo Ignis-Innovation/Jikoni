@@ -120,10 +120,11 @@ const allFull: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 3]));
 
 export const roleTemplates: Record<string, Perms> = {
   super: { ...allFull },
-  // Admin = full access to every module, and can invite/manage members (users:2),
-  // but is NOT a super admin: no access grant/revoke drawer and not a petty-cash
-  // first approver — those are gated on users:3 (see Users.tsx / can_petty_super).
-  admin: { ...allFull, users: 2 },
+  // Admin = broad access and can invite/manage members (users:2), but is NOT a super
+  // admin: no access grant/revoke drawer and not a petty-cash first approver (those
+  // need users:3). HR is hidden (0) — payroll/salaries/records are Super-Admin-only —
+  // and Compliance is view-only (1). See migration 0059.
+  admin: { ...allFull, users: 2, hr: 0, compliance: 1 },
   fin: { finance: 3, procurement: 3, inventory: 3, hr: 1, deploy: 1, readiness: 0, raise: 0, crm: 1, projects: 2, reports: 2, compliance: 2, dataroom: 0, settings: 0, users: 0 },
   std: { finance: 0, procurement: 1, inventory: 1, hr: 0, deploy: 1, readiness: 1, raise: 1, crm: 3, projects: 1, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
   view: { finance: 0, procurement: 0, inventory: 0, hr: 0, deploy: 1, readiness: 1, raise: 0, crm: 1, projects: 0, reports: 1, compliance: 1, dataroom: 0, settings: 0, users: 0 },
