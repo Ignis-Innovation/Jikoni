@@ -2340,9 +2340,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   if (!authReady) return null;
   // an invitee with a session but a pending password sees the set-password screen first
   if (session && needPassword) return <SetPassword onDone={() => setNeedPassword(false)} />;
+  // Reveal the app only once the signed-in identity (me) AND permissions are loaded,
+  // so the sidebar never renders on seed perms / a null "me" (the ?/Member flash).
   return (
     <Ctx.Provider value={api}>
-      {!session ? <LoginGate /> : bootReady ? children : <BootSplash />}
+      {!session ? <LoginGate /> : bootReady && me ? children : <BootSplash />}
     </Ctx.Provider>
   );
 }
