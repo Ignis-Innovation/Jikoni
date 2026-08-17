@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { BrandMark } from "./icons";
+import { PasswordInput } from "./PasswordInput";
 
 const labelStyle: React.CSSProperties = {
   fontSize: 11.5, fontWeight: 600, color: "var(--ink-soft)", letterSpacing: 0.4,
@@ -117,7 +118,7 @@ export function LoginGate() {
         </div>
         <div>
           <label style={labelStyle}>Password</label>
-          <input className="field" type="password" autoComplete="current-password" style={{ width: "100%" }}
+          <PasswordInput autoComplete="current-password" wrapStyle={{ width: "100%" }} style={{ width: "100%" }}
             value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
         </div>
         {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}
@@ -168,12 +169,12 @@ export function SetPassword({ onDone }: { onDone: () => void }) {
         </div>
         <div>
           <label style={labelStyle}>New password</label>
-          <input className="field" type="password" autoComplete="new-password" style={{ width: "100%" }}
+          <PasswordInput autoComplete="new-password" wrapStyle={{ width: "100%" }} style={{ width: "100%" }}
             value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" />
         </div>
         <div>
           <label style={labelStyle}>Confirm password</label>
-          <input className="field" type="password" autoComplete="new-password" style={{ width: "100%" }}
+          <PasswordInput autoComplete="new-password" wrapStyle={{ width: "100%" }} style={{ width: "100%" }}
             value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Re-enter it" />
         </div>
         {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}

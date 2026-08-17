@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useApp } from "../store";
 import { OrgI, BellI, LinkI, LockI } from "../components/icons";
+import { PasswordInput } from "../components/PasswordInput";
 
 /* ---------- config-bound controls: every one persists to app_config ---------- */
 function cfgBool(v: unknown) { return v === true || v === "true"; }
@@ -166,8 +167,8 @@ function ProfilePanel() {
 
       <div className="set-card">
         <div className="sh"><h3>Change password</h3><p>Sets the password you'll use to sign in from now on.</p></div>
-        <div className="row"><div className="rl">New password</div><input className="field" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 8 characters" /></div>
-        <div className="row"><div className="rl">Confirm password</div><input className="field" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
+        <div className="row"><div className="rl">New password</div><PasswordInput autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 8 characters" /></div>
+        <div className="row"><div className="rl">Confirm password</div><PasswordInput autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
         {pwMsg && <div style={{ fontSize: 12.5, color: pwMsg === "Password changed." ? "var(--flame)" : "var(--red)", marginTop: 4 }}>{pwMsg}</div>}
         <div style={{ marginTop: 12 }}><button className="btn primary" onClick={savePassword} disabled={!pw || !pw2}>Update password</button></div>
       </div>

@@ -55,6 +55,13 @@ export const EyeI = (p: P) => (
     <circle cx="12" cy="12" r="3" />
   </svg>
 );
+export const EyeOffI = (p: P) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <path d="M2 12s4-7 10-7c1.7 0 3.2.35 4.5.95M22 12s-4 7-10 7c-1.7 0-3.2-.35-4.5-.95" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    <path d="M3 3l18 18" />
+  </svg>
+);
 export const OrgI = (p: P) => S(p, 1.8, <path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-3" />);
 export const LinkI = (p: P) => S(p, 1.8, <><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" /><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" /></>);
 export const CrumbChev = () => (
