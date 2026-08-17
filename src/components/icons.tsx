@@ -9,14 +9,10 @@ const S = (props: P, sw: number, children: React.ReactNode, fill = "none") => (
 );
 
 // Jikoni Tool mark — a cooking pot over a flame, in the app's warm palette.
+// The Ignis flame, cropped from the brand logo (public/ignis-mark.png). Rendered
+// inside the white rounded .mark box next to the product name.
 export const BrandMark = () => (
-  <svg viewBox="0 0 24 24" fill="none">
-    <path d="M12 2.6c1.5 1.7 2.3 2.9 2.3 4.1 0 1.4-1 2.4-2.3 2.4S9.7 8.1 9.7 6.7c0-1.2.8-2.4 2.3-4.1Z" fill="#E2632A" />
-    <path d="M12 5.4c.7.9 1.1 1.5 1.1 2.1 0 .7-.5 1.2-1.1 1.2s-1.1-.5-1.1-1.2c0-.6.4-1.2 1.1-2.1Z" fill="#F5A623" />
-    <path d="M4.5 12h15" stroke="#3E3226" strokeWidth="1.6" strokeLinecap="round" />
-    <path d="M6 12v3.5A5.5 5.5 0 0 0 11.5 21h1a5.5 5.5 0 0 0 5.5-5.5V12" stroke="#3E3226" strokeWidth="1.6" strokeLinecap="round" />
-    <path d="M3 13.6l1.5-1.6M21 13.6 19.5 12" stroke="#3E3226" strokeWidth="1.6" strokeLinecap="round" />
-  </svg>
+  <img className="brandmark" src="/ignis-mark.png" alt="Ignis" />
 );
 
 export const HomeI = (p: P) => S(p, 1.8, <><path d="M3 11l9-7 9 7" /><path d="M5 10v10h14V10" /></>);
