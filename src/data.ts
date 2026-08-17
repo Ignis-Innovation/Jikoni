@@ -139,6 +139,21 @@ export function canManageUsers(perms: Record<string, Perms>, email?: string | nu
   return (perms[email ?? ""]?.users ?? 0) >= 1;
 }
 
+// The signed-in user's access level for one module (0 None · 1 View · 2 Edit · 3 Full).
+export function moduleLevel(perms: Record<string, Perms>, email: string | null | undefined, module: string): number {
+  return perms[email ?? ""]?.[module] ?? 0;
+}
+
+// Views that are gated by a matching module grant: level 0 hides them from the nav
+// and blocks direct access. "home", "staffportal" and "settings" are always available
+// (Home is the landing page; Staff Portal + Settings hold each person's own profile,
+// password and self-service records).
+export const gatedViews: Record<string, string> = {
+  finance: "finance", procurement: "procurement", inventory: "inventory", hr: "hr",
+  deploy: "deploy", readiness: "readiness", raise: "raise", crm: "crm",
+  projects: "projects", compliance: "compliance", users: "users",
+};
+
 // least-privilege grants, set per person (not just by role)
 export const initialPerms: Record<string, Perms> = {
   "dennis@ignis.africa": { ...allFull },

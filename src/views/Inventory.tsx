@@ -2,7 +2,7 @@
 // existing design system: Pulse, panel/tbl/pill/rcv classes, ModalShell, Crumb.
 import { useEffect, useRef, useState } from "react";
 import { useApp, StockItem, DispatchRow, AssetRow } from "../store";
-import { Pulse } from "../components/ui";
+import { Pulse, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { PlusI, ExportI, DocI, CheckI } from "../components/icons";
 import { kes, kenyaLocations, assetCategories } from "../data";
@@ -21,7 +21,8 @@ function ItemStatus({ it }: { it: StockItem }) {
 }
 
 function StockModal() {
-  const { stockModal, closeStockModal, inventory, receiveStock, issueStock, transferStock, adjustStock, createDispatch, toast } = useApp();
+  const { stockModal, closeStockModal, inventory, receiveStock, issueStock, transferStock, adjustStock, createDispatch, toast, level } = useApp();
+  const canEdit = level("inventory") >= 2;
   const items = inventory?.items ?? [];
   const locations = inventory?.locations ?? [];
   const [sku, setSku] = useState("");
@@ -166,7 +167,7 @@ function StockModal() {
       </div>
       <div className="mf">
         <button className="btn" onClick={closeStockModal}>Cancel</button>
-        <button className="btn primary" onClick={submit}>{stockModal ? btnLabel[stockModal] : ""}</button>
+        {canEdit && <button className="btn primary" onClick={submit}>{stockModal ? btnLabel[stockModal] : ""}</button>}
       </div>
     </ModalShell>
   );
@@ -174,7 +175,8 @@ function StockModal() {
 
 // Create a stock item (SKU auto-generated) or edit an existing one's reorder policy / cost.
 function ItemModal() {
-  const { itemModal, closeItemModal, createStockItem, updateStockItem, toast } = useApp();
+  const { itemModal, closeItemModal, createStockItem, updateStockItem, toast, level } = useApp();
+  const canEdit = level("inventory") >= 2;
   const editing = itemModal && itemModal !== "new" ? itemModal : null;
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
@@ -279,7 +281,7 @@ function ItemModal() {
       </div>
       <div className="mf">
         <button className="btn" onClick={closeItemModal}>Cancel</button>
-        <button className="btn primary" onClick={submit}>{editing ? "Save changes" : "Add item"}</button>
+        {canEdit && <button className="btn primary" onClick={submit}>{editing ? "Save changes" : "Add item"}</button>}
       </div>
     </ModalShell>
   );
@@ -287,7 +289,8 @@ function ItemModal() {
 
 // Register a company asset (laptop, vehicle, …) — tracked by count, not depreciation.
 function AssetModal() {
-  const { assetOpen, closeAssetForm, registerAsset, toast } = useApp();
+  const { assetOpen, closeAssetForm, registerAsset, toast, level } = useApp();
+  const canEdit = level("inventory") >= 2;
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [qtyStr, setQtyStr] = useState("1");
@@ -335,7 +338,7 @@ function AssetModal() {
       </div>
       <div className="mf">
         <button className="btn" onClick={closeAssetForm}>Cancel</button>
-        <button className="btn primary" onClick={submit}>Add asset</button>
+        {canEdit && <button className="btn primary" onClick={submit}>Add asset</button>}
       </div>
     </ModalShell>
   );
@@ -343,7 +346,8 @@ function AssetModal() {
 
 // Assign an asset to an employee so the team can track who holds what.
 function AssignAssetModal({ open, asset, onClose }: { open: boolean; asset: AssetRow | null; onClose: () => void }) {
-  const { assignAsset, members, toast } = useApp();
+  const { assignAsset, members, toast, level } = useApp();
+  const canEdit = level("inventory") >= 2;
   const [employee, setEmployee] = useState("");
   const [qtyStr, setQtyStr] = useState("1");
   useEffect(() => { if (open) { setEmployee(""); setQtyStr("1"); } }, [open]);
@@ -379,7 +383,7 @@ function AssignAssetModal({ open, asset, onClose }: { open: boolean; asset: Asse
       </div>
       <div className="mf">
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" onClick={submit}>Assign</button>
+        {canEdit && <button className="btn primary" onClick={submit}>Assign</button>}
       </div>
     </ModalShell>
   );
@@ -411,7 +415,8 @@ async function exportMovements(toast: (t: string, s?: string) => void) {
 // One dispatch row. Delivered dispatches can carry a proof-of-delivery receipt:
 // click "Add receipt" → pick a file → it uploads to Storage and saves against the dispatch.
 function DispatchItem({ d }: { d: DispatchRow }) {
-  const { setDispatchState, attachDispatchReceipt, receiptUrl } = useApp();
+  const { setDispatchState, attachDispatchReceipt, receiptUrl, level } = useApp();
+  const canEdit = level("inventory") >= 2;
   const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div className="task" style={{ cursor: "default" }}>
@@ -419,7 +424,7 @@ function DispatchItem({ d }: { d: DispatchRow }) {
       <span className="txt">{d.destination}{d.project ? ` — ${d.project}` : ""}
         <small>{d.lines.map((l) => `${l.qty} × ${l.name}`).join(" · ")}</small>
       </span>
-      {d.state === "dispatched" && (
+      {d.state === "dispatched" && canEdit && (
         <button className="btn" style={{ marginRight: 8 }} onClick={() => setDispatchState(d.id, "delivered")}>Mark delivered</button>
       )}
       {d.state === "delivered" && (
@@ -431,12 +436,12 @@ function DispatchItem({ d }: { d: DispatchRow }) {
               style={{ marginRight: 8, display: "inline-flex", alignItems: "center", gap: 5, textDecoration: "none", color: "var(--green)" }} title="View delivery receipt">
               <CheckI width={13} height={13} /> Receipt
             </a>
-          ) : (
+          ) : canEdit ? (
             <button className="btn" style={{ marginRight: 8, display: "inline-flex", alignItems: "center", gap: 5 }}
               onClick={() => fileRef.current?.click()} title="Upload a proof-of-delivery receipt">
               <DocI width={13} height={13} /> Add receipt
             </button>
-          )}
+          ) : null}
         </>
       )}
       <span className={`pill ${d.state === "delivered" ? "done" : d.state === "cancelled" ? "over" : "today"}`}>{d.state}</span>
@@ -445,8 +450,12 @@ function DispatchItem({ d }: { d: DispatchRow }) {
 }
 
 export default function InventoryView() {
-  const { tabs, toast, openStockModal, inventory, openItemModal, openAssetForm, disposeAsset } = useApp();
+  const { tabs, toast, openStockModal, inventory, openItemModal, openAssetForm, disposeAsset, level } = useApp();
   const tab = tabs.inventory;
+  // Inventory access: View (1) is read-only; Edit (2)+ can receive/issue/transfer/
+  // adjust/dispatch, add/edit items and assets, assign and dispose. No approval tier.
+  const invLvl = level("inventory");
+  const canEdit = invLvl >= 2;
   const items = inventory?.items ?? [];
   const movements = inventory?.movements ?? [];
   const dispatches = inventory?.dispatches ?? [];
@@ -491,7 +500,7 @@ export default function InventoryView() {
         </div>
         <div className="actions">
           {/* Stock quick actions live only on the Overview tab; other tabs show their own panel buttons. */}
-          {tab === "i-over" && (
+          {tab === "i-over" && canEdit && (
             <>
               <button className="btn" onClick={() => openStockModal("receive")}>Receive stock</button>
               <button className="btn" onClick={() => openStockModal("transfer")}>Transfer stock</button>
@@ -501,12 +510,13 @@ export default function InventoryView() {
           )}
           {/* The Dispatches tab's primary action dispatches stock to a site — its Destination
               field carries the Kenyan-location typeahead (type "mu" → Murang'a, Makueni…). */}
-          {tab === "i-dsp" && (
+          {tab === "i-dsp" && canEdit && (
             <button className="btn primary" onClick={() => openStockModal("dispatch")}><PlusI />Dispatch stock</button>
           )}
         </div>
       </div>
       <Crumb view="inventory" />
+      <ViewOnly show={invLvl === 1} />
 
       {tab === "i-over" && (
         <div className="proc-panel active">
@@ -573,7 +583,7 @@ export default function InventoryView() {
               <span className="meta" style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <input className="field" style={{ width: 200, padding: "5px 9px", fontSize: 12 }} placeholder="Search name, code, category…" value={itemSearch} onChange={(e) => setItemSearch(e.target.value)} />
                 {filteredItems.length} of {items.length} SKUs · valued {kes(stockValue)}
-                <button className="btn" onClick={() => openItemModal("new")}><PlusI width={13} height={13} /> Add stock item</button>
+                {canEdit && <button className="btn" onClick={() => openItemModal("new")}><PlusI width={13} height={13} /> Add stock item</button>}
               </span>
             </div>
             <table className="tbl">
@@ -590,7 +600,9 @@ export default function InventoryView() {
                     <td className="mono">{i.unitCost.toLocaleString()}</td>
                     <td><ItemStatus it={i} /></td>
                     <td style={{ textAlign: "right" }}>
-                      <a href="#" onClick={(e) => { e.preventDefault(); openItemModal(i); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Edit</a>
+                      {canEdit
+                        ? <a href="#" onClick={(e) => { e.preventDefault(); openItemModal(i); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Edit</a>
+                        : <span className="pill week">view only</span>}
                     </td>
                   </tr>
                 ))}
@@ -652,7 +664,7 @@ export default function InventoryView() {
               <h3>Asset register</h3>
               <span className="meta" style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 company assets — laptops, vehicles, equipment
-                <button className="btn" onClick={openAssetForm}><PlusI width={13} height={13} /> Add asset</button>
+                {canEdit && <button className="btn" onClick={openAssetForm}><PlusI width={13} height={13} /> Add asset</button>}
               </span>
             </div>
             <table className="tbl">
@@ -670,12 +682,12 @@ export default function InventoryView() {
                       <td style={{ fontSize: 12 }}>{a.acquired}</td>
                       <td>{out > 0 ? <span className="pill today" style={{ textTransform: "none" }}>{out} assigned</span> : <span className="meta">—</span>}</td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                        {a.state !== "disposed" && (
-                          <>
+                        {a.state !== "disposed" && (canEdit
+                          ? <>
                             <a href="#" onClick={(e) => { e.preventDefault(); setAssignFor(a); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12, marginRight: 12 }}>Assign</a>
                             <a href="#" onClick={(e) => { e.preventDefault(); const reason = window.prompt(`Dispose ${a.name}? Optional reason:`, ""); if (reason !== null) disposeAsset(a.id, reason); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Dispose</a>
                           </>
-                        )}
+                          : <span className="pill week">view only</span>)}
                       </td>
                     </tr>
                   );

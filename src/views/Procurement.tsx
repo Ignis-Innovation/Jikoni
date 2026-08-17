@@ -1,6 +1,6 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { useApp, Req, PORow, ApInvoice, Grn } from "../store";
-import { Pulse, Note } from "../components/ui";
+import { Pulse, Note, ViewOnly } from "../components/ui";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 
@@ -22,16 +22,18 @@ const apPill: Record<string, { cls: string; txt: string }> = {
 };
 
 function ReqStatusCell({ r }: { r: Req }) {
-  const { approvePR, raisePO, submitReqFinal, withdrawReq } = useApp();
+  const { approvePR, raisePO, submitReqFinal, withdrawReq, level } = useApp();
+  const canEdit = level("procurement") >= 2;
+  const canFull = level("procurement") >= 3;
   const btn = { padding: "4px 9px", fontSize: 11, marginLeft: 7 } as const;
-  const approve = <button className="btn" style={btn} onClick={() => approvePR(r.id)}>Approve</button>;
-  const withdraw = <button className="btn" style={btn} onClick={() => withdrawReq(r.id)}>Withdraw</button>;
+  const approve = canFull ? <button className="btn" style={btn} onClick={() => approvePR(r.id)}>Approve</button> : null;
+  const withdraw = canEdit ? <button className="btn" style={btn} onClick={() => withdrawReq(r.id)}>Withdraw</button> : null;
   if (r.status === "draft")
     return (
       <>
         <span className="pill week">Draft</span>
-        <button className="btn primary" style={btn} onClick={() => submitReqFinal(r.id)}>Submit</button>
-        <button className="btn" style={btn} onClick={() => withdrawReq(r.id)}>Discard</button>
+        {canEdit && <button className="btn primary" style={btn} onClick={() => submitReqFinal(r.id)}>Submit</button>}
+        {canEdit && <button className="btn" style={btn} onClick={() => withdrawReq(r.id)}>Discard</button>}
       </>
     );
   if (r.status === "await") return <><span className="pill today">Awaiting approval</span>{approve}{withdraw}</>;
@@ -41,7 +43,7 @@ function ReqStatusCell({ r }: { r: Req }) {
     return (
       <>
         <span className="pill done">Approved</span>
-        <button className="btn primary" style={btn} onClick={() => raisePO(r.id)}>Raise PO →</button>
+        {canEdit && <button className="btn primary" style={btn} onClick={() => raisePO(r.id)}>Raise PO →</button>}
       </>
     );
   return <span className="pill done">Converted → PO</span>;
@@ -56,9 +58,14 @@ export default function ProcurementView() {
     tabs, openReq, openVendor, reqs, vendors, poRows, grns, apInvoices,
     openVendorForm, screenVendor, openGrn, openCaptureInvoice, approveInvoice, payInvoice, goTab,
     openPoAmend, approvePoAmendment, openBankChange, approveBankChange, bankChanges, openPoPicker,
-    openContractForm, compliance,
+    openContractForm, compliance, level,
   } = useApp();
   const tab = tabs.procurement;
+  // Procurement access: View (1) is read-only; Edit (2) can raise/create records;
+  // Full (3) can approve / final sign-off.
+  const procLvl = level("procurement");
+  const canEdit = procLvl >= 2;
+  const canFull = procLvl >= 3;
   // supplier contracts come from the shared contracts registry (kind = vendor)
   const supplierContracts = (compliance?.contracts ?? []).filter((c) => c.kind === "vendor");
   const pendingBankChanges = bankChanges.filter((b) => b.state === "pending");
@@ -87,13 +94,14 @@ export default function ProcurementView() {
           <p>Procure-to-pay on one chain — requisition, sourcing, PO, goods received and three-way match — with sanctions screening and every step audit-logged.</p>
         </div>
         <div className="actions">
-          {tab === "p-req" && <button className="btn primary" onClick={openReq}><PlusI />New requisition</button>}
-          {tab === "p-vendors" && <button className="btn primary" onClick={openVendorForm}><PlusI />Add vendor</button>}
-          {tab === "p-po" && <button className="btn primary" onClick={openPoPicker}><PlusI />New PO</button>}
-          {tab === "p-contracts" && <button className="btn primary" onClick={openContractForm}><PlusI />Add contract</button>}
+          {tab === "p-req" && canEdit && <button className="btn primary" onClick={openReq}><PlusI />New requisition</button>}
+          {tab === "p-vendors" && canEdit && <button className="btn primary" onClick={openVendorForm}><PlusI />Add vendor</button>}
+          {tab === "p-po" && canEdit && <button className="btn primary" onClick={openPoPicker}><PlusI />New PO</button>}
+          {tab === "p-contracts" && canEdit && <button className="btn primary" onClick={openContractForm}><PlusI />Add contract</button>}
         </div>
       </div>
       <Crumb view="procurement" />
+      <ViewOnly show={procLvl === 1} />
 
       {tab === "p-over" && (
         <div className="proc-panel active">
@@ -142,7 +150,7 @@ export default function ProcurementView() {
           <div className="panel">
             <div className="panel-h">
               <h3>Vendor registry</h3>
-              <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openVendorForm(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add vendor</a></span>
+              {canEdit && <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openVendorForm(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add vendor</a></span>}
             </div>
             <table className="tbl">
               <thead><tr><th>Vendor</th><th>Category</th><th>Tax status</th><th>Screening</th><th>State</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
@@ -158,8 +166,8 @@ export default function ProcurementView() {
                     <td style={{ fontSize: 12 }}>{v.state}</td>
                     <td style={{ textAlign: "right" }}>
                       {v.screenStatus !== "cleared"
-                        ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => screenVendor(v.name, "cleared", "Manual sanctions & tax check")}>Clear screening</button>
-                        : <button className="btn" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => openBankChange(v.name)}>Change bank</button>}
+                        ? (canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => screenVendor(v.name, "cleared", "Manual sanctions & tax check")}>Clear screening</button> : <span className="pill week">not cleared</span>)
+                        : (canEdit ? <button className="btn" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => openBankChange(v.name)}>Change bank</button> : <span className="pill done">Cleared</span>)}
                     </td>
                   </tr>
                 ))}
@@ -179,10 +187,12 @@ export default function ProcurementView() {
                       <td style={{ fontSize: 12 }}>{b.oldBank || "—"}</td>
                       <td style={{ fontSize: 12 }}>{b.newBank}</td>
                       <td style={{ textAlign: "right" }}>
-                        <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }}
-                          onClick={() => { const note = window.prompt(`Confirm you called ${b.vendor} on the number ON FILE and verified this change. Who did you speak to?`); if (note && note.trim()) approveBankChange(b.id, note.trim()); }}>
-                          Verify by callback
-                        </button>
+                        {canFull
+                          ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }}
+                              onClick={() => { const note = window.prompt(`Confirm you called ${b.vendor} on the number ON FILE and verified this change. Who did you speak to?`); if (note && note.trim()) approveBankChange(b.id, note.trim()); }}>
+                              Verify by callback
+                            </button>
+                          : <span className="pill today">Pending verify</span>}
                       </td>
                     </tr>
                   ))}
@@ -199,7 +209,7 @@ export default function ProcurementView() {
           <div className="panel">
             <div className="panel-h">
               <h3>Purchase requisitions</h3>
-              <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openReq(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ New requisition</a></span>
+              {canEdit && <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openReq(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ New requisition</a></span>}
             </div>
             <table className="tbl">
               <thead><tr><th>PR</th><th>Item</th><th>Cost centre</th><th>Amount</th><th>Budget</th><th>Raised by</th><th>Status</th></tr></thead>
@@ -245,12 +255,12 @@ export default function ProcurementView() {
                     </td>
                     <td style={{ textAlign: "right" }}>
                       {p.reapproval
-                        ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approvePoAmendment(p.id)}>Approve amendment</button>
+                        ? (canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approvePoAmendment(p.id)}>Approve amendment</button> : <span className="pill over">Re-approval pending</span>)
                         : (p.state === "open" || p.state === "partially_received")
-                          ? <>
+                          ? (canEdit ? <>
                               <button className="btn" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => openPoAmend(p)}>Amend</button>
                               <button className="btn" style={{ padding: "4px 9px", fontSize: 11, marginLeft: 6 }} onClick={() => openGrn(p)}>Record GRN</button>
-                            </>
+                            </> : <span className="pill week">{poPill[p.state]?.txt || p.state}</span>)
                           : <span className="pill done">Complete</span>}
                     </td>
                   </tr>
@@ -301,7 +311,7 @@ export default function ProcurementView() {
           <div className="panel">
             <div className="panel-h">
               <h3>Supplier contracts</h3>
-              <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openContractForm(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add contract</a></span>
+              {canEdit && <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openContractForm(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add contract</a></span>}
             </div>
             <table className="tbl">
               <thead><tr><th>Supplier</th><th>Contract</th><th>Detail</th><th>Expiry</th><th>Status</th></tr></thead>
@@ -331,14 +341,17 @@ function ApTable({ invoices, invoiceablePOs, poRows, grns, openCaptureInvoice, a
   invoices: ApInvoice[]; invoiceablePOs: PORow[]; poRows: PORow[]; grns: Grn[];
   openCaptureInvoice: (po: PORow) => void; approveInvoice: (ref: string) => void; payInvoice: (ref: string, method: string) => void;
 }) {
+  const { level } = useApp();
+  const canEdit = level("procurement") >= 2;
+  const canFull = level("procurement") >= 3;
   const [open, setOpen] = useState<string | null>(null);
   return (
     <>
       <div style={{ padding: "8px 14px 0", textAlign: "right" }}>
         <span className="meta">
-          {invoiceablePOs.length > 0
+          {canEdit && invoiceablePOs.length > 0
             ? <a href="#" onClick={(e) => { e.preventDefault(); openCaptureInvoice(invoiceablePOs[0]); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Capture invoice</a>
-            : <span style={{ color: "var(--ink-soft)" }}>no open PO to invoice</span>}
+            : <span style={{ color: "var(--ink-soft)" }}>{canEdit ? "no open PO to invoice" : ""}</span>}
         </span>
       </div>
       <table className="tbl">
@@ -360,8 +373,9 @@ function ApTable({ invoices, invoiceablePOs, poRows, grns, openCaptureInvoice, a
                   {i.state === "matched"
                     ? (i.capturedByMe
                         ? <span className="pill week" title="Segregation of duties">You captured — needs another approver</span>
-                        : <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approveInvoice(i.ref)}>Approve for Payment</button>)
-                    : i.state === "approved" ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => payInvoice(i.ref, "bank")}>Pay</button>
+                        : canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approveInvoice(i.ref)}>Approve for Payment</button>
+                        : <span className="pill done">Matched</span>)
+                    : i.state === "approved" ? (canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => payInvoice(i.ref, "bank")}>Pay</button> : <span className="pill done">Approved</span>)
                     : i.state === "paid" ? <span className="pill done">Paid</span>
                     : i.state === "exception" ? <span className="pill over">Held</span>
                     : <span className="pill today">Matching…</span>}

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { AppProvider, useApp } from "./store";
-import { flagColors, canManageUsers } from "./data";
+import { flagColors, canManageUsers, moduleLevel, gatedViews } from "./data";
 import { moduleLabels, subnavs } from "./nav";
 import {
   BrandMark, ChevDown, Chev, HomeI, FinanceI, ProcureI, HrI, PortalI, FlameI,
@@ -80,9 +80,10 @@ function Sidebar() {
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
   const openProfile = () => { setSettingsTab("s-profile"); go("settings"); };
   const canUsers = canManageUsers(perms, me?.email);
-  // Human Resources is hidden from the nav for anyone without an HR grant — same
-  // pattern as User Management. Drives the Employee-mode view for the HR toggle user.
-  const canHr = (perms[me?.email ?? ""]?.hr ?? 0) >= 1;
+  // A module appears in the nav only if this user has at least View (level >= 1) on it.
+  // Level 0 (None) hides it here and blocks direct access in Shell below.
+  const can = (m: string) => moduleLevel(perms, me?.email, m) >= 1;
+  const canHr = can("hr");
   // CRM badge counts only unseen CRM notifications — it appears only when there's
   // something new the user hasn't opened yet.
   const crmUnseen = notifications.filter((n) => !n.seen && n.linkView === "crm").length;
@@ -117,24 +118,24 @@ function Sidebar() {
         <div className="nav-group">Overview</div>
         <NavItem v="home" icon={<HomeI />} label="Home" />
 
-        <div className="nav-group">Finance &amp; Operations</div>
-        <NavModule v="finance" icon={<FinanceI />} collapsed={collapsed("finance")} setCollapsed={setCollapsed("finance")} />
-        <NavModule v="procurement" icon={<ProcureI />} collapsed={collapsed("procurement")} setCollapsed={setCollapsed("procurement")} />
-        <NavModule v="inventory" icon={<BoxI />} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />
+        {(can("finance") || can("procurement") || can("inventory")) && <div className="nav-group">Finance &amp; Operations</div>}
+        {can("finance") && <NavModule v="finance" icon={<FinanceI />} collapsed={collapsed("finance")} setCollapsed={setCollapsed("finance")} />}
+        {can("procurement") && <NavModule v="procurement" icon={<ProcureI />} collapsed={collapsed("procurement")} setCollapsed={setCollapsed("procurement")} />}
+        {can("inventory") && <NavModule v="inventory" icon={<BoxI />} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />}
 
         <div className="nav-group">People</div>
         {canHr && <NavModule v="hr" icon={<HrI />} collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />}
         <NavModule v="staffportal" icon={<PortalI />} collapsed={collapsed("staffportal")} setCollapsed={setCollapsed("staffportal")} />
 
-        <div className="nav-group">Deployment</div>
-        <NavItem v="deploy" icon={<FlameI />} label="Deployment & Carbon" />
-        <NavModule v="projects" icon={<ProjectsI />} collapsed={collapsed("projects")} setCollapsed={setCollapsed("projects")} />
+        {(can("deploy") || can("projects")) && <div className="nav-group">Deployment</div>}
+        {can("deploy") && <NavItem v="deploy" icon={<FlameI />} label="Deployment & Carbon" />}
+        {can("projects") && <NavModule v="projects" icon={<ProjectsI />} collapsed={collapsed("projects")} setCollapsed={setCollapsed("projects")} />}
 
-        <div className="nav-group">Growth</div>
-        <NavModule v="crm" icon={<CrmI />} badge={crmUnseen ? String(crmUnseen) : undefined} collapsed={collapsed("crm")} setCollapsed={setCollapsed("crm")} />
+        {can("crm") && <><div className="nav-group">Growth</div>
+        <NavModule v="crm" icon={<CrmI />} badge={crmUnseen ? String(crmUnseen) : undefined} collapsed={collapsed("crm")} setCollapsed={setCollapsed("crm")} /></>}
 
-        <div className="nav-group">Governance</div>
-        <NavModule v="compliance" icon={<ComplianceI />} collapsed={collapsed("compliance")} setCollapsed={setCollapsed("compliance")} />
+        {can("compliance") && <><div className="nav-group">Governance</div>
+        <NavModule v="compliance" icon={<ComplianceI />} collapsed={collapsed("compliance")} setCollapsed={setCollapsed("compliance")} /></>}
 
         <div className="nav-group">Administration</div>
         {canUsers && <NavItem v="users" icon={<UsersI />} label="User Management" />}
@@ -236,7 +237,7 @@ function NoAccess() {
     <div className="vhead">
       <div>
         <h1>Restricted</h1>
-        <p>You don't have access to User Management. Ask an administrator (MD, HR or Head of IT) if you need it.</p>
+        <p>You don't have access to this area. Ask an administrator (MD, HR or Head of IT) if you need it.</p>
       </div>
     </div>
   );
@@ -244,7 +245,10 @@ function NoAccess() {
 
 function Shell() {
   const { view, mainRef, me, perms } = useApp();
-  const blocked = view === "users" && !canManageUsers(perms, me?.email);
+  // Block direct access (typed URL / stale nav) to any gated module the user has no
+  // grant on — the nav already hides these, this is the belt-and-braces backstop.
+  const gate = gatedViews[view];
+  const blocked = !!gate && moduleLevel(perms, me?.email, gate) < 1;
   const Active = blocked ? NoAccess : views[view];
   return (
     <>

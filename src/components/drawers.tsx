@@ -59,8 +59,9 @@ function StageRibbon({ stages, current }: { stages: string[]; current: string })
 export function EngDrawer() {
   const {
     engId, closeEng, toast, engToProject, xProject, createProjectFromEng, openTask,
-    crm, openEngUpdate, setEngagementPartners, engDocUrl,
+    crm, openEngUpdate, setEngagementPartners, engDocUrl, level,
   } = useApp();
+  const canEdit = level("crm") >= 2;
   // Engagement comes straight from the live CRM read model (DB) — the header,
   // stage ribbon, updates log and links all read from it.
   const up = engId ? crm.engUp.some((e) => e.id === engId) : false;
@@ -106,7 +107,7 @@ export function EngDrawer() {
         </div>
       }
       footer={
-        <button className="btn primary" style={{ width: "100%" }} onClick={openEngUpdate}>Update</button>
+        canEdit ? <button className="btn primary" style={{ width: "100%" }} onClick={openEngUpdate}>Update</button> : undefined
       }
     >
       {b && (
@@ -179,7 +180,7 @@ export function EngDrawer() {
 
           <div className="eng-sec">
             Linked partners{" "}
-            <a href="#" onClick={(e) => { e.preventDefault(); editLinks ? setEditLinks(false) : openLinkEditor(); }} style={{ color: "var(--flame)", textDecoration: "none", fontWeight: 600, textTransform: "none", letterSpacing: 0, marginLeft: 6 }}>{editLinks ? "close" : linkedPartners.length ? "edit" : "+ link"}</a>
+            {canEdit && <a href="#" onClick={(e) => { e.preventDefault(); editLinks ? setEditLinks(false) : openLinkEditor(); }} style={{ color: "var(--flame)", textDecoration: "none", fontWeight: 600, textTransform: "none", letterSpacing: 0, marginLeft: 6 }}>{editLinks ? "close" : linkedPartners.length ? "edit" : "+ link"}</a>}
           </div>
           {editLinks ? (
             <div>
@@ -230,7 +231,8 @@ export function EngDrawer() {
 
 /* ================= VENDOR ================= */
 export function VendorDrawer() {
-  const { vendorName, closeVendor, toast, xTab } = useApp();
+  const { vendorName, closeVendor, toast, xTab, level } = useApp();
+  const canEdit = level("procurement") >= 2;
   const v = vendorName ? vendorDetails[vendorName] : null;
 
   return (
@@ -249,8 +251,8 @@ export function VendorDrawer() {
       }
       footer={
         <>
-          <button className="btn" onClick={() => toast("Raise PO", "Create a purchase order for this vendor")}>Raise PO</button>
-          <button className="btn primary" onClick={() => toast("Upload document", "Attach a document to this vendor record")}>Upload document</button>
+          {canEdit && <button className="btn" onClick={() => toast("Raise PO", "Create a purchase order for this vendor")}>Raise PO</button>}
+          {canEdit && <button className="btn primary" onClick={() => toast("Upload document", "Attach a document to this vendor record")}>Upload document</button>}
         </>
       }
     >
@@ -327,8 +329,9 @@ export function ProjectDrawer() {
   const {
     projectName, closeProject, toast, projectDetails,
     addMilestone, setMilestoneStatus, logFieldActivity, setProjectState,
-    addProjectDocument, projectDocUrl,
+    addProjectDocument, projectDocUrl, level,
   } = useApp();
+  const canEdit = level("projects") >= 2;
   const p = projectName ? projectDetails[projectName] : null;
   const ms: Record<string, [string, string]> = { done: ["done", "Complete"], now: ["today", "In progress"], todo: ["week", "Upcoming"] };
 
@@ -375,7 +378,7 @@ export function ProjectDrawer() {
       }
       footer={
         <>
-          <button className="btn" onClick={() => setShowAct((s) => !s)}>Log activity</button>
+          {canEdit && <button className="btn" onClick={() => setShowAct((s) => !s)}>Log activity</button>}
           <button className="btn primary" onClick={() => toast("Generate report", "Draft the funder report from live data")}>Generate report</button>
         </>
       }
@@ -387,7 +390,7 @@ export function ProjectDrawer() {
             <span className="acc-chip">Budget {p.budget}</span>
             <span className="acc-chip full">Spent {p.spent} · {p.pct}</span>
           </div>
-          {p.id && next && (
+          {p.id && next && canEdit && (
             <button className="btn" style={{ padding: "5px 11px", fontSize: 12, marginTop: 4 }}
               onClick={() => setProjectState(p.id!, next.to)}>{next.label} →</button>
           )}
@@ -431,14 +434,14 @@ export function ProjectDrawer() {
                     {kes0(m.amount ?? 0)}{m.start ? ` · ${m.start}${m.end ? ` → ${m.end}` : ""}` : ""}
                   </small>
                 </span>
-                {m.id
+                {m.id && canEdit
                   ? <select className="field" style={smallField} value={m.s} onChange={(e) => setMilestoneStatus(m.id!, e.target.value)}>
                       {MS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
                   : <span className={`pill ${ms[m.s][0]}`}>{ms[m.s][1]}</span>}
               </div>
             ))}
-            {p.id && (
+            {p.id && canEdit && (
               <div style={{ marginTop: 6 }}>
                 <div className="recon" style={{ padding: "6px 0", fontSize: 11.5, color: overBudget ? "var(--flame)" : "var(--ink-soft)" }}>
                   <span>Milestones {kes0(usedTotal)} of {kes0(budgetAmount)}</span>
@@ -493,7 +496,7 @@ export function ProjectDrawer() {
               );
             })}
             {!p.docs.length && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "4px 0" }}>No documents yet.</div>}
-            {p.id && (
+            {p.id && canEdit && (
               <label className="btn" style={{ padding: "5px 10px", fontSize: 11.5, marginTop: 6, display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
                 <PlusI />Upload document
                 <input type="file" style={{ display: "none" }}

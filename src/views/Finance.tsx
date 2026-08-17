@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useApp, type PettyRequest } from "../store";
-import { Pulse, Note } from "../components/ui";
+import { Pulse, Note, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
@@ -87,9 +87,14 @@ const apPill: Record<string, { cls: string; txt: string }> = {
 
 export default function FinanceView() {
   const { tabs, toast, accounts, journals, apInvoices, approveInvoice, payInvoice, openCaptureInvoice, poRows, markInvoicePaid,
-    pettyRequests, decidePettyRequest, canDecidePetty, openInvoice, createCostCentre, me, perms } = useApp();
+    pettyRequests, decidePettyRequest, canDecidePetty, openInvoice, createCostCentre, me, perms, level } = useApp();
   const tab = tabs.finance;
   const [costOpen, setCostOpen] = useState(false);
+  // Finance access: View (1) is read-only; Edit (2) can raise/capture; Full (3) can
+  // approve & pay. (Petty-cash approvals keep their own two-stage users:3/hr:2 gate.)
+  const finLvl = level("finance");
+  const canEdit = finLvl >= 2;
+  const canFull = finLvl >= 3;
 
   // Two-stage petty cash: a request needs a Super Admin (users:3) AND HR (hr>=2)
   // approval, by two different people. Show each approver only the stage they can act on.
@@ -141,12 +146,13 @@ export default function FinanceView() {
           <p>One chart of accounts across the business — every module posts a balanced journal here. Covers GL, payables, receivables, bank &amp; cash, petty cash, costing, tax and audit controls.</p>
         </div>
         <div className="actions">
-          {tab === "f-ar" && <button className="btn primary" onClick={openInvoice}><PlusI />New invoice</button>}
-          {tab === "f-budget" && <button className="btn primary" onClick={() => setCostOpen(true)}><PlusI />New cost centre</button>}
+          {tab === "f-ar" && canEdit && <button className="btn primary" onClick={openInvoice}><PlusI />New invoice</button>}
+          {tab === "f-budget" && canEdit && <button className="btn primary" onClick={() => setCostOpen(true)}><PlusI />New cost centre</button>}
           <button className="btn" onClick={() => toast("Period open", "Postings land in the current period until it is closed")}>Current period · Open</button>
         </div>
       </div>
       <Crumb view="finance" />
+      <ViewOnly show={finLvl === 1} />
 
       {tab === "f-over" && (
         <div className="fin-panel active">
@@ -170,14 +176,15 @@ export default function FinanceView() {
                     <span className="id" style={{ color: "var(--green)" }}>{i.ref}</span>
                     <span className="txt">{i.vendor} — {kes(i.amount)}<small>{i.po} · matched</small></span>
                     {i.capturedByMe ? <span className="pill week">you captured</span>
-                      : <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approveInvoice(i.ref)}>Approve</button>}
+                      : canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approveInvoice(i.ref)}>Approve</button>
+                      : <span className="pill">awaiting approval</span>}
                   </div>
                 ))}
                 {toPay.map((i) => (
                   <div className="task" key={i.ref}>
                     <span className="id" style={{ color: "var(--green)" }}>{i.ref}</span>
                     <span className="txt">{i.vendor} — {kes(i.amount)}<small>{i.po} · approved</small></span>
-                    <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => payInvoice(i.ref, "bank")}>Pay</button>
+                    {canFull && <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => payInvoice(i.ref, "bank")}>Pay</button>}
                   </div>
                 ))}
               </>}
@@ -259,9 +266,9 @@ export default function FinanceView() {
               <div className="panel-h">
                 <h3>Supplier invoices</h3>
                 <span className="meta">
-                  {invoiceablePOs.length > 0
+                  {canEdit && invoiceablePOs.length > 0
                     ? <a href="#" onClick={(e) => { e.preventDefault(); openCaptureInvoice(invoiceablePOs[0]); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Capture invoice</a>
-                    : <span style={{ color: "var(--ink-soft)" }}>no open PO</span>}
+                    : <span style={{ color: "var(--ink-soft)" }}>{canEdit ? "no open PO" : ""}</span>}
                 </span>
               </div>
               <table className="tbl">
@@ -278,7 +285,8 @@ export default function FinanceView() {
                       <td style={{ textAlign: "right" }}>
                         {i.state === "paid"
                           ? <span className="pill done">Paid</span>
-                          : <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} title={i.state === "exception" ? (i.matchNote || "Match exception — pay anyway") : "Mark this invoice paid"} onClick={() => markInvoicePaid(i.ref)}>Pay</button>}
+                          : canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} title={i.state === "exception" ? (i.matchNote || "Match exception — pay anyway") : "Mark this invoice paid"} onClick={() => markInvoicePaid(i.ref)}>Pay</button>
+                          : <span className="pill week">unpaid</span>}
                       </td>
                     </tr>
                   ))}
@@ -459,7 +467,8 @@ export default function FinanceView() {
 }
 
 function Receivables() {
-  const { newInvoices, openReceipt } = useApp();
+  const { newInvoices, openReceipt, level } = useApp();
+  const canEdit = level("finance") >= 2;
   const outstanding = newInvoices.filter((i) => i.pillTxt !== "Paid");
   return (
     <div className="fin-panel active">
@@ -495,7 +504,8 @@ function Receivables() {
                   <td style={{ textAlign: "right" }}>
                     {inv.pillTxt === "Paid"
                       ? <span className="pill done">Settled</span>
-                      : <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => openReceipt(inv)}>Record receipt</button>}
+                      : canEdit ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => openReceipt(inv)}>Record receipt</button>
+                      : <span className="pill week">outstanding</span>}
                   </td>
                 </tr>
               ))}

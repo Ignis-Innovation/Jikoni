@@ -26,6 +26,17 @@ export function Pulse({ data }: { data: PulseStat[] }) {
   );
 }
 
+// Shown at the top of a module when the signed-in user has View-only access (level 1):
+// they can read everything, but the create/edit actions are hidden.
+export function ViewOnly({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <div style={{ padding: "9px 14px", marginBottom: 14, fontSize: 12.5, color: "var(--ink-soft)", background: "#FCFAF6", border: "1px solid var(--hairline)", borderRadius: 10 }}>
+      View-only access — you can see this module but can't make changes. Ask an administrator for edit access if you need it.
+    </div>
+  );
+}
+
 // Muted footnote row at the bottom of a panel.
 export function Note({ children, noBorder }: { children: React.ReactNode; noBorder?: boolean }) {
   return (

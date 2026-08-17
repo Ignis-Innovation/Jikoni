@@ -215,6 +215,8 @@ interface AppApi {
   openRecord: (id: string) => void;
 
   perms: Record<string, Perms>;
+  // Signed-in user's access level for a module (0 None · 1 View · 2 Edit · 3 Full).
+  level: (module: string) => number;
   saveAccess: (email: string, p: Perms) => void;
 
   // "Switch to HR / Switch to Employee" toggle — only meaningful for HR_TOGGLE_EMAIL.
@@ -2243,7 +2245,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openProject: (n) => setProjectName(n), closeProject: () => setProjectName(null),
     openAccess: (e) => setAccessEmail(e), closeAccess: () => setAccessEmail(null),
     xEng, xProject, xTab, xView, openRecord,
-    perms: effectivePerms, saveAccess: saveAccessFn,
+    perms: effectivePerms, level: (m: string) => effectivePerms[me?.email ?? ""]?.[m] ?? 0, saveAccess: saveAccessFn,
     hrMode, setHrMode, isHrToggleUser,
     me,
     signOut: async () => { await supabase.auth.signOut(); setMe(null); setMembers([]); },

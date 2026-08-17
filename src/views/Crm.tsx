@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useApp } from "../store";
 import { crmData } from "../data";
-import { Pulse } from "../components/ui";
+import { Pulse, ViewOnly } from "../components/ui";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 
 export default function CrmView() {
-  const { tabs, openEng, crm, openEngForm, openPartnerForm, openOppForm } = useApp();
+  const { tabs, openEng, crm, openEngForm, openPartnerForm, openOppForm, level } = useApp();
   const tab = tabs.crm;
+  const crmLvl = level("crm");
+  const canEdit = crmLvl >= 2;
   const [pipeline, setPipeline] = useState<"up" | "down">("up");
   const d = crmData[pipeline];
   const engRows = pipeline === "up" ? crm.engUp : crm.engDown;
@@ -33,10 +35,11 @@ export default function CrmView() {
           <p>One engagement engine, two views — upstream capital and downstream deployment in the same query.</p>
         </div>
         <div className="actions">
-          <button className="btn primary" onClick={headerAction.onClick}><PlusI />{headerAction.label}</button>
+          {canEdit && <button className="btn primary" onClick={headerAction.onClick}><PlusI />{headerAction.label}</button>}
         </div>
       </div>
       <Crumb view="crm" />
+      <ViewOnly show={crmLvl === 1} />
 
       {tab === "cr-over" && (
         <div className="crm-panel active">

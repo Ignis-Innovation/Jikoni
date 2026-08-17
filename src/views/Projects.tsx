@@ -1,5 +1,5 @@
 import { useApp } from "../store";
-import { Pulse, Note } from "../components/ui";
+import { Pulse, Note, ViewOnly } from "../components/ui";
 import { StaticBars, Donut, ChartLegend, GroupedBars } from "../components/charts";
 import { useUsdKesRate } from "../lib/fx";
 import { useState } from "react";
@@ -40,7 +40,10 @@ const ddPill = (s: string) =>
   /received/i.test(s) ? "done" : /request|pending|due/i.test(s) ? "today" : "week";
 
 export default function ProjectsView() {
-  const { tabs, goTab, go, openProject, projectDetails, apInvoices, openProjectForm, openProjectEdit, deleteProject, setMilestoneStatus, fieldActivities, openFieldActivity } = useApp();
+  const { tabs, goTab, go, openProject, projectDetails, apInvoices, openProjectForm, openProjectEdit, deleteProject, setMilestoneStatus, fieldActivities, openFieldActivity, level } = useApp();
+  const projLvl = level("projects");
+  const canEdit = projLvl >= 2;   // create / edit projects, milestones, field activity
+  const canFull = projLvl >= 3;   // delete a project (destructive, can't be undone)
   const tab = tabs.projects;
 
   // Overview currency toggle: money is stored in KES; USD view converts at the live rate.
@@ -111,11 +114,12 @@ export default function ProjectsView() {
           <p>Every funded project and deployment on one code — budget, milestones, deliverables, drawdowns and field activity, tying CRM, Finance and Deployment together.</p>
         </div>
         <div className="actions">
-          {tab === "pr-projects" && <button className="btn primary" onClick={openProjectForm}><PlusI />New project</button>}
-          {tab === "pr-field" && <button className="btn primary" onClick={openFieldActivity}><PlusI />Add field activity</button>}
+          {tab === "pr-projects" && canEdit && <button className="btn primary" onClick={openProjectForm}><PlusI />New project</button>}
+          {tab === "pr-field" && canEdit && <button className="btn primary" onClick={openFieldActivity}><PlusI />Add field activity</button>}
         </div>
       </div>
       <Crumb view="projects" />
+      <ViewOnly show={projLvl === 1} />
 
       {tab === "pr-over" && (
         <div className="proj-panel active">
@@ -269,11 +273,11 @@ export default function ProjectsView() {
                     <td><span title={h.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: h.color }} />{h.label}</span></td>
                     <td><span className={`pill ${statusPill(p.status)}`}>{p.status || "Setup"}</span></td>
                     <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                      {p.createdByMe && (
+                      {p.createdByMe && canEdit && (
                         <div style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", whiteSpace: "nowrap" }}>
                           <button className="btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => openProjectEdit(p.name)}>Edit</button>
-                          <button className="btn" style={{ padding: "5px 12px", fontSize: 12, color: "var(--red)" }}
-                            onClick={() => { if (confirm(`Delete "${p.name}"? This removes its milestones, drawdowns and field activity. This can't be undone.`)) deleteProject(p.name); }}>Delete</button>
+                          {canFull && <button className="btn" style={{ padding: "5px 12px", fontSize: 12, color: "var(--red)" }}
+                            onClick={() => { if (confirm(`Delete "${p.name}"? This removes its milestones, drawdowns and field activity. This can't be undone.`)) deleteProject(p.name); }}>Delete</button>}
                         </div>
                       )}
                     </td>
@@ -319,7 +323,7 @@ export default function ProjectsView() {
                     <td>{m.project}</td>
                     <td><span className={`pill ${msPill[m.s]?.cls || "week"}`}>{msPill[m.s]?.txt || m.s}</span></td>
                     <td style={{ textAlign: "right" }}>
-                      {m.id && (m.s === "done"
+                      {m.id && canEdit && (m.s === "done"
                         ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setMilestoneStatus(m.id!, "todo")}>Reopen</button>
                         : <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setMilestoneStatus(m.id!, "done")}>Mark complete</button>)}
                     </td>

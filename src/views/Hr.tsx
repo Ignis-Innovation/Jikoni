@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApp, StaffRow, ExitStep, WeeklyReport } from "../store";
-import { Pulse, Note } from "../components/ui";
+import { Pulse, Note, ViewOnly } from "../components/ui";
 import { Donut, ChartLegend, StaticBars } from "../components/charts";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
@@ -43,7 +43,8 @@ function Check({ done, children }: { done: boolean; children: React.ReactNode })
 
 /* ============================ modals ============================ */
 function EmployeeModal() {
-  const { hrModal, closeHrModal, addEmployee, toast } = useApp();
+  const { hrModal, closeHrModal, addEmployee, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "employee";
   const blank = { name: "", email: "", roleTitle: "", contractType: "permanent", startDate: new Date().toISOString().slice(0, 10), contractEnd: "", grossSalary: "", kra: "", nssf: "", shif: "", bank: "" };
   const [f, setF] = useState(blank);
@@ -92,14 +93,15 @@ function EmployeeModal() {
         </div>
         <div><label>Bank</label><input className="field" placeholder="KCB ****1234" value={f.bank} onChange={(e) => set("bank", e.target.value)} /></div>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Add employee</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit}>Add employee</button>}</div>
     </ModalShell>
   );
 }
 
 // Read-only staff file — opens when a row on the Staff Files table is clicked.
 function StaffDetailModal() {
-  const { hrModal, closeHrModal, staffDocUrl, openHrModal } = useApp();
+  const { hrModal, closeHrModal, staffDocUrl, openHrModal, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "staffDetail";
   const s = hrModal?.kind === "staffDetail" ? hrModal.staff : null;
   const idRow = (label: string, val: string | null) => (
@@ -178,7 +180,7 @@ function StaffDetailModal() {
             </div>
           </div>
           <div className="mf">
-            <button className="btn" onClick={() => openHrModal({ kind: "staffProfile", staff: s })}>Edit HR details</button>
+            {canEdit && <button className="btn" onClick={() => openHrModal({ kind: "staffProfile", staff: s })}>Edit HR details</button>}
             <button className="btn primary" onClick={closeHrModal}>Close</button>
           </div>
         </>
@@ -188,7 +190,8 @@ function StaffDetailModal() {
 }
 
 function RequisitionModal() {
-  const { hrModal, closeHrModal, createRecruitmentReq, updatePosting, publishPosting, toast } = useApp();
+  const { hrModal, closeHrModal, createRecruitmentReq, updatePosting, publishPosting, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "requisition";
   const [role, setRole] = useState(""); const [dept, setDept] = useState("");
   const [description, setDescription] = useState(""); const [location, setLocation] = useState("");
@@ -266,14 +269,15 @@ function RequisitionModal() {
           Publish to the public careers page now
         </label>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal} disabled={busy}>Cancel</button><button className="btn primary" onClick={submit} disabled={busy}>{busy ? "Posting…" : publishNow ? "Post & publish" : "Save draft"}</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal} disabled={busy}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit} disabled={busy}>{busy ? "Posting…" : publishNow ? "Post & publish" : "Save draft"}</button>}</div>
     </ModalShell>
   );
 }
 
 // Auto-ranked applicant pool for one posting — total count + top-N shortlist.
 function PostingDetailModal() {
-  const { hrModal, closeHrModal, hrData, advanceCandidate, publishPosting, openCandidateCv, screenCandidateCv, toast } = useApp();
+  const { hrModal, closeHrModal, hrData, advanceCandidate, publishPosting, openCandidateCv, screenCandidateCv, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "postingDetail";
   const ref = hrModal?.kind === "postingDetail" ? hrModal.ref : "";
   const [showAll, setShowAll] = useState(false);
@@ -322,14 +326,16 @@ function PostingDetailModal() {
           <div className="appcard-elig" style={{ color: eligColor(c.eligibility) }}>{c.eligibility}%<small>eligible</small></div>
         </div>
         <div className="appcard-actions">
-          {c.cvPath
+          {canEdit && c.cvPath
             ? <a href="#" className={`lnk${busy ? " busy" : ""}`} onClick={(e) => { e.preventDefault(); busy || runScreen(c.id, c.name); }}>{busy ? "Reading CV…" : c.aiVerdict ? "Re-scan CV" : "Scan CV"}</a>
-            : <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>no CV attached</span>}
+            : !c.cvPath ? <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>no CV attached</span> : null}
           {c.cvPath && <a href="#" className="lnk" onClick={(e) => { e.preventDefault(); viewCv(c.cvPath!); }}>View CV</a>}
           <div style={{ flex: 1 }} />
-          <select className="field" style={{ width: 132, padding: "5px 8px", fontSize: 12 }} value={c.stage} onChange={(e) => advanceCandidate(c.id, e.target.value)}>
-            {candidateStages.map((s) => <option key={s} value={s}>{cap(s)}</option>)}
-          </select>
+          {canEdit
+            ? <select className="field" style={{ width: 132, padding: "5px 8px", fontSize: 12 }} value={c.stage} onChange={(e) => advanceCandidate(c.id, e.target.value)}>
+                {candidateStages.map((s) => <option key={s} value={s}>{cap(s)}</option>)}
+              </select>
+            : <span className="pill week" style={{ textTransform: "none" }}>{cap(c.stage)}</span>}
         </div>
         {c.aiVerdict && (
           <div className="appcard-verdict">
@@ -389,21 +395,22 @@ function PostingDetailModal() {
           navigator.clipboard?.writeText(`${window.location.origin}/careers?job=${posting.ref}`);
           toast("Careers link copied", "Share it — applications land back here, auto-ranked");
         }}>Copy careers link</button>
-        {shortlist.some((c) => c.cvPath) && (
+        {canEdit && shortlist.some((c) => c.cvPath) && (
           <button className="btn" disabled={bulkBusy} onClick={async () => {
             setBulkBusy(true);
             for (const c of shortlist.filter((x) => x.cvPath)) await runScreen(c.id, c.name);
             setBulkBusy(false);
           }}>{bulkBusy ? "Scanning…" : "Scan shortlist CVs"}</button>
         )}
-        <button className="btn primary" onClick={() => publishPosting(posting.ref, !posting.published)}>{posting.published ? "Unpublish" : "Publish"}</button>
+        {canEdit && <button className="btn primary" onClick={() => publishPosting(posting.ref, !posting.published)}>{posting.published ? "Unpublish" : "Publish"}</button>}
       </div>
     </ModalShell>
   );
 }
 
 function CandidateModal() {
-  const { hrModal, closeHrModal, addCandidate, toast } = useApp();
+  const { hrModal, closeHrModal, addCandidate, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "candidate";
   const reqRef = hrModal?.kind === "candidate" ? hrModal.reqRef : "";
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [stage, setStage] = useState("applied");
@@ -423,13 +430,14 @@ function CandidateModal() {
           </select>
         </div>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Add candidate</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit}>Add candidate</button>}</div>
     </ModalShell>
   );
 }
 
 function EnumeratorModal() {
-  const { hrModal, closeHrModal, createEnumerator, toast } = useApp();
+  const { hrModal, closeHrModal, createEnumerator, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "enumerator";
   const [f, setF] = useState({ name: "", county: "", idNo: "" });
   useEffect(() => { if (open) setF({ name: "", county: "", idNo: "" }); }, [open]);
@@ -448,13 +456,14 @@ function EnumeratorModal() {
         </div>
         <div><label>ID number</label><input className="field" placeholder="ID-…" value={f.idNo} onChange={(e) => set("idNo", e.target.value)} /></div>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Register</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit}>Register</button>}</div>
     </ModalShell>
   );
 }
 
 function AssignmentModal() {
-  const { hrModal, closeHrModal, createFieldAssignment, hrData, projectDetails, toast } = useApp();
+  const { hrModal, closeHrModal, createFieldAssignment, hrData, projectDetails, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "assignment";
   const enums = hrData?.enumerators ?? [];
   const projects = Object.keys(projectDetails);
@@ -487,7 +496,7 @@ function AssignmentModal() {
           <div><label>Days</label><input className="field" type="number" min="0" placeholder="0" value={f.days} onChange={(e) => set("days", e.target.value)} /></div>
         </div>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Create assignment</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit}>Create assignment</button>}</div>
     </ModalShell>
   );
 }
@@ -497,7 +506,9 @@ function AssignmentModal() {
 // ratings — the employee's (self_met, read-only chip here) and the manager's
 // (met, click to toggle). Sign-off locks everything.
 function AppraisalModal() {
-  const { hrModal, closeHrModal, hrData, toggleAppraisalKpi, setAppraisalKpis, advanceAppraisal, toast } = useApp();
+  const { hrModal, closeHrModal, hrData, toggleAppraisalKpi, setAppraisalKpis, advanceAppraisal, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
+  const canFull = level("hr") >= 3;
   const open = hrModal?.kind === "appraisal";
   const a = open ? hrData?.appraisals.find((x) => x.id === (hrModal as { id: string }).id) : undefined;
   const editable = a?.stage === "not_started";
@@ -541,14 +552,16 @@ function AppraisalModal() {
                   <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                     <input className="field" style={{ flex: 1 }} placeholder="e.g. Delivery against plan" value={k}
                       onChange={(e) => setDraft((p) => p.map((x, j) => (j === i ? e.target.value : x)))} />
-                    <button className="btn" style={{ padding: "6px 12px" }} disabled={draft.length <= 1}
-                      onClick={() => setDraft((p) => p.filter((_, j) => j !== i))}>✕</button>
+                    {canEdit && <button className="btn" style={{ padding: "6px 12px" }} disabled={draft.length <= 1}
+                      onClick={() => setDraft((p) => p.filter((_, j) => j !== i))}>✕</button>}
                   </div>
                 ))}
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button className="btn" disabled={draft.length >= 12} onClick={() => setDraft((p) => [...p, ""])}><PlusI />Add KPI</button>
-                  <button className="btn primary" onClick={saveKpis}>Save KPIs</button>
-                </div>
+                {canEdit && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="btn" disabled={draft.length >= 12} onClick={() => setDraft((p) => [...p, ""])}><PlusI />Add KPI</button>
+                    <button className="btn primary" onClick={saveKpis}>Save KPIs</button>
+                  </div>
+                )}
                 <Note>Agree the KPIs now — they lock the moment self-assessment opens. Everyone starts from the standard four; tailor them to the role here.</Note>
               </>
             ) : (
@@ -571,7 +584,7 @@ function AppraisalModal() {
           </div>
           <div className="mf">
             <button className="btn" onClick={closeHrModal}>Close</button>
-            {a.stage !== "signed_off" && <button className="btn primary" onClick={() => advanceAppraisal(a.id)}>{advanceLabel[a.stage]}</button>}
+            {canFull && a.stage !== "signed_off" && <button className="btn primary" onClick={() => advanceAppraisal(a.id)}>{advanceLabel[a.stage]}</button>}
           </div>
         </>
       )}
@@ -580,7 +593,8 @@ function AppraisalModal() {
 }
 
 function CertificationModal() {
-  const { hrModal, closeHrModal, hrData, addCertification, toast } = useApp();
+  const { hrModal, closeHrModal, hrData, addCertification, toast, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "certification";
   const staff = hrData?.staff ?? [];
   const [f, setF] = useState({ staffNo: "", holder: "", name: "", issuer: "", expiry: "", verified: true });
@@ -625,7 +639,7 @@ function CertificationModal() {
           {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — uploads to the employee's file; they see it in My Certificates</div>}
         </div>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Add certification</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit}>Add certification</button>}</div>
     </ModalShell>
   );
 }
@@ -670,7 +684,8 @@ export function FeedbackModal() {
 
 const exitReasons = ["Contract end", "Resignation", "Better opportunity", "Career growth", "Relocation", "Termination", "Other"];
 function ExitStartModal() {
-  const { hrModal, closeHrModal, hrData, startExit, toast } = useApp();
+  const { hrModal, closeHrModal, hrData, startExit, toast, level } = useApp();
+  const canFull = level("hr") >= 3;
   const open = hrModal?.kind === "exitStart";
   const staff = (hrData?.staff ?? []).filter((s) => s.state === "active");
   const [f, setF] = useState({ staffNo: "", person: "", reason: exitReasons[0], finalDay: "" });
@@ -703,7 +718,7 @@ function ExitStartModal() {
         </div>
         <Note>On full clearance the certificate of service is issued and the staff file is marked exited.</Note>
       </div>
-      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Open clearance</button></div>
+      <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canFull && <button className="btn primary" onClick={submit}>Open clearance</button>}</div>
     </ModalShell>
   );
 }
@@ -728,7 +743,8 @@ export function ExitSteps({ exit }: { exit: { clearance: ExitStep[]; state: stri
 // Clearance drawer: each area signed off by the function that owns it. Shows
 // the same journey and document status the employee sees in My Exit.
 function ExitDetailModal() {
-  const { hrModal, closeHrModal, hrData, signExitStep, cancelExit } = useApp();
+  const { hrModal, closeHrModal, hrData, signExitStep, cancelExit, level } = useApp();
+  const canFull = level("hr") >= 3;
   const [confirmRemove, setConfirmRemove] = useState(false);
   useEffect(() => { if (hrModal?.kind === "exitDetail") setConfirmRemove(false); }, [hrModal]);
   const open = hrModal?.kind === "exitDetail";
@@ -771,10 +787,12 @@ function ExitDetailModal() {
               : "Click an area to sign it off — the employee ticks their own two from My Exit. On final approval the certificate of service is issued and their access closes 24 hours later."}</Note>
           </div>
           <div className="mf">
-            <button className="btn" style={{ marginRight: "auto", color: "var(--red)", borderColor: confirmRemove ? "var(--red)" : undefined }}
-              onClick={() => (confirmRemove ? cancelExit(x.ref) : setConfirmRemove(true))}>
-              {confirmRemove ? "Click again to confirm — removes the exit" : "Remove from exit"}
-            </button>
+            {canFull && (
+              <button className="btn" style={{ marginRight: "auto", color: "var(--red)", borderColor: confirmRemove ? "var(--red)" : undefined }}
+                onClick={() => (confirmRemove ? cancelExit(x.ref) : setConfirmRemove(true))}>
+                {confirmRemove ? "Click again to confirm — removes the exit" : "Remove from exit"}
+              </button>
+            )}
             <button className="btn primary" onClick={closeHrModal}>Close</button>
           </div>
         </>
@@ -785,7 +803,8 @@ function ExitDetailModal() {
 
 // HR-editable staff-file fields: department, contract end, next of kin.
 function StaffProfileModal() {
-  const { hrModal, closeHrModal, updateStaffHrProfile } = useApp();
+  const { hrModal, closeHrModal, updateStaffHrProfile, level } = useApp();
+  const canEdit = level("hr") >= 2;
   const open = hrModal?.kind === "staffProfile";
   const s = hrModal?.kind === "staffProfile" ? hrModal.staff : null;
   const [f, setF] = useState({ dept: "", contractEnd: "", kinName: "", kinRel: "", kinPhone: "", kinCover: "emergency" });
@@ -838,7 +857,7 @@ function StaffProfileModal() {
             </div>
             <Note>Next of kin is mandatory for field staff before deployment. Contract end dates drive the 90 / 60 / 30-day renewal triggers.</Note>
           </div>
-          <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button><button className="btn primary" onClick={submit}>Save</button></div>
+          <div className="mf"><button className="btn" onClick={closeHrModal}>Cancel</button>{canEdit && <button className="btn primary" onClick={submit}>Save</button>}</div>
         </>
       )}
     </ModalShell>
@@ -847,8 +866,14 @@ function StaffProfileModal() {
 
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports } = useApp();
+  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, level } = useApp();
   const tab = tabs.hr;
+  // HR access: View (1) is read-only; Edit (2) can add/edit staff, upload docs,
+  // record leave, prepare payroll, review weekly reports; Full (3) can approve —
+  // leave decisions, payroll approval/posting, exit clearance, verifications.
+  const hrLvl = level("hr");
+  const canEdit = hrLvl >= 2;
+  const canFull = hrLvl >= 3;
   const [reportView, setReportView] = useState<WeeklyReport | null>(null);
   async function openCertDoc(path: string) { const url = await staffDocUrl(path); if (url) window.open(url, "_blank", "noopener"); }
   // the other side of an appraisal/exit/cert acts from the Staff Portal, and job applicants
@@ -989,34 +1014,34 @@ export default function HrView() {
           {tab === "h-over" && (
             <>
               <button className="btn" onClick={() => toast("Org chart", "Opens the live organogram by department")}>Org chart</button>
-              <button className="btn primary" onClick={() => openHrModal({ kind: "employee" })}><PlusI />Add employee</button>
+              {canEdit && <button className="btn primary" onClick={() => openHrModal({ kind: "employee" })}><PlusI />Add employee</button>}
             </>
           )}
-          {tab === "h-personnel" && (
+          {tab === "h-personnel" && canEdit && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "employee" })}><PlusI />Add employee</button>
           )}
-          {tab === "h-pay" && !hasCurrentRun && (
+          {tab === "h-pay" && canEdit && !hasCurrentRun && (
             <button className="btn primary" onClick={() => preparePayroll(curPeriod)}><PlusI />Prepare {fmtPeriod(curPeriod)} run</button>
           )}
-          {tab === "h-appraisals" && !appraisals.some((a) => a.cycle === curCycle) && (
+          {tab === "h-appraisals" && canEdit && !appraisals.some((a) => a.cycle === curCycle) && (
             <button className="btn primary" onClick={() => startAppraisalCycle(curCycle)}><PlusI />Start {curCycle} cycle</button>
           )}
-          {tab === "h-certs" && (
+          {tab === "h-certs" && canEdit && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "certification" })}><PlusI />Add certification</button>
           )}
-          {tab === "h-feedback" && (
+          {tab === "h-feedback" && canEdit && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />Send feedback</button>
           )}
-          {tab === "h-exit" && (
+          {tab === "h-exit" && canFull && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "exitStart" })}><PlusI />Start an exit</button>
           )}
           {tab === "h-recruit" && (
             <>
               <button className="btn" onClick={() => { refreshHr(); toast("Pipeline refreshed", "Pulled the latest applications from the careers page"); }}>Refresh</button>
-              <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New job opening</button>
+              {canEdit && <button className="btn primary" onClick={() => openHrModal({ kind: "requisition" })}><PlusI />New job opening</button>}
             </>
           )}
-          {tab === "h-field" && (
+          {tab === "h-field" && canEdit && (
             <>
               <button className="btn" onClick={() => openHrModal({ kind: "enumerator" })}>Add enumerator</button>
               <button className="btn primary" onClick={() => openHrModal({ kind: "assignment" })}><PlusI />New assignment</button>
@@ -1025,6 +1050,7 @@ export default function HrView() {
         </div>
       </div>
       <Crumb view="hr" />
+      <ViewOnly show={hrLvl === 1} />
 
       {tab === "h-over" && (
         <div className="hr-panel active">
@@ -1104,7 +1130,7 @@ export default function HrView() {
           <div className="panel" style={{ marginBottom: 18 }}>
             <div className="panel-h">
               <h3>Employee directory</h3>
-              <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "employee" }); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add employee</a></span>
+              {canEdit && <span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "employee" }); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Add employee</a></span>}
             </div>
             <div style={{ padding: "10px 18px 4px", display: "flex", gap: 7, flexWrap: "wrap" }}>
               {[{ v: "all", l: "All" }, ...contractTypes.map((c) => ({ v: c.value, l: c.label })), { v: "expiring", l: "Expiring soon" }].map((f) => (
@@ -1280,8 +1306,8 @@ export default function HrView() {
                   <span className="id" style={{ color: "var(--ember)" }}>NEW</span>
                   <span className="txt">{c.holder} — {c.name}<small>{c.issuer || "—"}{c.docPath ? " · certificate attached" : " · no file"}</small></span>
                   {c.docPath && <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => openCertDoc(c.docPath!)}>View</button>}
-                  <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => verifyCertification(c.id, true)}>Verify</button>
-                  <button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => verifyCertification(c.id, false)}>Reject</button>
+                  {canFull && <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => verifyCertification(c.id, true)}>Verify</button>}
+                  {canFull && <button className="btn" style={{ padding: "4px 10px", fontSize: 11 }} onClick={() => verifyCertification(c.id, false)}>Reject</button>}
                 </div>
               ))}
               <Note>Staff submit from their portal; HR checks the certificate and verifies. Only verified items count towards skills coverage.</Note>
@@ -1313,7 +1339,7 @@ export default function HrView() {
                 <div className="task" key={f.ref} style={{ cursor: "default" }}>
                   <span className="id" style={{ color: "var(--flame)" }}>{f.ref}</span>
                   <span className="txt">{f.body}<small>{f.category || "—"} · {f.author ? "named" : "anonymous"} · {ago(f.created)}{f.audience === "leadership" ? " · to Leadership" : ""}</small></span>
-                  {fbNext[f.state] && (
+                  {canEdit && fbNext[f.state] && (
                     <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => setFeedbackState(f.ref, fbNext[f.state].to)}>{fbNext[f.state].l}</button>
                   )}
                   <span className={`pill ${fbPill[f.state]?.cls ?? "week"}`} style={{ textTransform: "none" }}>{fbPill[f.state]?.l ?? f.state}</span>
@@ -1421,10 +1447,12 @@ export default function HrView() {
                       <td>{r.reason || "—"}</td>
                       <td>
                         {r.state === "pending" ? (
-                          <span style={{ display: "flex", gap: 8 }}>
-                            <button className="btn primary" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => decideLeave(r.id, true)}>Approve</button>
-                            <button className="btn" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => decideLeave(r.id, false)}>Decline</button>
-                          </span>
+                          canFull ? (
+                            <span style={{ display: "flex", gap: 8 }}>
+                              <button className="btn primary" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => decideLeave(r.id, true)}>Approve</button>
+                              <button className="btn" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => decideLeave(r.id, false)}>Decline</button>
+                            </span>
+                          ) : <span className="pill week" style={{ textTransform: "none" }}>Pending</span>
                         ) : (
                           <span className={`pill ${r.state === "approved" ? "done" : "over"}`} style={{ textTransform: "none" }}>{cap(r.state)}</span>
                         )}
@@ -1484,7 +1512,7 @@ export default function HrView() {
                       <td>
                         <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                           <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReportView(r)}>View</button>
-                          {canViewReports && r.state === "submitted" && (
+                          {canEdit && canViewReports && r.state === "submitted" && (
                             <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => acknowledgeWeeklyReport(r.ref)}>Acknowledge</button>
                           )}
                         </span>
@@ -1523,9 +1551,9 @@ export default function HrView() {
                         <div style={{ fontFamily: "var(--display)", fontSize: 25, fontWeight: 600, letterSpacing: -0.5 }}>{kes(sums.net)}</div>
                         <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>net pay · {latest.totals?.staff ?? latest.items.length} staff · {latest.ref}</div>
                       </div>
-                      {latest.state === "prepared" && <button className="btn primary" onClick={() => approvePayroll(latest.ref)}>Approve run</button>}
-                      {latest.state === "approved" && <button className="btn primary" onClick={() => postPayroll(latest.ref)}>Post to GL</button>}
-                      {latest.state === "posted" && !hasCurrentRun && <button className="btn primary" onClick={() => preparePayroll(curPeriod)}>Prepare {fmtPeriod(curPeriod)}</button>}
+                      {canFull && latest.state === "prepared" && <button className="btn primary" onClick={() => approvePayroll(latest.ref)}>Approve run</button>}
+                      {canFull && latest.state === "approved" && <button className="btn primary" onClick={() => postPayroll(latest.ref)}>Post to GL</button>}
+                      {canEdit && latest.state === "posted" && !hasCurrentRun && <button className="btn primary" onClick={() => preparePayroll(curPeriod)}>Prepare {fmtPeriod(curPeriod)}</button>}
                     </div>
                   </div>
                   <div className="row"><div className="rl">Gross pay</div><span className="mono">{kes(sums.gross)}</span></div>
@@ -1538,7 +1566,7 @@ export default function HrView() {
               ) : (
                 <div className="pad">
                   <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 12 }}>No payroll run yet. Prepare {fmtPeriod(curPeriod)} from the {staff.length} active staff files.</div>
-                  <button className="btn primary" onClick={() => preparePayroll(curPeriod)}>Prepare {fmtPeriod(curPeriod)} run</button>
+                  {canEdit && <button className="btn primary" onClick={() => preparePayroll(curPeriod)}>Prepare {fmtPeriod(curPeriod)} run</button>}
                 </div>
               )}
             </div>
@@ -1616,8 +1644,12 @@ export default function HrView() {
                         <td><span className={`pill ${r.published ? "done" : ""}`} style={{ textTransform: "none" }}>{r.published ? "Published" : "Draft"}</span></td>
                         <td className="mono">{r.candidates.length}{r.candidates.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}> · top {top}%</span>}</td>
                         <td style={{ textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                          <a href="#" onClick={(e) => { e.preventDefault(); publishPosting(r.ref, !r.published); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12, marginRight: 10 }}>{r.published ? "Unpublish" : "Publish"}</a>
-                          <a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "candidate", reqRef: r.ref }); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>+ Candidate</a>
+                          {canEdit ? (
+                            <>
+                              <a href="#" onClick={(e) => { e.preventDefault(); publishPosting(r.ref, !r.published); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12, marginRight: 10 }}>{r.published ? "Unpublish" : "Publish"}</a>
+                              <a href="#" onClick={(e) => { e.preventDefault(); openHrModal({ kind: "candidate", reqRef: r.ref }); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>+ Candidate</a>
+                            </>
+                          ) : <span className="pill week" style={{ textTransform: "none" }}>—</span>}
                         </td>
                       </tr>
                     );
@@ -1674,9 +1706,9 @@ export default function HrView() {
                 <div className="task" key={a.id} style={{ cursor: "default" }}>
                   <span className="id">{a.state === "planned" ? "NEW" : "ACT"}</span>
                   <span className="txt">{a.enumerator} — {a.project || "unassigned"}<small className="mono">{a.days} days · {kes(a.perDiem)}{a.contractDoc ? ` · ${a.contractDoc}` : ""}</small></span>
-                  {a.state === "planned"
+                  {canFull && (a.state === "planned"
                     ? <button className="btn" style={{ marginRight: 8 }} onClick={() => setFieldAssignmentState(a.id, "active")}>Approve</button>
-                    : <button className="btn" style={{ marginRight: 8 }} onClick={() => setFieldAssignmentState(a.id, "complete")}>Complete</button>}
+                    : <button className="btn" style={{ marginRight: 8 }} onClick={() => setFieldAssignmentState(a.id, "complete")}>Complete</button>)}
                   <span className={`pill ${a.state === "active" ? "done" : "today"}`} style={{ textTransform: "none" }}>{cap(a.state)}</span>
                 </div>
               ))}
