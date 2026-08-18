@@ -96,18 +96,22 @@ export default function FinanceView() {
   const canEdit = finLvl >= 2;
   const canFull = finLvl >= 3;
 
-  // Two-stage petty cash: a request needs a Super Admin (users:3) AND HR (hr>=2)
-  // approval, by two different people. Show each approver only the stage they can act on.
+  // Single-approval petty cash, routed by who raised it (approver_role on the request):
+  //   'hr'    → HR (hr>=2) approves a regular employee's request
+  //   'super' → a Super Admin (users:3) approves HR's own request
+  //   'auto'  → a Super Admin's own request was auto-approved on submit (never pending here)
+  // Only the routed role sees Approve; nobody can decide their own request.
   const myPerms = perms[me?.email ?? ""];
   const iAmSuper = (myPerms?.users ?? 0) >= 3;
   const iAmHr = (myPerms?.hr ?? 0) >= 2;
-  // Strict order: the Super Admin signs off first, then HR gives the second approval.
-  // HR's button stays locked until a (different) Super Admin has approved.
-  const canApproveSuper = (r: PettyRequest) => iAmSuper && !r.superApprovedBy;
-  const canApproveHr = (r: PettyRequest) => iAmHr && !r.hrApprovedBy && !!r.superApprovedBy && r.superApprovedBy !== me?.name;
-  const canApprovePetty = (r: PettyRequest) => canApproveSuper(r) || canApproveHr(r);
-  // Message shown to an HR approver while they're still waiting on the Super Admin.
-  const pettyWaitLabel = (r: PettyRequest) => (iAmHr && !r.superApprovedBy ? "Awaiting Super Admin" : "Waiting");
+  const canApprovePetty = (r: PettyRequest) =>
+    r.requesterEmail !== me?.email &&
+    (r.approverRole === "super" ? iAmSuper
+      : r.approverRole === "hr" ? iAmHr
+      : (iAmSuper || iAmHr)); // legacy rows with no stamped route
+  // Who this request is waiting on (shown to approvers who can't act on it).
+  const pettyRouteLabel = (r: PettyRequest) => (r.approverRole === "super" ? "Super Admin" : "HR");
+  const pettyWaitLabel = (r: PettyRequest) => `Awaiting ${pettyRouteLabel(r)}`;
 
   const pettyPending = pettyRequests.filter((r) => r.state === "pending");
   const pettyDecided = pettyRequests.filter((r) => r.state === "approved" || r.state === "rejected");
@@ -335,7 +339,7 @@ export default function FinanceView() {
                 <span className="meta">{pettyPending.length} awaiting approval{canDecidePetty ? "" : " · view only"}</span>
               </div>
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Approvals</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Route to</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
                 <tbody>
                   {pettyPending.length === 0 ? (
                     <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No requests awaiting approval. Staff raise these in the Staff Portal → Petty Cash.</td></tr>
@@ -346,17 +350,15 @@ export default function FinanceView() {
                       <td>{r.item}</td>
                       <td className="mono">{kes(r.amount)}</td>
                       <td style={{ fontSize: 11 }}>
-                        <span className={`pill ${r.superApprovedBy ? "done" : "today"}`} title={r.superApprovedBy || "Awaiting the Super Admin — approves first"}>Super {r.superApprovedBy ? "✓" : "•"}</span>
-                        {" "}
-                        <span className={`pill ${r.hrApprovedBy ? "done" : "today"}`} title={r.hrApprovedBy || (r.superApprovedBy ? "Awaiting HR" : "HR signs off after the Super Admin")}>HR {r.hrApprovedBy ? "✓" : "•"}</span>
+                        <span className="pill today" title={r.approverRole === "super" ? "HR's own request — a Super Admin approves it" : "A Super Admin or HR approves it"}>→ {pettyRouteLabel(r)}</span>
                       </td>
                       <td style={{ textAlign: "right" }}>
                         {canDecidePetty ? (
-                          <span style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end" }}>
+                          <span className="row-actions" style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
                             {canApprovePetty(r)
-                              ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => setPettyDecide({ req: r, approve: true })}>Approve</button>
-                              : <span className="pill today" title="The Super Admin approves first, then HR">{pettyWaitLabel(r)}</span>}
-                            <button className="btn" style={{ padding: "4px 9px", fontSize: 11, color: "var(--red)" }} onClick={() => setPettyDecide({ req: r, approve: false })}>Reject</button>
+                              ? <button className="btn primary sm" onClick={() => setPettyDecide({ req: r, approve: true })}>Approve</button>
+                              : <span className="pill today" title={`This request is awaiting ${pettyRouteLabel(r)} approval`}>{pettyWaitLabel(r)}</span>}
+                            {canApprovePetty(r) && <button className="btn sm" style={{ color: "var(--red)" }} onClick={() => setPettyDecide({ req: r, approve: false })}>Reject</button>}
                           </span>
                         ) : <span className="pill today">Pending</span>}
                       </td>
@@ -364,7 +366,7 @@ export default function FinanceView() {
                   ))}
                 </tbody>
               </table>
-              <Note>Requests come from the Staff Portal. Each needs a Super Admin <strong>and</strong> HR to approve (two different people, either order); either can reject. A request can't be approved by the person who raised it.</Note>
+              <Note>Requests come from the Staff Portal and route by who raised them: a staff member's request goes to <strong>HR</strong>; HR's own request goes to a <strong>Super Admin</strong>; a Super Admin's own request is auto-approved. One approval settles it, and you can't decide your own request.</Note>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>

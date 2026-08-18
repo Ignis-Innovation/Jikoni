@@ -76,7 +76,7 @@ function NavModule({ v, icon, badge, badgeCls, collapsed, setCollapsed }: {
 }
 
 function Sidebar() {
-  const { view, me, perms, notifications, signOut, go, setSettingsTab } = useApp();
+  const { view, me, perms, notifications, signOut, go, setSettingsTab, mobileNavOpen, setMobileNavOpen } = useApp();
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
   const openProfile = () => { setSettingsTab("s-profile"); go("settings"); };
   const canUsers = canManageUsers(perms, me?.email);
@@ -94,7 +94,9 @@ function Sidebar() {
   useEffect(() => { setCollapsedFor(null); }, [view]);
 
   return (
-    <aside className="sidebar">
+    <>
+      {mobileNavOpen && <div className="nav-backdrop" onClick={() => setMobileNavOpen(false)} />}
+      <aside className={`sidebar ${mobileNavOpen ? "open" : ""}`}>
       <div className="brand">
         <div className="mark"><BrandMark /></div>
         <div>
@@ -152,11 +154,12 @@ function Sidebar() {
         </button>
       </div>
     </aside>
+    </>
   );
 }
 
 function Topbar() {
-  const { toast, openTask, me } = useApp();
+  const { toast, openTask, me, setMobileNavOpen } = useApp();
   const firstName = (me?.name || "").trim().split(/\s+/)[0] || "there";
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -172,6 +175,9 @@ function Topbar() {
 
   return (
     <div className="topbar">
+      <button className="iconbtn hamburger" onClick={() => setMobileNavOpen(true)} title="Menu" aria-label="Open menu">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+      </button>
       <div className="greeting">
         <div className="g">{greet}, {firstName}</div>
         <div className="d">{dateline}</div>
@@ -193,14 +199,16 @@ function Topbar() {
 }
 
 function NotifBell() {
-  const { notifications, markNotificationsSeen, goTab } = useApp();
+  const { notifications, markNotificationsSeen, goTab, go } = useApp();
   const [open, setOpen] = useState(false);
   const unseen = notifications.filter((n) => !n.seen);
-  function openNotif(n: { id: string; linkView: string | null }) {
+  function openNotif(n: { id: string; kind: string; linkView: string | null }) {
     markNotificationsSeen([n.id]);
     if (n.linkView === "crm") goTab("crm", "cr-eng");
     else if (n.linkView === "procurement") goTab("procurement", "p-req");
+    else if (n.kind === "petty_cash_request") goTab("finance", "f-petty");   // approver → petty queue
     else if (n.linkView === "finance") goTab("finance", "f-ap");
+    else if (n.linkView === "staffportal") go("staffportal");                 // requester → their portal
     setOpen(false);
   }
   return (

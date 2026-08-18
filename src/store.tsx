@@ -68,7 +68,7 @@ export interface HrBalanceRow { who: string; entitled: number; used: number; res
 export interface PettyRequest {
   id: string; item: string; amount: number; needBy: string | null; reason: string | null;
   state: "pending" | "approved" | "rejected" | "cancelled";
-  requester: string; requesterEmail: string;
+  requester: string; requesterEmail: string; approverRole: string | null;
   superApprovedBy: string | null; hrApprovedBy: string | null;
   decidedBy: string | null; decidedAt: string | null; note: string | null; createdAt: string;
 }
@@ -232,6 +232,10 @@ interface AppApi {
   hrMode: boolean;
   setHrMode: (v: boolean) => void;
   isHrToggleUser: boolean;
+
+  // mobile sidebar drawer
+  mobileNavOpen: boolean;
+  setMobileNavOpen: (v: boolean) => void;
 
   me: Me | null;
   signOut: () => void;
@@ -545,6 +549,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [needPassword, setNeedPassword] = useState(false);
   const [entity, setEntity] = useState<Entity>("Kenya");
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);  // phone sidebar drawer
 
   const [myWeek, setMyWeek] = useState<WeekTask[]>(initialMyWeek);
   const [taskFilter, setTaskFilter] = useState<"mine" | "team">("mine");
@@ -759,7 +764,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Petty Cash tab shows the queue. RLS returns all rows for authenticated.
     const { data: pcr } = await supabase
       .from("petty_cash_requests")
-      .select("ref, item, amount, need_by, reason, state, decided_at, decision_note, created_at, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
+      .select("ref, item, amount, need_by, reason, state, approver_role, decided_at, decision_note, created_at, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
       .order("created_at", { ascending: false })
       .limit(200);
     setPettyRequests(((pcr ?? []) as any[]).map((r) => {
@@ -769,7 +774,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const hr = Array.isArray(r.hrApprover) ? r.hrApprover[0] : r.hrApprover;
       return {
         id: r.ref, item: r.item, amount: Number(r.amount), needBy: r.need_by, reason: r.reason, state: r.state,
-        requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "",
+        requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "", approverRole: r.approver_role ?? null,
         superApprovedBy: su?.name ?? null, hrApprovedBy: hr?.name ?? null, decidedBy: dc?.name ?? null,
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
       } as PettyRequest;
@@ -1077,6 +1082,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   function go(v: string) {
     if (MODULE_HOME[v]) setTabs((prev) => ({ ...prev, [v]: MODULE_HOME[v] }));
     setView(v);
+    setMobileNavOpen(false);
     mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
   function goTab(v: string, t: string) {
@@ -1084,6 +1090,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // would clobber the tab back to the module's overview home.
     setTabs((prev) => ({ ...prev, [v]: t }));
     setView(v);
+    setMobileNavOpen(false);
     mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -1647,14 +1654,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- petty-cash requests (Staff Portal → Finance Petty Cash) ---------- */
+  // Best-effort email via the /api/notify serverless function (bells always land via the RPC).
+  async function emailNotify(to: string, subject: string, text: string, html: string) {
+    try {
+      await fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+        body: JSON.stringify({ to, subject, text, html }),
+      });
+    } catch { /* email is best-effort; the in-app notification still lands */ }
+  }
+
   async function submitPettyRequest(v: { item: string; amount: number; needBy: string; reason: string }) {
     const { data, error } = await supabase.rpc("submit_petty_cash_request", {
       p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null,
     });
     if (error) { toast("Request not submitted", error.message); return; }
     setPettyOpen(false); setPettyEdit(null);
+    const d = data as any;
+    const ref = d?.id ?? "Request";
+    // email the routed approver(s): "there is a petty cash request"
+    const approvers: string[] = Array.isArray(d?.approverEmails) ? d.approverEmails : [];
+    const amt = `KES ${Number(v.amount).toLocaleString()}`;
+    await Promise.all(approvers.map((to) => emailNotify(
+      to, `New petty cash request — ${ref}`,
+      `${me?.name ?? "A teammate"} requested petty cash: ${v.item} (${amt}).\n\nOpen Jikoni Tool → Finance → Petty Cash to approve or reject it.`,
+      `<p><strong>${me?.name ?? "A teammate"}</strong> requested petty cash: <strong>${v.item}</strong> (${amt}).</p><p>Open <strong>Jikoni Tool → Finance → Petty Cash</strong> to approve or reject it.</p>`,
+    )));
     await loadFromDb();
-    toast(`${(data as any)?.id ?? "Request"} submitted`, "Routed to Finance / HR for approval — you'll see the decision here");
+    if (d?.autoApproved) toast(`${ref} approved`, "Auto-approved — Super Admin requests don't need a second approver");
+    else toast(`${ref} submitted`, d?.approverRole === "super" ? "Sent to a Super Admin to approve — you'll see the decision here" : "Sent to HR to approve — you'll see the decision here");
   }
   async function updatePettyRequest(ref: string, v: { item: string; amount: number; needBy: string; reason: string }) {
     const { error } = await supabase.rpc("edit_petty_cash_request", {
@@ -1672,11 +1701,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     toast(`${ref} withdrawn`, "Removed from the approval queue");
   }
   async function decidePettyRequest(ref: string, approve: boolean, note?: string) {
-    const { error } = await supabase.rpc("decide_petty_cash_request", { p_ref: ref, p_approve: approve, p_note: note || null });
+    const { data, error } = await supabase.rpc("decide_petty_cash_request", { p_ref: ref, p_approve: approve, p_note: note || null });
     if (error) { toast(approve ? "Approval failed" : "Rejection failed", error.message); return; }
+    // email the requester their outcome
+    const d = data as any;
+    if (d?.requesterEmail) {
+      const amt = `KES ${Number(d.amount).toLocaleString()}`;
+      const word = approve ? "approved" : "rejected";
+      await emailNotify(
+        d.requesterEmail, `Petty cash ${word} — ${ref}`,
+        `Hi ${d.requester ?? ""},\n\nYour petty cash request for ${d.item} (${amt}) has been ${word}${note ? ` — ${note}` : ""}.\n\nOpen Jikoni Tool → Staff Portal to see the details.`,
+        `<p>Hi ${d.requester ?? ""},</p><p>Your petty cash request for <strong>${d.item}</strong> (${amt}) has been <strong>${word}</strong>${note ? ` — ${note}` : ""}.</p><p>Open <strong>Jikoni Tool → Staff Portal</strong> to see the details.</p>`,
+      );
+    }
     await loadFromDb();
     toast(`${ref} ${approve ? "approved" : "rejected"}`,
-      approve ? "The requester can see it approved in their portal" : "The requester is notified");
+      approve ? "The requester is emailed and can see it approved in their portal" : "The requester is emailed and notified");
   }
 
   /* ---------- weekly reports (Staff Portal → HR Weekly Reports) ---------- */
@@ -2319,6 +2359,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     xEng, xProject, xTab, xView, openRecord,
     perms: effectivePerms, level: (m: string) => effectivePerms[me?.email ?? ""]?.[m] ?? 0, saveAccess: saveAccessFn,
     hrMode, setHrMode, isHrToggleUser,
+    mobileNavOpen, setMobileNavOpen,
     me,
     signOut: async () => { await supabase.auth.signOut(); setMe(null); setMembers([]); },
     members,
