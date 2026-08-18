@@ -106,13 +106,16 @@
   .vhead{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;gap:16px;flex-wrap:wrap}
   .vhead h1{font-family:var(--display);font-size:24px;font-weight:600;letter-spacing:-.4px}
   .vhead p{color:var(--ink-soft);font-size:13px;margin-top:3px;max-width:560px}
-  .vhead .actions{display:flex;gap:9px}
-  .btn{font-family:var(--body);font-weight:600;font-size:13px;border-radius:10px;padding:9px 15px;cursor:pointer;
-    border:1px solid var(--hairline-2);background:#fff;color:var(--ink);transition:.13s;display:flex;align-items:center;gap:7px}
+  .vhead .actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .btn{font-family:var(--body);font-weight:600;font-size:13px;line-height:1.1;white-space:nowrap;border-radius:10px;padding:9px 15px;cursor:pointer;
+    border:1px solid var(--hairline-2);background:#fff;color:var(--ink);transition:.13s;display:inline-flex;align-items:center;justify-content:center;gap:7px}
   .btn:hover{border-color:var(--ink-faint)}
   .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 2px 10px -2px var(--brand)}
   .btn.primary:hover{background:#0e8ba1}
   .btn svg{width:15px;height:15px}
+  /* compact button — consistent sizing for inline/table actions (Mark filed, drawer links, …) */
+  .btn.sm{padding:5px 10px;font-size:11.5px;border-radius:8px;gap:5px}
+  .btn.sm svg{width:13px;height:13px}
 
   /* ---------- PULSE STRIP ---------- */
   .pulse{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:22px}

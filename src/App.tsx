@@ -21,8 +21,8 @@ import StaffPortalView from "./views/StaffPortal";
 import ComplianceView from "./views/Compliance";
 import UsersView from "./views/Users";
 import SettingsView from "./views/Settings";
-import { EngDrawer, VendorDrawer, ProjectDrawer, AccessDrawer } from "./components/drawers";
-import { InviteModal, TaskModal, ReqModal, POModal, PoPickerModal, InvoiceModal, LeaveModal, EngagementModal, EngUpdateModal, PartnerModal, OpportunityModal, RiskModal, PolicyModal, DocumentModal, ContractModal, ProjectModal, FieldActivityModal, VendorModal, GrnModal, CaptureInvoiceModal, ReceiptModal, PoAmendModal, BankChangeModal } from "./components/modals";
+import { EngDrawer, VendorDrawer, ProjectDrawer, AccessDrawer, ProformaDrawer } from "./components/drawers";
+import { InviteModal, TaskModal, ReqModal, POModal, PoPickerModal, InvoiceModal, ProformaModal, LeaveModal, EngagementModal, EngUpdateModal, PartnerModal, OpportunityModal, RiskModal, PolicyModal, DocumentModal, ContractModal, ProjectModal, FieldActivityModal, VendorModal, GrnModal, CaptureInvoiceModal, ReceiptModal, PoAmendModal, BankChangeModal } from "./components/modals";
 
 const views: Record<string, React.ComponentType> = {
   home: HomeView, deploy: DeployView, readiness: ReadinessView, raise: RaiseView,
@@ -262,11 +262,13 @@ function Shell() {
       <VendorDrawer />
       <ProjectDrawer />
       <AccessDrawer />
+      <ProformaDrawer />
       <InviteModal />
       <TaskModal />
       <ReqModal />
       <POModal />
       <InvoiceModal />
+      <ProformaModal />
       <LeaveModal />
       <EngagementModal />
       <EngUpdateModal />

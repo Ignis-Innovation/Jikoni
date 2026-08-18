@@ -23,13 +23,19 @@ const check = (label, ok, extra = "") => {
 
 try {
   await c.query("begin");
-  const [me] = await q(`select auth_id from app_users where email='wanjiku@ignis.africa'`);
+  // Run as any live user who can edit Compliance (level >= 2) — Super Admin or a Sub
+  // Admin. Picked dynamically so the test doesn't depend on a specific seeded account.
+  const [me] = await q(`select au.email, au.auth_id
+    from app_users au join user_permissions up on up.email = lower(au.email)
+    where up.module = 'compliance' and up.level >= 2 and au.auth_id is not null
+    order by up.level desc limit 1`);
+  if (!me) throw new Error("No live user with compliance edit (level >= 2) to run as");
   await c.query(`select set_config('request.jwt.claims', $1, false)`,
-    [JSON.stringify({ email: "wanjiku@ignis.africa", sub: me.auth_id, role: "authenticated" })]);
+    [JSON.stringify({ email: me.email, sub: me.auth_id, role: "authenticated" })]);
 
-  // --- access key backfilled ---
-  const [perm] = await q(`select level from user_permissions where email='wanjiku@ignis.africa' and module='compliance'`);
-  check("compliance access key backfilled", !!perm, `level ${perm?.level}`);
+  // --- access key present for the acting user ---
+  const [perm] = await q(`select level from user_permissions where email=$1 and module='compliance'`, me.email.toLowerCase());
+  check("compliance access key present", !!perm, `${me.email} · level ${perm?.level}`);
 
   // --- create risk: RSK- ref + severity from likelihood × impact ---
   const risk = await rpc(`public.create_risk('Smoke Test Risk','Delivery',4,4,'Mitigate via SOPs','Dennis')`);
@@ -49,14 +55,20 @@ try {
   const [{ n: docN }] = await q(`select count(*)::int n from company_documents where name='Smoke Test Permit'`);
   check("add_company_document upserts by name (no dupes)", docN === 1, `${docN} rows`);
 
-  // --- add contract ---
-  const con = await rpc(`public.add_contract('Smoke Test Vendor','vendor','Smoke Framework','Agreed rates','2027-12-31')`);
+  // --- add contract (now carries an optional doc path) ---
+  const con = await rpc(`public.add_contract('Smoke Test Vendor','vendor','Smoke Framework','Agreed rates','2027-12-31','contracts/smoke.pdf')`);
   check("add_contract returns counterparty + title", con.counterparty === "Smoke Test Vendor" && con.title === "Smoke Framework");
+  const [{ doc: conDoc }] = await q(`select doc from contracts where counterparty='Smoke Test Vendor' and title='Smoke Framework'`);
+  check("add_contract stores the doc path", conDoc === "contracts/smoke.pdf", `${conDoc}`);
 
-  // --- mark an obligation filed advances next_due ---
+  // --- mark an obligation filed advances next_due (skips if none seeded) ---
   const [ob] = await q(`select obligation, next_due from compliance_obligations order by next_due limit 1`);
-  const filed = await rpc(`public.mark_obligation_filed(${literal(ob.obligation)})`);
-  check("mark_obligation_filed advances next_due", new Date(filed.nextDue) > new Date(ob.next_due), `${ob.next_due} → ${filed.nextDue}`);
+  if (ob) {
+    const filed = await rpc(`public.mark_obligation_filed(${literal(ob.obligation)})`);
+    check("mark_obligation_filed advances next_due", new Date(filed.nextDue) > new Date(ob.next_due), `${ob.next_due} → ${filed.nextDue}`);
+  } else {
+    console.log("… no obligations seeded — skipping mark_obligation_filed check");
+  }
 
   // --- bootstrap surfaces the compliance block ---
   const boot = await rpc(`public.bootstrap()`);
@@ -64,8 +76,10 @@ try {
   check("bootstrap policies includes the new policy", boot.compliance.policies.some((p) => p.code === "IGN-TEST-001"));
   check("bootstrap companyDocuments includes the new doc", boot.compliance.companyDocuments.some((d) => d.name === "Smoke Test Permit"));
   check("bootstrap risks includes the new risk", boot.compliance.risks.some((r) => r.ref === risk.ref));
-  check("bootstrap contracts includes the new contract", boot.compliance.contracts.some((k) => k.title === "Smoke Framework"));
-  check("bootstrap obligations carry status pills", boot.compliance.obligations.length > 0 && !!boot.compliance.obligations[0].statusCls);
+  const bootContract = boot.compliance.contracts.find((k) => k.title === "Smoke Framework");
+  check("bootstrap contracts includes the new contract", !!bootContract);
+  check("bootstrap contract surfaces its doc path", bootContract?.doc === "contracts/smoke.pdf", `${bootContract?.doc}`);
+  check("bootstrap obligations carry status pills", boot.compliance.obligations.length === 0 || !!boot.compliance.obligations[0].statusCls);
   const newRisk = boot.compliance.risks.find((r) => r.ref === risk.ref);
   check("risk severity pill mapped (4×4=16 → High)", newRisk?.statusTxt === "High", newRisk?.statusTxt);
 

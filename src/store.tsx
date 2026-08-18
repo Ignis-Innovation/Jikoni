@@ -10,19 +10,28 @@ import { LoginGate, SetPassword } from "./components/login";
 import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
-  FieldActivity, AppNotification, accessModules,
+  FieldActivity, AppNotification,
   kes,
 } from "./data";
 
-// Retired: HR access used to be a Home-page "Switch to HR / Switch to Employee"
-// toggle for one person. That's now a proper "Sub Admin" role (Human Resources +
-// Compliance & Governance edit), granted per-user. Empty = the toggle is disabled.
+// The Home-page "Switch to HR / Switch to Employee" toggle is now driven by role, not a
+// hardcoded email: any user whose role is Sub Admin ("sub") gets the toggle. See
+// isHrToggleUser / effectivePerms below. Kept for backwards reference only.
 export const HR_TOGGLE_EMAIL = "";
 
 export interface Toast { id: number; title: string; sub?: string }
 export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "draft" | "await" | "md" | "approved" | "rejected" | "po"; qty?: number; unit?: string; unitPrice?: number; project?: string | null; justification?: string | null; raisedBy?: string; date?: string }
 export interface NewPO { id: string; vendor: string; amt: number; delivery: string }
 export interface NewInvoice { cust: string; id: string; tot: number; pillCls: string; pillTxt: string }
+export interface ProformaLine { d: string; q: number; p: number }
+export interface ProformaRow {
+  ref: string; customer: string; orgId?: string | null; owner?: string | null;
+  issued: string; validTo: string; validRaw?: string | null;
+  terms?: string | null; lead?: string | null; notes?: string | null; currency: string;
+  state: "issued" | "accepted" | "declined" | "expired";
+  declineReason?: string | null; invoiceRef?: string | null;
+  lines: ProformaLine[]; subtotal: number; statusCls: string; statusTxt: string;
+}
 
 /* ---------- Procurement + Finance spine read models (folded in via loadFromDb) ---------- */
 export interface Vendor { id: string; name: string; category: string | null; country: string; taxStatus: string; screenStatus: string; rating: string | null; openPos: number; state: string; bank?: string | null }
@@ -149,7 +158,7 @@ export interface PolicyRow { code: string; title: string; version: string; effec
 export interface CompanyDocRow { name: string; kind: string | null; doc: string | null; expiry: string; statusCls: string; statusTxt: string }
 export interface ObligationRow { obligation: string; authority: string | null; dueRule: string | null; nextDue: string; when: string; state: string; ownerModule: string | null; statusCls: string; statusTxt: string }
 export interface RiskRow { ref: string; risk: string; category: string | null; owner: string | null; likelihood: number; impact: number; score: number; mitigation: string | null; state: string; statusCls: string; statusTxt: string }
-export interface ContractRow { counterparty: string; kind: string; title: string; detail: string | null; expiry: string; state: string; statusCls: string; statusTxt: string }
+export interface ContractRow { counterparty: string; kind: string; title: string; detail: string | null; expiry: string; state: string; doc?: string | null; statusCls: string; statusTxt: string }
 export interface ComplianceData {
   policies: PolicyRow[]; companyDocuments: CompanyDocRow[]; obligations: ObligationRow[];
   risks: RiskRow[]; contracts: ContractRow[];
@@ -287,6 +296,18 @@ interface AppApi {
   openReceipt: (inv: NewInvoice) => void;
   closeReceipt: () => void;
   recordReceipt: (invRef: string, amount: number, method: string) => void;
+
+  // Proforma invoices (the offer before the sale) — register on Receivables + a record drawer
+  proformas: ProformaRow[];
+  pfOpen: boolean;
+  openProforma: () => void;
+  closeProforma: () => void;
+  createProforma: (v: { customer: string; orgId?: string | null; owner: string; validTo: string; terms: string; lead: string; notes: string; lines: ProformaLine[] }) => void;
+  pfRecRef: string | null;
+  openProformaRec: (ref: string) => void;
+  closeProformaRec: () => void;
+  acceptProforma: (ref: string) => void;
+  declineProforma: (ref: string, reason: string) => void;
 
   // v2 controls: PO amendment, vendor bank-detail change, settings config, audit trail
   poAmendFor: PORow | null;
@@ -462,7 +483,7 @@ interface AppApi {
   contractOpen: boolean;
   openContractForm: () => void;
   closeContractForm: () => void;
-  addContract: (v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string }) => void;
+  addContract: (v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string; file?: File | null }) => void;
   complianceDocUrl: (path: string, downloadName?: string) => string;
 
   inventory: InventoryData | null;
@@ -563,6 +584,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [invOpen, setInvOpen] = useState(false);
   const [newInvoices, setNewInvoices] = useState<NewInvoice[]>([]);
+  const [proformas, setProformas] = useState<ProformaRow[]>([]);
+  const [pfOpen, setPfOpen] = useState(false);
+  const [pfRecRef, setPfRecRef] = useState<string | null>(null);
   const [apInvoices, setApInvoices] = useState<ApInvoice[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
@@ -666,6 +690,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setReqs(data.reqs as Req[]);
     setNewPOs(data.pos as NewPO[]);
     setNewInvoices(data.salesInvoices as NewInvoice[]);
+    setProformas((data.proformas ?? []) as ProformaRow[]);
     setPerms({ ...initialPerms, ...(data.perms as Record<string, Perms>) });
     setBootReady(true);   // me + perms are in — safe to reveal the app with the right nav
     // User Management runs off the live app_users table (no hardcoded roster) — invited
@@ -1377,6 +1402,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     toast(`${invRef} settled`, `Collection posted · journal ${data.journal}`);
   }
 
+  /* ---------- proforma invoices (the offer before the sale — no ledger impact until accepted) ---------- */
+  async function createProforma(v: { customer: string; orgId?: string | null; owner: string; validTo: string; terms: string; lead: string; notes: string; lines: ProformaLine[] }) {
+    const { data, error } = await supabase.rpc("create_proforma", {
+      p_customer: v.customer, p_org_id: v.orgId || null, p_owner: v.owner || null,
+      p_valid_to: v.validTo || null, p_terms: v.terms || null, p_lead: v.lead || null,
+      p_notes: v.notes || null, p_lines: v.lines,
+    });
+    if (error) { toast("Proforma not issued", error.message); return; }
+    setPfOpen(false);
+    await loadFromDb();
+    toast(`${(data as any)?.ref ?? "Proforma"} issued to ${v.customer}`, "A priced offer — nothing posts to the ledger until it's accepted");
+  }
+  async function acceptProforma(ref: string) {
+    const { data, error } = await supabase.rpc("accept_proforma", { p_ref: ref });
+    if (error) { toast("Couldn't accept", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} accepted`, `Converted to tax invoice ${(data as any)?.invoice ?? ""} · filed to eTIMS · now a receivable to collect`);
+  }
+  async function declineProforma(ref: string, reason: string) {
+    const { error } = await supabase.rpc("decline_proforma", { p_ref: ref, p_reason: reason || null });
+    if (error) { toast("Couldn't record decline", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} declined`, "Recorded — nothing posts to the ledger; the reason feeds the conversion rate");
+  }
+
   /* ---------- won deal → project ---------- */
   async function createProjectFromEng(id: string) {
     const b = liveEng(id);
@@ -2058,15 +2108,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadFromDb();
     toast(`${v.name} saved`, v.expiresOn ? `Expiry ${v.expiresOn}${v.file ? " · attached" : ""}` : (v.file ? "Document attached" : "On file"));
   }
-  async function addContract(v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string }) {
+  async function addContract(v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string; file?: File | null }) {
+    const path = v.file ? await uploadComplianceDoc("contracts", v.file) : null;
+    if (v.file && !path) return; // upload failed — toast already fired
     const { error } = await supabase.rpc("add_contract", {
       p_counterparty: v.counterparty, p_kind: v.kind, p_title: v.title,
-      p_detail: v.detail || null, p_expires_on: v.expiresOn || null,
+      p_detail: v.detail || null, p_expires_on: v.expiresOn || null, p_doc: path,
     });
     if (error) { toast("Contract not saved", error.message); return; }
     setContractOpen(false);
     await loadFromDb();
-    toast(`${v.title} registered`, `${v.counterparty} · ${v.kind}`);
+    toast(`${v.title} registered`, `${v.counterparty} · ${v.kind}${v.file ? " · document attached" : ""}`);
   }
 
   /* ---------- inventory (Phase 2): mutations hit the ledger, then reload ---------- */
@@ -2232,20 +2284,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       data.assets ? `${data.assets} asset${data.assets === 1 ? "" : "s"} · KES ${Number(data.total).toLocaleString()} to the GL` : "Nothing to post — already run or fully depreciated");
   }
 
-  // The HR-toggle user's visible perms are driven by the Home-page toggle, not the
-  // DB grant (which stays full so the unlocked writes are allowed server-side).
-  // Employee = view-only everywhere (HR + User-Management hidden); HR = unlock
-  // Human Resources, Compliance edit and User-Management invite. Everyone else
-  // uses their real perms unchanged.
-  const isHrToggleUser = me?.email === HR_TOGGLE_EMAIL;
+  // The Sub Admin runs HR as a Home-page persona toggle. Their DB grant stays full
+  // (users:2, compliance:2, hr:3) so the unlocked writes are allowed server-side; the
+  // toggle only drives what's *visible*. Employee = HR + User Management hidden and
+  // Compliance view-only; HR = unlock Human Resources, Compliance edit and invites.
+  // Their other grants (Finance, Procurement, …) are preserved in both modes.
+  // Everyone else uses their real perms unchanged.
+  const myRoleKey = useMemo(
+    () => members.find((m) => m.email === me?.email)?.roleKey ?? null,
+    [members, me]
+  );
+  const isHrToggleUser = myRoleKey === "sub";
   const effectivePerms = useMemo(() => {
-    if (!isHrToggleUser) return perms;
-    const viewAll: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 1]));
+    if (!isHrToggleUser || !me?.email) return perms;
+    const base = perms[me.email] ?? {};
     const profile: Perms = hrMode
-      ? { ...viewAll, hr: 3, compliance: 2, users: 2 }
-      : { ...viewAll, hr: 0, users: 0 };
-    return { ...perms, [HR_TOGGLE_EMAIL]: profile };
-  }, [perms, isHrToggleUser, hrMode]);
+      ? { ...base, hr: 3, compliance: 2, users: 2 }
+      : { ...base, hr: 0, users: 0, compliance: 1 };
+    return { ...perms, [me.email]: profile };
+  }, [perms, isHrToggleUser, hrMode, me]);
 
   const api: AppApi = {
     view, tabs, go, goTab, mainRef,
@@ -2279,6 +2336,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     apInvoices, payments, journals, accounts,
     invoiceFor, openCaptureInvoice: (po: PORow) => setInvoiceFor(po), closeCaptureInvoice: () => setInvoiceFor(null), captureInvoice, approveInvoice, payInvoice, markInvoicePaid,
     receiptFor, openReceipt: (inv: NewInvoice) => setReceiptFor(inv), closeReceipt: () => setReceiptFor(null), recordReceipt,
+    proformas, pfOpen, openProforma: () => setPfOpen(true), closeProforma: () => setPfOpen(false), createProforma,
+    pfRecRef, openProformaRec: (ref: string) => setPfRecRef(ref), closeProformaRec: () => setPfRecRef(null), acceptProforma, declineProforma,
     poAmendFor, openPoAmend: (po: PORow) => setPoAmendFor(po), closePoAmend: () => setPoAmendFor(null), amendPo, approvePoAmendment,
     bankChangeFor, openBankChange: (v: string) => setBankChangeFor(v), closeBankChange: () => setBankChangeFor(null), requestBankChange, approveBankChange, bankChanges,
     appConfig, setAppConfig, audit,

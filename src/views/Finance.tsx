@@ -471,22 +471,68 @@ export default function FinanceView() {
 }
 
 function Receivables() {
-  const { newInvoices, openReceipt, level } = useApp();
+  const { newInvoices, openReceipt, level, proformas, openProforma, openProformaRec } = useApp();
   const canEdit = level("finance") >= 2;
   const outstanding = newInvoices.filter((i) => i.pillTxt !== "Paid");
+  const [pfFilter, setPfFilter] = useState("all");
+  // register filters map to the display status text set in bootstrap()
+  const pfFilters: [string, string][] = [
+    ["all", "All"], ["Awaiting", "Awaiting response"], ["Accepted", "Accepted"],
+    ["Declined", "Declined"], ["Expired", "Lapsed / expired"],
+  ];
+  const pfMatches = (s: string, f: string) =>
+    f === "all" ? true : f === "Expired" ? (s === "Expired" || s === "Lapsed") : s === f;
+  const pfRows = proformas.filter((p) => pfMatches(p.statusTxt, pfFilter));
+  const accepted = proformas.filter((p) => p.state === "accepted").length;
   return (
     <div className="fin-panel active">
       <div className="panel" style={{ marginBottom: 18 }}>
-        <div className="panel-h"><h3>Order-to-cash</h3><span className="meta">eTIMS compliant</span></div>
+        <div className="panel-h"><h3>Order-to-cash</h3><span className="meta">proforma is an offer · tax invoice is the sale</span></div>
         <div className="pad">
           <div className="steps">
-            <div className="step"><span className="sdot">1</span>Sales order</div><div className="step-arrow" />
-            <div className="step"><span className="sdot">2</span>Delivery / install</div><div className="step-arrow" />
-            <div className="step"><span className="sdot">3</span>Invoice issued</div><div className="step-arrow" />
-            <div className="step"><span className="sdot">4</span>Collection</div>
+            <div className="step done"><span className="sdot">1</span>Proforma issued</div><div className="step-arrow" />
+            <div className="step now"><span className="sdot">2</span>Accepted</div><div className="step-arrow" />
+            <div className="step"><span className="sdot">3</span>Tax invoice + eTIMS</div><div className="step-arrow" />
+            <div className="step"><span className="sdot">4</span>Receipt</div>
           </div>
+          <div style={{ padding: "8px 2px 0", fontSize: 12, color: "var(--ink-soft)" }}>A proforma is a quote, not revenue. Nothing posts to the ledger and no VAT is due until it's accepted and converted to a tax invoice. The register tracks issued, accepted, declined and expired.</div>
         </div>
       </div>
+
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <div className="panel-h">
+          <h3>Proforma invoices</h3>
+          {canEdit
+            ? <span className="meta"><a role="button" tabIndex={0} onClick={openProforma} onKeyDown={(e) => { if (e.key === "Enter") openProforma(); }} style={{ color: "var(--flame)", textDecoration: "none", cursor: "pointer" }}>+ Raise proforma</a></span>
+            : <span className="meta">offer · not revenue</span>}
+        </div>
+        <div style={{ padding: "10px 18px 4px", display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {pfFilters.map(([k, l]) => (
+            <button key={k} className={`btn sm ${pfFilter === k ? "primary" : ""}`} onClick={() => setPfFilter(k)}>{l}</button>
+          ))}
+        </div>
+        <table className="tbl">
+          <thead><tr><th>Customer</th><th>Proforma</th><th>Value</th><th>Valid to</th><th>Status</th></tr></thead>
+          <tbody>
+            {pfRows.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: "16px 18px", color: "var(--ink-soft)", fontSize: 12.5 }}>{proformas.length === 0 ? "No proformas yet — use “+ Raise proforma”." : "None in this view."}</td></tr>
+            ) : pfRows.map((p) => (
+              <tr key={p.ref} style={{ cursor: "pointer" }} onClick={() => openProformaRec(p.ref)}>
+                <td><strong>{p.customer}</strong></td>
+                <td className="mono">{p.ref}</td>
+                <td className="mono">{kes(p.subtotal)}</td>
+                <td className="mono">{p.validTo}</td>
+                <td><span className={`pill ${p.statusCls}`}>{p.statusTxt}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ padding: "12px 18px", fontSize: 12, color: "var(--ink-soft)", borderTop: "1px solid var(--hairline)" }}>
+          {proformas.length > 0 && <strong style={{ color: "var(--ink)" }}>Conversion: {accepted} of {proformas.length} accepted ({Math.round((accepted / proformas.length) * 100)}%). </strong>}
+          Click a proforma to open it, accept it into a tax invoice, or record why it was declined.
+        </div>
+      </div>
+
       <div className="grid g-2">
         <div className="panel">
           <div className="panel-h">

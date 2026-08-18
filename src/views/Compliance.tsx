@@ -92,7 +92,7 @@ export default function ComplianceView() {
                 <span className="id">{o.when}</span>
                 <span className="txt">{o.obligation}<small>{[o.authority, o.dueRule].filter(Boolean).join(" · ")}</small></span>
                 <span className={`pill ${o.statusCls}`}>{o.statusTxt}</span>
-                {canEdit && <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, marginLeft: 10 }} onClick={() => markObligationFiled(o.obligation)}>Mark filed</button>}
+                {canEdit && <button className="btn sm" style={{ marginLeft: 10 }} onClick={() => markObligationFiled(o.obligation)}>Mark filed</button>}
               </div>
             ))}
           </div>
@@ -134,7 +134,7 @@ export default function ComplianceView() {
                   <tr key={c.counterparty + c.title}>
                     <td>{c.counterparty}</td>
                     <td className="meta" style={{ textTransform: "capitalize" }}>{c.kind}</td>
-                    <td>{c.title}{c.detail ? <><br /><span className="meta" style={{ textTransform: "none", letterSpacing: 0 }}>{c.detail}</span></> : null}</td>
+                    <td>{c.doc ? <a href={complianceDocUrl(c.doc)} target="_blank" rel="noreferrer" style={{ color: "var(--flame)", textDecoration: "none" }}>{c.title}</a> : c.title}{c.detail ? <><br /><span className="meta" style={{ textTransform: "none", letterSpacing: 0 }}>{c.detail}</span></> : null}</td>
                     <td className="mono">{c.expiry}</td>
                     <td><span className={`pill ${c.statusCls}`}>{c.statusTxt}</span></td>
                   </tr>

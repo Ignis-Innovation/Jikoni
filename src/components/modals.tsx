@@ -1197,14 +1197,15 @@ export function ContractModal() {
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
   const [expiresOn, setExpiresOn] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   useEffect(() => {
-    if (contractOpen) { setCounterparty(""); setKind("vendor"); setTitle(""); setDetail(""); setExpiresOn(""); }
+    if (contractOpen) { setCounterparty(""); setKind("vendor"); setTitle(""); setDetail(""); setExpiresOn(""); setFile(null); }
   }, [contractOpen]);
 
   function save() {
     if (!counterparty.trim()) { toast("Name the counterparty", "Who's the contract with?"); return; }
     if (!title.trim()) { toast("Name the contract", "e.g. Cookstove supply framework"); return; }
-    addContract({ counterparty: counterparty.trim(), kind, title: title.trim(), detail: detail.trim(), expiresOn });
+    addContract({ counterparty: counterparty.trim(), kind, title: title.trim(), detail: detail.trim(), expiresOn, file });
   }
 
   return (
@@ -1223,10 +1224,119 @@ export function ContractModal() {
         <div><label>Contract</label><input className="field" placeholder="e.g. Cookstove supply framework" value={title} onChange={(e) => setTitle(e.target.value)} /></div>
         <div><label>Detail <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" placeholder="e.g. Framework · agreed rates" value={detail} onChange={(e) => setDetail(e.target.value)} /></div>
         <div><label>Expiry <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" type="date" style={{ width: "100%" }} value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} /></div>
+        <div>
+          <label>Document <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <input className="field" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {file && <div className="meta" style={{ textTransform: "none", letterSpacing: 0, marginTop: 5 }}>{file.name} — attaches to this contract</div>}
+        </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeContractForm}>Cancel</button>
         <button className="btn primary" onClick={save}>Add contract</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= RAISE A PROFORMA INVOICE ================= */
+type PfDraftLine = { d: string; q: number; p: number };
+export function ProformaModal() {
+  const { pfOpen, closeProforma, createProforma, crm, me, toast } = useApp();
+  const partners = crm.partners ?? [];
+  const owners = crm.teamNames ?? [];
+  const [custId, setCustId] = useState("");            // partner id, "" (none) or "__new"
+  const [custNew, setCustNew] = useState("");          // typed name when "__new"
+  const [owner, setOwner] = useState("");
+  const [terms, setTerms] = useState("50% deposit, balance on delivery");
+  const [lead, setLead] = useState("");
+  const [validTo, setValidTo] = useState("");
+  const [notes, setNotes] = useState("");
+  const [lines, setLines] = useState<PfDraftLine[]>([{ d: "", q: 1, p: 0 }]);
+
+  useEffect(() => {
+    if (pfOpen) {
+      setCustId(""); setCustNew(""); setOwner(me?.name ?? owners[0] ?? "");
+      setTerms("50% deposit, balance on delivery"); setLead(""); setValidTo(""); setNotes("");
+      setLines([{ d: "", q: 1, p: 0 }]);
+    }
+  }, [pfOpen]);
+
+  const setLine = (i: number, k: keyof PfDraftLine, v: string) =>
+    setLines((prev) => prev.map((l, idx) => idx === i ? { ...l, [k]: k === "d" ? v : (parseFloat(v) || 0) } : l));
+  const addLine = () => setLines((prev) => [...prev, { d: "", q: 1, p: 0 }]);
+  const delLine = (i: number) => setLines((prev) => prev.filter((_, idx) => idx !== i));
+
+  const subtotal = lines.reduce((s, l) => s + (l.q * l.p || 0), 0);
+  const vat = Math.round(subtotal * 0.16);
+
+  function submit() {
+    const customer = custId === "__new" ? custNew.trim() : (partners.find((p) => p.id === custId)?.name ?? "");
+    if (!customer) { toast("Choose a customer", "Pick the organisation the quote is for, or add a new one"); return; }
+    const clean = lines.filter((l) => l.d.trim() && l.p > 0).map((l) => ({ d: l.d.trim(), q: l.q || 1, p: l.p }));
+    if (!clean.length) { toast("Add a line item", "A quote needs at least one priced line"); return; }
+    if (!validTo) { toast("Set a valid-to date", "A proforma needs an expiry so it doesn't sit open forever"); return; }
+    createProforma({ customer, orgId: custId === "__new" ? null : custId, owner, validTo, terms, lead, notes, lines: clean });
+  }
+
+  return (
+    <ModalShell open={pfOpen} onClose={closeProforma} width={600}>
+      <div className="mh"><h3>Raise a proforma invoice</h3><p>A quote to a customer — an offer, not a sale</p></div>
+      <div className="mb">
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label>Customer</label>
+            <select className="field" style={{ width: "100%" }} value={custId} onChange={(e) => setCustId(e.target.value)}>
+              <option value="">Select an organisation…</option>
+              {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              <option value="__new">+ New (not yet in CRM)</option>
+            </select>
+          </div>
+          <div style={{ width: 160 }}><PickField label="Raised by" value={owner} onChange={setOwner} options={owners} /></div>
+        </div>
+        {custId === "__new" && (
+          <div><label>New customer name</label><input className="field" placeholder="e.g. Nairobi private school" value={custNew} onChange={(e) => setCustNew(e.target.value)} /></div>
+        )}
+
+        <label style={{ marginTop: 4 }}>Line items</label>
+        {lines.map((l, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, marginBottom: 7, alignItems: "center" }}>
+            <input className="field" style={{ flex: 1 }} placeholder="Item or service" value={l.d} onChange={(e) => setLine(i, "d", e.target.value)} />
+            <input className="field" style={{ width: 66 }} type="number" min="1" title="Qty" value={l.q || ""} onChange={(e) => setLine(i, "q", e.target.value)} />
+            <input className="field" style={{ width: 116 }} type="number" min="0" placeholder="Unit KES" title="Unit price" value={l.p || ""} onChange={(e) => setLine(i, "p", e.target.value)} />
+            <div className="mono" style={{ width: 104, textAlign: "right", fontSize: 12.5 }}>{l.q && l.p ? kes(l.q * l.p) : "—"}</div>
+            {lines.length > 1
+              ? <button className="btn sm" style={{ padding: "4px 9px" }} title="Remove line" onClick={() => delLine(i)}>×</button>
+              : <span style={{ width: 30 }} />}
+          </div>
+        ))}
+        <div><a role="button" tabIndex={0} onClick={addLine} onKeyDown={(e) => { if (e.key === "Enter") addLine(); }} style={{ color: "var(--flame)", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>+ Add line</a></div>
+
+        <div className="reqbox" style={{ background: "#F6F7F9", borderColor: "transparent", marginTop: 12 }}>
+          <div className="recon" style={{ padding: "3px 0" }}><span>Subtotal</span><span className="mono">{kes(subtotal)}</span></div>
+          <div className="recon" style={{ padding: "3px 0" }}><span>VAT (16%) <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>— charged only on the tax invoice</span></span><span className="mono">{kes(vat)}</span></div>
+          <div className="recon" style={{ padding: "3px 0", fontWeight: 600 }}><span>Total if accepted</span><span className="mono">{kes(subtotal + vat)}</span></div>
+        </div>
+
+        <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+          <div style={{ flex: 1 }}>
+            <label>Payment terms</label>
+            <select className="field" style={{ width: "100%" }} value={terms} onChange={(e) => setTerms(e.target.value)}>
+              <option>50% deposit, balance on delivery</option><option>100% on delivery</option><option>30 days from invoice</option><option>On milestone completion</option><option>Per LPO terms</option>
+            </select>
+          </div>
+          <div style={{ width: 140 }}><label>Lead time</label><input className="field" style={{ width: "100%" }} placeholder="e.g. 3 weeks" value={lead} onChange={(e) => setLead(e.target.value)} /></div>
+          <div style={{ width: 160 }}><label>Valid to</label><input className="field" type="date" style={{ width: "100%" }} value={validTo} onChange={(e) => setValidTo(e.target.value)} /></div>
+        </div>
+        <div><label>Notes <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" placeholder="Anything the customer's finance office needs to know" value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+
+        <div className="reqbox" style={{ background: "var(--flame-soft)", color: "#0c6f82", borderColor: "transparent" }}>
+          <div className="rl">What this is</div>
+          A proforma is a priced offer. It does not post to the ledger and carries no VAT liability until the customer accepts and it converts to a tax invoice. The valid-to date is when it expires on its own if there's no response.
+        </div>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeProforma}>Cancel</button>
+        <button className="btn primary" onClick={submit}>Issue proforma</button>
       </div>
     </ModalShell>
   );

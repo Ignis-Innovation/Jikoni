@@ -510,6 +510,130 @@ export function ProjectDrawer() {
   );
 }
 
+/* ================= PROFORMA RECORD ================= */
+export function ProformaDrawer() {
+  const { pfRecRef, closeProformaRec, proformas, acceptProforma, declineProforma, level } = useApp();
+  const canEdit = level("finance") >= 2;
+  const p = pfRecRef ? proformas.find((x) => x.ref === pfRecRef) : null;
+  const [showDecline, setShowDecline] = useState(false);
+  const [reason, setReason] = useState("");
+  useEffect(() => { setShowDecline(false); setReason(""); }, [pfRecRef]);
+
+  const kesFmt = (n: number) => "KES " + Math.round(n).toLocaleString();
+  const subtotal = p?.subtotal ?? 0;
+  const vat = Math.round(subtotal * 0.16);
+  const daysLeft = p?.validRaw ? Math.round((new Date(p.validRaw).getTime() - Date.now()) / 864e5) : null;
+  const issuedLive = p?.state === "issued";
+  const lapsed = issuedLive && daysLeft != null && daysLeft < 0;
+
+  const rules =
+    p?.state === "accepted"
+      ? `Accepted and converted to tax invoice ${p.invoiceRef ?? ""}. That invoice is now the revenue and the receivable — it was reported to eTIMS and is being aged and chased until the receipt lands. Acceptance is not cash; the money is real only at the receipt.`
+      : p?.state === "declined"
+      ? "Declined by the customer. Nothing posted to the ledger — a proforma is never revenue. The reason is kept so the pattern of why quotes are lost is visible."
+      : p?.state === "expired" || lapsed
+      ? "The validity period lapsed with no response. Nothing posted. It can be re-issued as a fresh proforma if the customer comes back."
+      : "While issued, this is an offer only. Nothing has posted to the ledger and no VAT is due. Accepting it converts it to a tax invoice, reports that invoice to eTIMS, and creates a receivable that is then chased to collection. If the customer declines, record why — that feeds the conversion rate. If neither happens by the valid-to date, it expires on its own.";
+
+  return (
+    <DrawerShell
+      open={!!p}
+      onClose={closeProformaRec}
+      width={540}
+      header={
+        <div className="dt">
+          <div className="av-sm" style={{ width: 38, height: 38, fontSize: 15, background: "#12A3BE" }}>{p?.customer?.[0] ?? "—"}</div>
+          <div>
+            <h3>{p?.customer || "—"}</h3>
+            <div className="sub">{p ? `${p.ref} · raised by ${p.owner || "—"}` : "—"}</div>
+          </div>
+        </div>
+      }
+      footer={
+        p && issuedLive && canEdit ? (
+          <>
+            <button className="btn" onClick={() => setShowDecline((s) => !s)}>Record decline</button>
+            <button className="btn primary" onClick={() => acceptProforma(p.ref)}>Accept → tax invoice</button>
+          </>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", alignSelf: "center" }}>
+            {p?.state === "accepted" ? `Converted to ${p.invoiceRef ?? "tax invoice"}` : p ? (lapsed ? "Lapsed" : p.statusTxt) : "—"}
+          </div>
+        )
+      }
+    >
+      {p && (
+        <>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+            <span className={`pill ${lapsed ? "week" : p.statusCls}`}>{lapsed ? "Lapsed" : p.statusTxt}</span>
+            <span className="pill done">{kesFmt(subtotal)}</span>
+          </div>
+
+          <div className="panel" style={{ marginBottom: 14 }}>
+            <div className="panel-h"><h3>Proforma</h3><span className="meta">the offer</span></div>
+            <div className="recon"><span>Proforma no.</span><span className="mono">{p.ref}</span></div>
+            <div className="recon"><span>Customer</span><span>{p.customer}</span></div>
+            <div className="recon"><span>Raised by</span><span>{p.owner || "—"}</span></div>
+            <div className="recon"><span>Issued</span><span className="mono">{p.issued}</span></div>
+            {p.terms && <div className="recon"><span>Payment terms</span><span>{p.terms}</span></div>}
+            {p.lead && <div className="recon"><span>Lead time</span><span>{p.lead}</span></div>}
+            {p.notes && <div className="recon"><span>Notes</span><span style={{ textAlign: "right", maxWidth: 300 }}>{p.notes}</span></div>}
+            <div className="recon"><span>Currency</span><span>{p.currency}</span></div>
+          </div>
+
+          <div className="panel" style={{ marginBottom: 14 }}>
+            <div className="panel-h"><h3>Status &amp; validity</h3><span className="meta">where it stands</span></div>
+            <div className="recon"><span>Status</span><span className={`pill ${lapsed ? "week" : p.statusCls}`}>{lapsed ? "Lapsed" : p.statusTxt}</span></div>
+            <div className="recon"><span>Valid to</span><span className="mono">{p.validTo}{issuedLive && daysLeft != null && daysLeft >= 0 ? ` · ${daysLeft}d left` : ""}</span></div>
+            {p.state === "accepted" && <div className="recon"><span>Tax invoice</span><span className="mono" style={{ color: "var(--green)" }}>{p.invoiceRef} · issued</span></div>}
+            {p.state === "declined" && <div className="recon"><span>Decline reason</span><span style={{ color: "var(--red)", textAlign: "right", maxWidth: 300 }}>{p.declineReason || "—"}</span></div>}
+          </div>
+
+          <div className="panel" style={{ marginBottom: 14 }}>
+            <div className="panel-h"><h3>Line items</h3><span className="meta">what is being quoted</span></div>
+            <table className="tbl">
+              <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th style={{ textAlign: "right" }}>Line total</th></tr></thead>
+              <tbody>
+                {p.lines.map((l, i) => (
+                  <tr key={i}>
+                    <td>{l.d}</td>
+                    <td className="mono">{l.q}</td>
+                    <td className="mono">{kesFmt(l.p)}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{kesFmt(l.q * l.p)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ borderTop: "1px solid var(--hairline)" }}>
+              <div className="recon"><span>Subtotal</span><span className="mono">{kesFmt(subtotal)}</span></div>
+              <div className="recon"><span>VAT (16%) <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>— applies only on the tax invoice</span></span><span className="mono">{kesFmt(vat)}</span></div>
+              <div className="recon" style={{ fontWeight: 600 }}><span>Total if accepted</span><span className="mono">{kesFmt(subtotal + vat)}</span></div>
+            </div>
+          </div>
+
+          {showDecline && issuedLive && canEdit && (
+            <div className="panel" style={{ marginBottom: 14 }}>
+              <div className="panel-h"><h3>Record decline</h3><span className="meta">kept for conversion analysis</span></div>
+              <div className="pad">
+                <input className="field" placeholder="Why was it declined? e.g. Chose a lower-cost LPG option" value={reason} onChange={(e) => setReason(e.target.value)} />
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button className="btn" onClick={() => { setShowDecline(false); setReason(""); }}>Cancel</button>
+                  <button className="btn primary" onClick={() => declineProforma(p.ref, reason)}>Confirm decline</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="panel">
+            <div className="panel-h"><h3>What happens on a decision</h3><span className="meta">the rules</span></div>
+            <div style={{ padding: "15px 18px", fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.65 }}>{rules}</div>
+          </div>
+        </>
+      )}
+    </DrawerShell>
+  );
+}
+
 /* ================= ACCESS ================= */
 export function AccessDrawer() {
   const { accessEmail, closeAccess, perms, saveAccess, toast, members } = useApp();
