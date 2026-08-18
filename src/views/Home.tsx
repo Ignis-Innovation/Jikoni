@@ -16,6 +16,31 @@ function timeAgo(iso: string): string {
   const d = Math.round(h / 24); return d + "d ago";
 }
 
+// Map an audit action's domain (the bit before the dot) to a friendly module + the
+// view to open on click. Used by the admin "Recent activity" feed.
+const ACT_DOMAIN: Record<string, { label: string; view: string }> = {
+  engagement: { label: "Partnerships CRM", view: "crm" }, crm: { label: "Partnerships CRM", view: "crm" },
+  partner: { label: "Partnerships CRM", view: "crm" }, opportunity: { label: "Partnerships CRM", view: "crm" },
+  contract: { label: "Compliance & Governance", view: "compliance" }, risk: { label: "Compliance & Governance", view: "compliance" },
+  policy: { label: "Compliance & Governance", view: "compliance" }, company_document: { label: "Compliance & Governance", view: "compliance" },
+  compliance: { label: "Compliance & Governance", view: "compliance" },
+  proforma: { label: "Finance", view: "finance" }, sales: { label: "Finance", view: "finance" },
+  invoice: { label: "Finance", view: "finance" }, payment: { label: "Finance", view: "finance" },
+  journal: { label: "Finance", view: "finance" }, coding: { label: "Finance", view: "finance" }, depreciation: { label: "Finance", view: "finance" },
+  project: { label: "Projects & Programmes", view: "projects" }, milestone: { label: "Projects & Programmes", view: "projects" },
+  hr: { label: "Human Resources", view: "hr" },
+  requisition: { label: "Procurement", view: "procurement" }, po: { label: "Procurement", view: "procurement" },
+  grn: { label: "Procurement", view: "procurement" }, vendor: { label: "Procurement", view: "procurement" },
+  dispatch: { label: "Inventory & Assets", view: "inventory" }, asset: { label: "Inventory & Assets", view: "inventory" },
+  stock: { label: "Inventory & Assets", view: "inventory" }, item: { label: "Inventory & Assets", view: "inventory" },
+  access: { label: "User Management", view: "users" }, config: { label: "Settings", view: "settings" },
+};
+// Turn "engagement.created" → "created engagement" (readable, module shown separately).
+function prettyAction(action: string): string {
+  const verb = action.split(".").slice(1).join(" ").replace(/_/g, " ").trim();
+  return verb || action.replace(/_/g, " ");
+}
+
 // One My Week row — click to expand its mini-tasks (checkboxes, add, mark done).
 function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
   const { toggleSubtask, addSubtask, setTaskDone } = useApp();
@@ -87,8 +112,8 @@ function Quick({ label, onClick }: { label: string; onClick: () => void }) {
 export default function HomeView() {
   const {
     toast, myWeek, taskFilter, setTaskFilter, openTask, me,
-    projectDetails, apInvoices, notifications, markNotificationsSeen, perms, go, goTab,
-    hrMode, setHrMode, isHrToggleUser,
+    projectDetails, apInvoices, perms, go, goTab,
+    hrMode, setHrMode, isHrToggleUser, audit, members,
   } = useApp();
   const mine = taskFilter === "mine";
   const list = mine ? myWeek.filter((t) => t.ownerEmail === me?.email) : myWeek;
@@ -114,7 +139,16 @@ export default function HomeView() {
     { k: "Needs attention", tick: attention.length ? "t-ember" : "t-green", v: String(attention.length), d: "items in total", dc: "flat" },
   ];
 
-  const recent = notifications.slice(0, 6);
+  // Recent activity is an oversight feed for the people who watch the business: only a
+  // Super Admin (users:3) or Sub Admin sees it. It's sourced from the audit log (every
+  // module edit — CRM, Compliance, Finance, …) with petty cash excluded, since those are
+  // private to whoever raised them and show only in that person's Staff Portal.
+  const isSuper = (perms[me?.email ?? ""]?.users ?? 0) >= 3;
+  const canSeeActivity = isSuper || isHrToggleUser;
+  const actorName = (email: string) => members.find((m) => m.email === email)?.name ?? (email ? email.split("@")[0] : "System");
+  const activity = canSeeActivity
+    ? audit.filter((a) => a.action && !a.action.startsWith("petty_cash")).slice(0, 8)
+    : [];
 
   return (
     <>
@@ -197,27 +231,35 @@ export default function HomeView() {
         </div>
       </div>
 
-      <div className="grid g-2" style={{ marginTop: 18 }}>
+      <div className={canSeeActivity ? "grid g-2" : ""} style={{ marginTop: 18 }}>
+        {canSeeActivity && (
         <div className="panel">
           <div className="panel-h">
             <h3><span className="glyph blue"><BellI /></span> Recent activity</h3>
             <span className="meta">across the business</span>
           </div>
           <div>
-            {recent.length ? recent.map((n) => (
-              <div className="task" key={n.id} style={{ cursor: n.linkView ? "pointer" : "default", opacity: n.seen ? 0.7 : 1 }}
-                onClick={() => { markNotificationsSeen([n.id]); if (n.linkView) go(n.linkView); }}>
-                <span className="txt" style={{ paddingLeft: 4 }}>{n.title}{n.body ? <small>{n.body}</small> : null}</span>
-                <span className="meta" style={{ whiteSpace: "nowrap" }}>{timeAgo(n.createdAt)}</span>
-              </div>
-            )) : (
+            {activity.length ? activity.map((a) => {
+              const dom = ACT_DOMAIN[(a.action.split(".")[0] || "")];
+              return (
+                <div className="task" key={a.id} style={{ cursor: dom ? "pointer" : "default" }}
+                  onClick={() => { if (dom) go(dom.view); }}>
+                  <span className="txt" style={{ paddingLeft: 4 }}>
+                    {actorName(a.actor)} <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>{prettyAction(a.action)}</span>
+                    <small>{dom?.label ?? "Activity"}{a.recordRef ? ` · ${a.recordRef}` : ""}</small>
+                  </span>
+                  <span className="meta" style={{ whiteSpace: "nowrap" }}>{timeAgo(a.when)}</span>
+                </div>
+              );
+            }) : (
               <div className="empty" style={{ padding: "34px 20px" }}>
                 <div className="e-t">Nothing recent</div>
-                <div style={{ fontSize: 12, marginTop: 4 }}>Assignments, approvals and partner updates will surface here.</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Edits across CRM, Compliance, Finance and other modules will surface here.</div>
               </div>
             )}
           </div>
         </div>
+        )}
 
         <div className="panel">
           <div className="panel-h"><h3>Quick links</h3><span className="meta">jump straight in</span></div>
