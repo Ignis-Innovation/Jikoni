@@ -1,6 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { useApp, Req, PORow, ApInvoice, Grn } from "../store";
 import { Pulse, Note, ViewOnly } from "../components/ui";
+import { ModalShell } from "../components/modals";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 
@@ -69,6 +70,9 @@ export default function ProcurementView() {
   // supplier contracts come from the shared contracts registry (kind = vendor)
   const supplierContracts = (compliance?.contracts ?? []).filter((c) => c.kind === "vendor");
   const pendingBankChanges = bankChanges.filter((b) => b.state === "pending");
+  // Bank-change callback verification — replaces window.prompt with a real popup.
+  const [verifyFor, setVerifyFor] = useState<{ id: string; vendor: string } | null>(null);
+  const [verifyNote, setVerifyNote] = useState("");
 
   const openPOs = poRows.filter((p) => p.state === "open" || p.state === "partially_received");
   const receivablePOs = openPOs;                                   // can still take a GRN
@@ -189,7 +193,7 @@ export default function ProcurementView() {
                       <td style={{ textAlign: "right" }}>
                         {canFull
                           ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }}
-                              onClick={() => { const note = window.prompt(`Confirm you called ${b.vendor} on the number ON FILE and verified this change. Who did you speak to?`); if (note && note.trim()) approveBankChange(b.id, note.trim()); }}>
+                              onClick={() => { setVerifyNote(""); setVerifyFor({ id: b.id, vendor: b.vendor }); }}>
                               Verify by callback
                             </button>
                           : <span className="pill today">Pending verify</span>}
@@ -333,6 +337,28 @@ export default function ProcurementView() {
           </div>
         </div>
       )}
+
+      <ModalShell open={!!verifyFor} onClose={() => setVerifyFor(null)} width={480}>
+        {verifyFor && (
+          <>
+            <div className="mh">
+              <h3>Verify bank change by callback</h3>
+              <p>Confirm you called <strong>{verifyFor.vendor}</strong> on the number <strong>on file</strong> — not the one in the request — and verified this change.</p>
+            </div>
+            <div className="mb">
+              <div>
+                <label>Who did you speak to?</label>
+                <input className="field" autoFocus placeholder="e.g. Jane Otieno, Finance Officer" value={verifyNote} onChange={(e) => setVerifyNote(e.target.value)} />
+              </div>
+              <Note>The requester cannot verify their own change. The old details stay in use until this is confirmed.</Note>
+            </div>
+            <div className="mf">
+              <button className="btn" onClick={() => setVerifyFor(null)}>Cancel</button>
+              <button className="btn primary" disabled={!verifyNote.trim()} onClick={() => { approveBankChange(verifyFor.id, verifyNote.trim()); setVerifyFor(null); }}>Confirm verification</button>
+            </div>
+          </>
+        )}
+      </ModalShell>
     </>
   );
 }

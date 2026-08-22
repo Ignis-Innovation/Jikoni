@@ -1,5 +1,6 @@
 import { useApp } from "../store";
 import { Pulse, Note, ViewOnly } from "../components/ui";
+import { ModalShell } from "../components/modals";
 import { StaticBars, Donut, ChartLegend, GroupedBars } from "../components/charts";
 import { useUsdKesRate } from "../lib/fx";
 import { useState } from "react";
@@ -46,6 +47,8 @@ export default function ProjectsView() {
   const canFull = projLvl >= 3;   // delete a project (destructive, can't be undone)
   const tab = tabs.projects;
 
+  // Which project is pending delete — drives the confirm popup (no browser confirm()).
+  const [deleteFor, setDeleteFor] = useState<string | null>(null);
   // Overview currency toggle: money is stored in KES; USD view converts at the live rate.
   const [view, setView] = useState<"KES" | "USD">("KES");
   const rate = useUsdKesRate();
@@ -277,7 +280,7 @@ export default function ProjectsView() {
                         <div style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", whiteSpace: "nowrap" }}>
                           <button className="btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => openProjectEdit(p.name)}>Edit</button>
                           {canFull && <button className="btn" style={{ padding: "5px 12px", fontSize: 12, color: "var(--red)" }}
-                            onClick={() => { if (confirm(`Delete "${p.name}"? This removes its milestones, drawdowns and field activity. This can't be undone.`)) deleteProject(p.name); }}>Delete</button>}
+                            onClick={() => setDeleteFor(p.name)}>Delete</button>}
                         </div>
                       )}
                     </td>
@@ -397,6 +400,24 @@ export default function ProjectsView() {
           </div>
         </div>
       )}
+
+      <ModalShell open={!!deleteFor} onClose={() => setDeleteFor(null)} width={440}>
+        {deleteFor && (
+          <>
+            <div className="mh">
+              <h3>Delete project?</h3>
+              <p>You're about to delete <strong>{deleteFor}</strong>.</p>
+            </div>
+            <div className="mb">
+              <Note noBorder>This removes its milestones, drawdowns and field activity. This can't be undone.</Note>
+            </div>
+            <div className="mf">
+              <button className="btn" onClick={() => setDeleteFor(null)}>Cancel</button>
+              <button className="btn" style={{ color: "var(--red)" }} onClick={() => { deleteProject(deleteFor); setDeleteFor(null); }}>Delete project</button>
+            </div>
+          </>
+        )}
+      </ModalShell>
     </>
   );
 }

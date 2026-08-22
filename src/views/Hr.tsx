@@ -10,6 +10,30 @@ import { Crumb } from "../nav";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtD = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 const fmtPeriod = (p: string) => { const [y, m] = p.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" }); };
+
+// Weekly reports → Excel (HTML .xls so we can colour-code each employee's rows).
+// Columns kept lean per request: Employee, Email, What they did, Blockers, Next week's plan, Status.
+const REPORT_COLOURS = ["#FDE7E9", "#E7F0FD", "#E9F7EF", "#FEF5E7", "#F4ECF7", "#E8F8F5", "#FDEBD0", "#EBF5FB", "#F9EBEA", "#EAF2F8"];
+function exportWeeklyReports(reports: WeeklyReport[], toast: (t: string, s?: string) => void) {
+  if (!reports.length) { toast("Nothing to export", "There are no weekly reports yet"); return; }
+  const esc = (v: unknown) => (v == null ? "" : String(v)).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const ml = (v: unknown) => esc(v).replace(/\r?\n/g, "<br>");
+  // a stable colour per distinct employee
+  const authors = Array.from(new Set(reports.map((r) => r.author))).sort();
+  const colourOf = (a: string) => REPORT_COLOURS[authors.indexOf(a) % REPORT_COLOURS.length];
+  const head = ["Employee", "Email", "What they did", "Blockers", "Next week's plan", "Status"];
+  const th = head.map((h) => `<th style="padding:6px 10px;border:1px solid #ccc;text-align:left">${esc(h)}</th>`).join("");
+  const body = reports.map((r) => {
+    const cells = [esc(r.author), esc(r.authorEmail), ml(r.did), ml(r.blockers || ""), ml(r.nextWeek || ""), r.state === "acknowledged" ? "Acknowledged" : "Submitted"];
+    return `<tr style="background:${colourOf(r.author)}">${cells.map((c) => `<td style="padding:6px 10px;border:1px solid #ddd;vertical-align:top">${c}</td>`).join("")}</tr>`;
+  }).join("");
+  const html = `<html><head><meta charset="utf-8"></head><body><table border="1" style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:12px"><tr style="background:#2c3e50;color:#fff;font-weight:bold">${th}</tr>${body}</table></body></html>`;
+  const url = URL.createObjectURL(new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = `weekly-reports-${new Date().toISOString().slice(0, 10)}.xls`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  toast("Weekly reports exported", `${reports.length} row${reports.length === 1 ? "" : "s"} — colour-coded by employee, opens in Excel`);
+}
 const contractLabel = (v: string) => contractTypes.find((c) => c.value === v)?.label ?? v;
 const PALETTE = ["#E2632A", "#12A3BE", "#3C8A5E", "#6D28D9", "#0e7d91", "#A16207", "#B91C1C", "#7C2D12"];
 const avColor = (s: { color: string | null; name: string }) => s.color || PALETTE[Math.abs([...s.name].reduce((a, c) => a + c.charCodeAt(0), 0)) % PALETTE.length];
@@ -866,7 +890,7 @@ function StaffProfileModal() {
 
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, level } = useApp();
+  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, uploadedFileUrl, level } = useApp();
   const tab = tabs.hr;
   // HR access: View (1) is read-only; Edit (2) can add/edit staff, upload docs,
   // record leave, prepare payroll, review weekly reports; Full (3) can approve —
@@ -1496,10 +1520,18 @@ export default function HrView() {
       {tab === "h-reports" && (
         <div className="hr-panel active">
           <div className="panel">
-            <div className="panel-h"><h3>Weekly reports</h3><span className="meta">{unreviewed.length} awaiting review · week of {fmtD(thisMonday)}</span></div>
+            <div className="panel-h">
+              <h3>Weekly reports</h3>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
+                <span className="meta">{reportsSorted.length} report{reportsSorted.length === 1 ? "" : "s"} · {unreviewed.length} awaiting review</span>
+                {canViewReports && reportsSorted.length > 0 && (
+                  <button className="btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => exportWeeklyReports(reportsSorted, toast)}>Download Excel</button>
+                )}
+              </span>
+            </div>
             {reportsSorted.length ? (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Employee</th><th>Week of</th><th>What they did</th><th>Blockers</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Ref</th><th>Employee</th><th>Week of</th><th>What they did</th><th>Blockers</th><th>Attachment</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {reportsSorted.map((r) => (
                     <tr key={r.id}>
@@ -1508,6 +1540,7 @@ export default function HrView() {
                       <td className="mono">{fmtD(r.weekStart)}</td>
                       <td style={{ maxWidth: 300, fontSize: 12.5, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.did}</td>
                       <td style={{ fontSize: 12.5, color: r.blockers ? "var(--ember)" : "var(--ink-soft)" }}>{r.blockers ? "⚑ yes" : "—"}</td>
+                      <td>{r.attachmentPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(r.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>View</a> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
                       <td><span className={`pill ${r.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }} title={r.reviewedBy ? `by ${r.reviewedBy}` : ""}>{r.state === "acknowledged" ? "Acknowledged" : "New"}</span></td>
                       <td>
                         <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1522,7 +1555,7 @@ export default function HrView() {
                 </tbody>
               </table>
             ) : (
-              <Note noBorder>Nothing yet — reports from the Staff Portal land here. Staff are reminded every Friday if they haven't submitted.</Note>
+              <Note noBorder>Nothing yet — reports from the Staff Portal land here. Staff are reminded every Thursday if they haven't submitted.</Note>
             )}
           </div>
           <div className="panel sm" style={{ marginTop: 14 }}>
@@ -1761,6 +1794,7 @@ export default function HrView() {
               <div><label>What they did</label><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", padding: "4px 0" }}>{reportView.did}</div></div>
               <div><label>Blockers</label><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", padding: "4px 0", color: reportView.blockers ? "var(--ember)" : "var(--ink-soft)" }}>{reportView.blockers || "None reported"}</div></div>
               <div><label>Next week's plan</label><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", padding: "4px 0", color: reportView.nextWeek ? undefined : "var(--ink-soft)" }}>{reportView.nextWeek || "—"}</div></div>
+              <div><label>Attachment</label><div style={{ fontSize: 13.5, padding: "4px 0" }}>{reportView.attachmentPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(reportView.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>View attached file</a> : <span style={{ color: "var(--ink-soft)" }}>None</span>}</div></div>
             </div>
             <div className="mf">
               <button className="btn" onClick={() => setReportView(null)}>Close</button>

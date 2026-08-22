@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useApp, type PettyRequest } from "../store";
 import { Pulse, Note, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
@@ -87,7 +87,8 @@ const apPill: Record<string, { cls: string; txt: string }> = {
 
 export default function FinanceView() {
   const { tabs, toast, accounts, journals, apInvoices, approveInvoice, payInvoice, openCaptureInvoice, poRows, markInvoicePaid,
-    pettyRequests, decidePettyRequest, canDecidePetty, openInvoice, createCostCentre, me, perms, level } = useApp();
+    pettyRequests, decidePettyRequest, canDecidePetty, attachPettyInvoice, removePettyInvoice, uploadedFileUrl,
+    openInvoice, createCostCentre, me, perms, level } = useApp();
   const tab = tabs.finance;
   const [costOpen, setCostOpen] = useState(false);
   // Finance access: View (1) is read-only; Edit (2) can raise/capture; Full (3) can
@@ -114,11 +115,23 @@ export default function FinanceView() {
   const pettyWaitLabel = (r: PettyRequest) => `Awaiting ${pettyRouteLabel(r)}`;
 
   const pettyPending = pettyRequests.filter((r) => r.state === "pending");
-  const pettyDecided = pettyRequests.filter((r) => r.state === "approved" || r.state === "rejected");
   const pettyPendingTotal = pettyPending.reduce((s, r) => s + r.amount, 0);
   const fmtDate = (iso: string | null) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
   // which petty-cash request is being approved/rejected — drives the popup (no browser prompts)
   const [pettyDecide, setPettyDecide] = useState<{ req: PettyRequest; approve: boolean } | null>(null);
+  // attaching an invoice to an approved petty-cash request (one hidden input, target ref tracked)
+  const invoiceInput = useRef<HTMLInputElement>(null);
+  const [attachTarget, setAttachTarget] = useState<string | null>(null);
+  const pickInvoice = (ref: string) => { setAttachTarget(ref); invoiceInput.current?.click(); };
+  const onInvoicePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (f && attachTarget) attachPettyInvoice(attachTarget, f);
+    setAttachTarget(null);
+  };
+  const pettyStatePill: Record<string, { cls: string; txt: string }> = {
+    pending: { cls: "today", txt: "Pending" }, approved: { cls: "done", txt: "Approved" },
+    rejected: { cls: "over", txt: "Rejected" }, cancelled: { cls: "week", txt: "Withdrawn" },
+  };
 
   const bal = (code: string) => accounts.find((a) => a.code === code)?.balance ?? 0;
   const sumKind = (k: string) => accounts.filter((a) => a.kind === k).reduce((s, a) => s + a.balance, 0);
@@ -374,22 +387,45 @@ export default function FinanceView() {
                 <div className="recon"><span>Awaiting approval</span><span className="mono">{pettyPending.length}</span></div>
                 <div className="recon"><span>Value pending</span><span className="mono">{kes(pettyPendingTotal)}</span></div>
                 <div className="recon"><span>Approved to date</span><span className="mono">{kes(pettyRequests.filter((r) => r.state === "approved").reduce((s, r) => s + r.amount, 0))}</span></div>
+                <div className="recon"><span>Invoices attached</span><span className="mono">{pettyRequests.filter((r) => r.invoicePath).length}</span></div>
               </div>
-              <div className="panel-h" style={{ borderTop: "1px solid var(--line)" }}><h3>Recent decisions</h3><span className="meta">last {Math.min(pettyDecided.length, 8)}</span></div>
-              {pettyDecided.length === 0 ? <EmptyBody>No decisions yet.</EmptyBody> : (
-                <div>
-                  {pettyDecided.slice(0, 8).map((r) => (
-                    <div className="task" key={r.id}>
-                      <span className="id" style={{ color: r.state === "approved" ? "var(--green)" : "var(--red)" }}>{r.id}</span>
-                      <span className="txt">{r.item} — {kes(r.amount)}<small>{r.requester}{r.decidedBy ? ` · by ${r.decidedBy}` : ""}{r.note ? ` · ${r.note}` : ""}</small></span>
-                      <span className={`pill ${r.state === "approved" ? "done" : "over"}`}>{r.state === "approved" ? "Approved" : "Rejected"}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
-          <Note>Floats and vouchers (drawing down an approved amount, then reconciling receipts) build on this queue in a later increment.</Note>
+
+          {/* Full history — every request, with invoice attach/view/delete on approved rows */}
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>Petty-cash history</h3><span className="meta">{pettyRequests.length} request{pettyRequests.length === 1 ? "" : "s"} · all statuses</span></div>
+            {pettyRequests.length === 0 ? <EmptyBody>No petty-cash requests yet.</EmptyBody> : (
+              <table className="tbl">
+                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Status</th><th>Invoice</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {pettyRequests.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono">{r.id}</td>
+                      <td>{r.requester}</td>
+                      <td>{r.item}</td>
+                      <td className="mono">{kes(r.amount)}</td>
+                      <td><span className={`pill ${pettyStatePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.decidedBy ? `${r.decidedBy}${r.note ? " · " + r.note : ""}` : ""}>{pettyStatePill[r.state]?.txt || r.state}</span></td>
+                      <td>
+                        {r.invoicePath
+                          ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(r.invoicePath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>Invoice attached · View</a>
+                          : <span style={{ color: "var(--ink-soft)" }}>—</span>}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {r.state === "approved" && canDecidePetty ? (
+                          r.invoicePath
+                            ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => removePettyInvoice(r.id, r.invoicePath!)}>Delete invoice</button>
+                            : <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => pickInvoice(r.id)}>Attach invoice</button>
+                        ) : <span className="meta">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <Note>Once a request is <strong>Approved</strong>, the requester or a Sub Admin can attach the invoice/receipt (any file or image). Floats and vouchers build on this queue in a later increment.</Note>
+          </div>
+          <input ref={invoiceInput} type="file" style={{ display: "none" }} onChange={onInvoicePick} />
         </div>
       )}
 

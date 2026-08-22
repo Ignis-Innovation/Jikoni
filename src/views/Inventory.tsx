@@ -2,7 +2,7 @@
 // existing design system: Pulse, panel/tbl/pill/rcv classes, ModalShell, Crumb.
 import { useEffect, useRef, useState } from "react";
 import { useApp, StockItem, DispatchRow, AssetRow } from "../store";
-import { Pulse, ViewOnly } from "../components/ui";
+import { Pulse, ViewOnly, Note } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { PlusI, ExportI, DocI, CheckI } from "../components/icons";
 import { kes, kenyaLocations, assetCategories } from "../data";
@@ -464,6 +464,9 @@ export default function InventoryView() {
   const [itemSearch, setItemSearch] = useState("");
   const [moveSearch, setMoveSearch] = useState("");
   const [assignFor, setAssignFor] = useState<AssetRow | null>(null);
+  // Which asset is pending disposal — drives the confirm popup (no window.prompt).
+  const [disposeFor, setDisposeFor] = useState<AssetRow | null>(null);
+  const [disposeReason, setDisposeReason] = useState("");
 
   const iq = itemSearch.trim().toLowerCase();
   const filteredItems = iq
@@ -685,7 +688,7 @@ export default function InventoryView() {
                         {a.state !== "disposed" && (canEdit
                           ? <>
                             <a href="#" onClick={(e) => { e.preventDefault(); setAssignFor(a); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12, marginRight: 12 }}>Assign</a>
-                            <a href="#" onClick={(e) => { e.preventDefault(); const reason = window.prompt(`Dispose ${a.name}? Optional reason:`, ""); if (reason !== null) disposeAsset(a.id, reason); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Dispose</a>
+                            <a href="#" onClick={(e) => { e.preventDefault(); setDisposeReason(""); setDisposeFor(a); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12 }}>Dispose</a>
                           </>
                           : <span className="pill week">view only</span>)}
                       </td>
@@ -719,6 +722,28 @@ export default function InventoryView() {
       <ItemModal />
       <AssetModal />
       <AssignAssetModal open={!!assignFor} asset={assignFor} onClose={() => setAssignFor(null)} />
+
+      <ModalShell open={!!disposeFor} onClose={() => setDisposeFor(null)} width={460}>
+        {disposeFor && (
+          <>
+            <div className="mh">
+              <h3>Dispose asset?</h3>
+              <p>Marking <strong>{disposeFor.name}</strong> ({disposeFor.id}) as disposed — it drops off the active register.</p>
+            </div>
+            <div className="mb">
+              <div>
+                <label>Reason <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+                <textarea className="field" rows={3} autoFocus placeholder="e.g. Beyond economic repair" value={disposeReason} onChange={(e) => setDisposeReason(e.target.value)} />
+              </div>
+              <Note>Disposed assets stay on record for audit but no longer count as active stock.</Note>
+            </div>
+            <div className="mf">
+              <button className="btn" onClick={() => setDisposeFor(null)}>Cancel</button>
+              <button className="btn" style={{ color: "var(--red)" }} onClick={() => { disposeAsset(disposeFor.id, disposeReason.trim()); setDisposeFor(null); }}>Dispose asset</button>
+            </div>
+          </>
+        )}
+      </ModalShell>
     </>
   );
 }

@@ -71,6 +71,7 @@ export interface PettyRequest {
   requester: string; requesterEmail: string; approverRole: string | null;
   superApprovedBy: string | null; hrApprovedBy: string | null;
   decidedBy: string | null; decidedAt: string | null; note: string | null; createdAt: string;
+  invoicePath: string | null;
 }
 
 export interface WeeklyReport {
@@ -78,6 +79,7 @@ export interface WeeklyReport {
   did: string; blockers: string | null; nextWeek: string | null;
   state: "submitted" | "acknowledged";
   reviewedBy: string | null; reviewedAt: string | null; createdAt: string;
+  attachmentPath: string | null;
 }
 
 /* ---------- HR module read model (staff / payroll / recruitment / field) ---------- */
@@ -379,6 +381,8 @@ interface AppApi {
   addStaffDocument: (file: File, name: string, category: string) => void;
   deleteStaffDocument: (path: string, name: string) => void;
   staffDocUrl: (path: string) => Promise<string | null>;
+  uploadFile: (prefix: string, file: File) => Promise<string | null>;
+  uploadedFileUrl: (path: string) => string;
   // Petty-cash requests (Staff Portal ↔ Finance Petty Cash)
   pettyRequests: PettyRequest[];
   pettyOpen: boolean;
@@ -391,6 +395,8 @@ interface AppApi {
   updatePettyRequest: (ref: string, v: { item: string; amount: number; needBy: string; reason: string }) => void;
   deletePettyRequest: (ref: string) => void;
   decidePettyRequest: (ref: string, approve: boolean, note?: string) => void;
+  attachPettyInvoice: (ref: string, file: File) => void;
+  removePettyInvoice: (ref: string, path: string) => void;
 
   // Weekly reports (Staff Portal ↔ HR Weekly Reports)
   weeklyReports: WeeklyReport[];
@@ -400,7 +406,7 @@ interface AppApi {
   openReport: () => void;
   openReportEdit: (r: WeeklyReport) => void;
   closeReport: () => void;
-  submitWeeklyReport: (v: { did: string; blockers: string; nextWeek: string }) => void;
+  submitWeeklyReport: (v: { did: string; blockers: string; nextWeek: string; attachment?: string | null }) => void;
   acknowledgeWeeklyReport: (ref: string) => void;
   hrLeaveQueue: HrLeaveReq[];
   hrBalances: HrBalanceRow[];
@@ -764,7 +770,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Petty Cash tab shows the queue. RLS returns all rows for authenticated.
     const { data: pcr } = await supabase
       .from("petty_cash_requests")
-      .select("ref, item, amount, need_by, reason, state, approver_role, decided_at, decision_note, created_at, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
+      .select("ref, item, amount, need_by, reason, state, approver_role, decided_at, decision_note, created_at, invoice_path, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
       .order("created_at", { ascending: false })
       .limit(200);
     setPettyRequests(((pcr ?? []) as any[]).map((r) => {
@@ -777,13 +783,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "", approverRole: r.approver_role ?? null,
         superApprovedBy: su?.name ?? null, hrApprovedBy: hr?.name ?? null, decidedBy: dc?.name ?? null,
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
+        invoicePath: r.invoice_path ?? null,
       } as PettyRequest;
     }));
     // Weekly reports — the Staff Portal shows the caller's own; HR / Super Admin see all
     // (RLS scopes the rows).
     const { data: wr } = await supabase
       .from("weekly_reports")
-      .select("ref, week_start, did, blockers, next_week, state, reviewed_at, created_at, author:app_users!weekly_reports_author_id_fkey(name, email), reviewer:app_users!weekly_reports_reviewed_by_fkey(name)")
+      .select("ref, week_start, did, blockers, next_week, state, reviewed_at, created_at, attachment_path, author:app_users!weekly_reports_author_id_fkey(name, email), reviewer:app_users!weekly_reports_reviewed_by_fkey(name)")
       .order("week_start", { ascending: false })
       .limit(500);
     setWeeklyReports(((wr ?? []) as any[]).map((r) => {
@@ -793,6 +800,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         id: r.ref, ref: r.ref, author: a?.name ?? "—", authorEmail: a?.email ?? "",
         weekStart: r.week_start, did: r.did, blockers: r.blockers, nextWeek: r.next_week, state: r.state,
         reviewedBy: rv?.name ?? null, reviewedAt: r.reviewed_at, createdAt: r.created_at,
+        attachmentPath: r.attachment_path ?? null,
       } as WeeklyReport;
     }));
     // Partner contact fields (contact_name/email/phone) aren't in bootstrap — fold them in by id.
@@ -1242,6 +1250,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const up = await supabase.storage.from("uploads").upload(path, file, { upsert: true, contentType: file.type || undefined });
     if (up.error) { toast("Upload failed", up.error.message); return null; }
     return up.data.path;
+  }
+  // Public URL for a file in the shared 'uploads' bucket (petty-cash invoices, weekly-report attachments).
+  function uploadedFileUrl(path: string): string {
+    return supabase.storage.from("uploads").getPublicUrl(path).data.publicUrl;
   }
 
   /* ---------- vendors (onboard → screen → award-ready) ---------- */
@@ -1700,6 +1712,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadFromDb();
     toast(`${ref} withdrawn`, "Removed from the approval queue");
   }
+  // Attach an invoice/receipt to an approved petty-cash request (requester or approver).
+  async function attachPettyInvoice(ref: string, file: File) {
+    const path = await uploadFile("petty-cash", file);
+    if (!path) return;
+    const { error } = await supabase.rpc("attach_petty_cash_invoice", { p_ref: ref, p_path: path });
+    if (error) { toast("Couldn't attach invoice", error.message); return; }
+    await loadFromDb();
+    toast(`${ref} — invoice attached`, `${file.name} is now on the request`);
+  }
+  // Remove the attached invoice (requester or approver); best-effort drop of the object too.
+  async function removePettyInvoice(ref: string, path: string) {
+    const { error } = await supabase.rpc("remove_petty_cash_invoice", { p_ref: ref });
+    if (error) { toast("Couldn't remove invoice", error.message); return; }
+    await supabase.storage.from("uploads").remove([path]);
+    await loadFromDb();
+    toast(`${ref} — invoice removed`, "The attachment was deleted");
+  }
   async function decidePettyRequest(ref: string, approve: boolean, note?: string) {
     const { data, error } = await supabase.rpc("decide_petty_cash_request", { p_ref: ref, p_approve: approve, p_note: note || null });
     if (error) { toast(approve ? "Approval failed" : "Rejection failed", error.message); return; }
@@ -1720,9 +1749,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- weekly reports (Staff Portal → HR Weekly Reports) ---------- */
-  async function submitWeeklyReport(v: { did: string; blockers: string; nextWeek: string }) {
+  async function submitWeeklyReport(v: { did: string; blockers: string; nextWeek: string; attachment?: string | null }) {
     const { data, error } = await supabase.rpc("submit_weekly_report", {
       p_did: v.did.trim(), p_blockers: v.blockers.trim() || null, p_next_week: v.nextWeek.trim() || null,
+      p_attachment: v.attachment || null,
     });
     if (error) { toast("Report not submitted", error.message); return; }
     setReportOpen(false); setReportEdit(null);
@@ -2402,6 +2432,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openPettyEdit: (r) => { setPettyEdit(r); setPettyOpen(true); },
     closePetty: () => { setPettyOpen(false); setPettyEdit(null); },
     submitPettyRequest, updatePettyRequest, deletePettyRequest, decidePettyRequest,
+    attachPettyInvoice, removePettyInvoice, uploadFile, uploadedFileUrl,
     weeklyReports, reportOpen, reportEdit,
     canViewReports: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 1,
     openReport: () => { setReportEdit(null); setReportOpen(true); },

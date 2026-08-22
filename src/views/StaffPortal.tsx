@@ -137,21 +137,32 @@ function PettyCashModal() {
 
 // Submit or edit this week's report — routes to HR's Weekly Reports queue.
 function WeeklyReportModal() {
-  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, toast } = useApp();
+  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, uploadFile, uploadedFileUrl, toast } = useApp();
   const [did, setDid] = useState("");
   const [blockers, setBlockers] = useState("");
   const [nextWeek, setNextWeek] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [existing, setExisting] = useState<string | null>(null); // attachment already on the report
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (reportOpen) {
       setDid(reportEdit?.did ?? "");
       setBlockers(reportEdit?.blockers ?? "");
       setNextWeek(reportEdit?.nextWeek ?? "");
+      setFile(null);
+      setExisting(reportEdit?.attachmentPath ?? null);
     }
   }, [reportOpen, reportEdit]);
 
-  function save() {
+  async function save() {
     if (!did.trim()) { toast("What did you do?", "Tell HR what you worked on this week"); return; }
-    submitWeeklyReport({ did: did.trim(), blockers, nextWeek });
+    setSaving(true);
+    // new pick uploads; otherwise keep the existing attachment (or null if it was cleared)
+    let attachment: string | null = existing;
+    if (file) attachment = await uploadFile("weekly-reports", file);
+    await submitWeeklyReport({ did: did.trim(), blockers, nextWeek, attachment });
+    setSaving(false);
   }
 
   return (
@@ -164,11 +175,25 @@ function WeeklyReportModal() {
         <div><label>What I did this week</label><textarea className="field" rows={4} placeholder="Key things you worked on and finished…" value={did} onChange={(e) => setDid(e.target.value)} /></div>
         <div><label>Blockers <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="Anything slowing you down or that you need help with" value={blockers} onChange={(e) => setBlockers(e.target.value)} /></div>
         <div><label>Next week's plan <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="What you'll focus on next week" value={nextWeek} onChange={(e) => setNextWeek(e.target.value)} /></div>
-        <Note>You can resubmit anytime this week — it replaces the earlier version. HR sees the latest.</Note>
+        <div>
+          <label>Attachment <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button className="btn" style={{ padding: "6px 12px", fontSize: 12 }} onClick={() => fileRef.current?.click()}>Choose file</button>
+            {file ? (
+              <span style={{ fontSize: 12.5 }}>{file.name} <a href="#" onClick={(e) => { e.preventDefault(); setFile(null); }} style={{ color: "var(--red)", textDecoration: "none" }}>· remove</a></span>
+            ) : existing ? (
+              <span style={{ fontSize: 12.5 }}><a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(existing), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>current file</a> <a href="#" onClick={(e) => { e.preventDefault(); setExisting(null); }} style={{ color: "var(--red)", textDecoration: "none" }}>· remove</a></span>
+            ) : (
+              <span className="meta">any file or image</span>
+            )}
+          </div>
+          <input ref={fileRef} type="file" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) setFile(f); }} />
+        </div>
+        <Note>You can resubmit anytime this week — it replaces the earlier version, attachment included. HR sees the latest.</Note>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeReport}>Cancel</button>
-        <button className="btn primary" onClick={save}>{reportEdit ? "Save report" : "Submit report"}</button>
+        <button className="btn primary" onClick={save} disabled={saving}>{saving ? "Saving…" : reportEdit ? "Save report" : "Submit report"}</button>
       </div>
     </ModalShell>
   );
@@ -176,7 +201,7 @@ function WeeklyReportModal() {
 
 export default function StaffPortalView() {
   const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment, signMyExitStep, refreshHr,
-    pettyRequests, openPetty, openPettyEdit, deletePettyRequest,
+    pettyRequests, openPetty, openPettyEdit, deletePettyRequest, attachPettyInvoice, removePettyInvoice, uploadedFileUrl,
     weeklyReports, openReport, openReportEdit } = useApp();
   const tab = tabs.staffportal;
   // HR may have opened a cycle, signed off a review or cleared an exit area
@@ -198,6 +223,15 @@ export default function StaffPortalView() {
     setBusy(true);
     await addStaffDocument(f, f.name, docCat);
     setBusy(false);
+  }
+  // attach an invoice/receipt to one of my approved petty-cash requests
+  const invoiceRef = useRef<HTMLInputElement>(null);
+  const [invoiceTarget, setInvoiceTarget] = useState<string | null>(null);
+  const pickInvoice = (ref: string) => { setInvoiceTarget(ref); invoiceRef.current?.click(); };
+  function onInvoicePick(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (f && invoiceTarget) attachPettyInvoice(invoiceTarget, f);
+    setInvoiceTarget(null);
   }
 
   const balances = hrMe?.leave ?? [];
@@ -326,9 +360,10 @@ export default function StaffPortalView() {
             {thisWeekReport ? (
               <>
                 <div className="recon"><span>Status</span><span className={`pill ${thisWeekReport.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{thisWeekReport.state === "acknowledged" ? "Acknowledged by HR" : "Submitted"}</span></div>
-                <div style={{ padding: "10px 0", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>What I did</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.did}</div></div>
-                {thisWeekReport.blockers && <div style={{ padding: "10px 0", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Blockers</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.blockers}</div></div>}
-                {thisWeekReport.nextWeek && <div style={{ padding: "10px 0", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Next week's plan</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.nextWeek}</div></div>}
+                <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>What I did</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.did}</div></div>
+                {thisWeekReport.blockers && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Blockers</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.blockers}</div></div>}
+                {thisWeekReport.nextWeek && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Next week's plan</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.nextWeek}</div></div>}
+                {thisWeekReport.attachmentPath && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Attachment</div><a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(thisWeekReport.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 13.5 }}>View attached file</a></div>}
                 <Note>Submitted — thanks. You can <a href="#" onClick={(e) => { e.preventDefault(); openReportEdit(thisWeekReport); }} style={{ color: "var(--flame)", textDecoration: "none" }}>edit it</a> anytime this week; the latest version is what HR sees.</Note>
               </>
             ) : (
@@ -339,13 +374,14 @@ export default function StaffPortalView() {
             <div className="panel-h"><h3>My past reports</h3><span className="meta">{myReports.length} submitted</span></div>
             {myReports.length ? (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Week of</th><th>What I did</th><th>Status</th></tr></thead>
+                <thead><tr><th>Ref</th><th>Week of</th><th>What I did</th><th>Attachment</th><th>Status</th></tr></thead>
                 <tbody>
                   {myReports.map((r) => (
                     <tr key={r.id}>
                       <td className="mono">{r.ref}</td>
                       <td className="mono">{fmtD(r.weekStart)}</td>
                       <td style={{ maxWidth: 380, fontSize: 12.5, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.did}</td>
+                      <td>{r.attachmentPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(r.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>View</a> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
                       <td><span className={`pill ${r.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{r.state === "acknowledged" ? "Acknowledged" : "Submitted"}</span></td>
                     </tr>
                   ))}
@@ -434,6 +470,17 @@ export default function StaffPortalView() {
                             <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openPettyEdit(r)}>Edit</button>
                             <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deletePettyRequest(r.id)}>Withdraw</button>
                           </span>
+                        ) : r.state === "approved" ? (
+                          <span style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                            {r.invoicePath ? (
+                              <>
+                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => window.open(uploadedFileUrl(r.invoicePath!), "_blank", "noopener")}>View invoice</button>
+                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => removePettyInvoice(r.id, r.invoicePath!)}>Delete invoice</button>
+                              </>
+                            ) : (
+                              <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => pickInvoice(r.id)}>Attach invoice</button>
+                            )}
+                          </span>
                         ) : (
                           <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "rejected" && r.note ? r.note : "locked"}</span>
                         )}
@@ -445,8 +492,9 @@ export default function StaffPortalView() {
             ) : (
               <Note noBorder>No petty-cash requests yet — use “Request petty cash”. Give the item, amount, the date you need it and a reason; it routes to Finance / HR for approval.</Note>
             )}
-            <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once approved or rejected it locks, and the decision shows here{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
+            <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once <strong>Approved</strong>, attach the invoice/receipt (any file or image) — a Sub Admin can also attach it in Finance{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
           </div>
+          <input ref={invoiceRef} type="file" style={{ display: "none" }} onChange={onInvoicePick} />
         </div>
       )}
 
