@@ -3,7 +3,7 @@ import { useApp } from "../store";
 import { Note } from "../components/ui";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
-import { kes, contractTypes } from "../data";
+import { kes, contractTypes, REPORT_TRACKS, type ReportTrack } from "../data";
 import { Crumb } from "../nav";
 import { FeedbackModal, ExitSteps } from "./Hr";
 
@@ -136,11 +136,16 @@ function PettyCashModal() {
 }
 
 // Submit or edit this week's report — routes to HR's Weekly Reports queue.
+// The five prompts follow the user's admin-assigned report track; users with no
+// track get the classic free-text form.
 function WeeklyReportModal() {
-  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, uploadFile, uploadedFileUrl, toast } = useApp();
+  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, uploadFile, uploadedFileUrl, toast, me } = useApp();
+  const track = (me?.reportTrack && me.reportTrack in REPORT_TRACKS ? me.reportTrack : null) as ReportTrack | null;
+  const questions = track ? REPORT_TRACKS[track].questions : [];
   const [did, setDid] = useState("");
   const [blockers, setBlockers] = useState("");
   const [nextWeek, setNextWeek] = useState("");
+  const [answers, setAnswers] = useState<string[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [existing, setExisting] = useState<string | null>(null); // attachment already on the report
   const [saving, setSaving] = useState(false);
@@ -150,18 +155,27 @@ function WeeklyReportModal() {
       setDid(reportEdit?.did ?? "");
       setBlockers(reportEdit?.blockers ?? "");
       setNextWeek(reportEdit?.nextWeek ?? "");
+      // prefill structured answers when editing a report on the same track
+      setAnswers(questions.map((q) => reportEdit?.answers?.find((x) => x.q === q)?.a ?? ""));
       setFile(null);
       setExisting(reportEdit?.attachmentPath ?? null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportOpen, reportEdit]);
 
   async function save() {
-    if (!did.trim()) { toast("What did you do?", "Tell HR what you worked on this week"); return; }
+    if (track) {
+      if (!answers.some((a) => a.trim())) { toast("Fill in your report", "Add at least one line before submitting"); return; }
+    } else if (!did.trim()) { toast("What did you do?", "Tell HR what you worked on this week"); return; }
     setSaving(true);
     // new pick uploads; otherwise keep the existing attachment (or null if it was cleared)
     let attachment: string | null = existing;
     if (file) attachment = await uploadFile("weekly-reports", file);
-    await submitWeeklyReport({ did: did.trim(), blockers, nextWeek, attachment });
+    if (track) {
+      await submitWeeklyReport({ track, answers: questions.map((q, i) => ({ q, a: answers[i]?.trim() ?? "" })), attachment });
+    } else {
+      await submitWeeklyReport({ did: did.trim(), blockers, nextWeek, attachment });
+    }
     setSaving(false);
   }
 
@@ -169,12 +183,20 @@ function WeeklyReportModal() {
     <ModalShell open={reportOpen} onClose={closeReport} width={520}>
       <div className="mh">
         <h3>{reportEdit ? "Edit this week's report" : "Submit weekly report"}</h3>
-        <p>A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Thursday 5pm.</p>
+        <p>{track ? `${REPORT_TRACKS[track].blurb} It goes to HR. Due Thursday 5pm.` : "A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Thursday 5pm."}</p>
       </div>
       <div className="mb">
-        <div><label>What I did this week</label><textarea className="field" rows={4} placeholder="Key things you worked on and finished…" value={did} onChange={(e) => setDid(e.target.value)} /></div>
-        <div><label>Blockers <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="Anything slowing you down or that you need help with" value={blockers} onChange={(e) => setBlockers(e.target.value)} /></div>
-        <div><label>Next week's plan <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="What you'll focus on next week" value={nextWeek} onChange={(e) => setNextWeek(e.target.value)} /></div>
+        {track ? (
+          questions.map((q, i) => (
+            <div key={i}><label>{q}</label><textarea className="field" rows={2} placeholder="Keep it tight — one or two lines" value={answers[i] ?? ""} onChange={(e) => setAnswers((a) => a.map((x, j) => (j === i ? e.target.value : x)))} /></div>
+          ))
+        ) : (
+          <>
+            <div><label>What I did this week</label><textarea className="field" rows={4} placeholder="Key things you worked on and finished…" value={did} onChange={(e) => setDid(e.target.value)} /></div>
+            <div><label>Blockers <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="Anything slowing you down or that you need help with" value={blockers} onChange={(e) => setBlockers(e.target.value)} /></div>
+            <div><label>Next week's plan <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="What you'll focus on next week" value={nextWeek} onChange={(e) => setNextWeek(e.target.value)} /></div>
+          </>
+        )}
         <div>
           <label>Attachment <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -308,7 +330,7 @@ export default function StaffPortalView() {
               <div className="recon"><span>Next payday</span><span className="mono">28 {new Date().toLocaleDateString("en-GB", { month: "long" })}</span></div>
               <div className="recon"><span>Net pay (latest)</span><span className="mono">{latestSlip ? kes(latestSlip.net) : "—"}</span></div>
               <div className="recon"><span>Annual leave balance</span><span className="mono">{annual ? `${annualLeft} / ${annual.entitled} days` : "—"}</span></div>
-              <div className="recon"><span>Tasks assigned to me</span><span className="pill today">{myWeek.length} open</span></div>
+              <div className="recon"><span>Tasks assigned to me</span><span className="pill today">{myWeek.filter((t) => t.state !== "done" && (t.ownerEmail === (meEmail ?? "") || (t.assignees ?? []).some((a) => a.email === (meEmail ?? "")))).length} open</span></div>
               <div className="recon"><span>Employment type</span><span>{me ? contractTypes.find((c) => c.value === me.contractType)?.label ?? me.contractType : "—"}</span></div>
             </div>
             <div className="panel">
@@ -360,9 +382,17 @@ export default function StaffPortalView() {
             {thisWeekReport ? (
               <>
                 <div className="recon"><span>Status</span><span className={`pill ${thisWeekReport.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{thisWeekReport.state === "acknowledged" ? "Acknowledged by HR" : "Submitted"}</span></div>
-                <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>What I did</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.did}</div></div>
-                {thisWeekReport.blockers && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Blockers</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.blockers}</div></div>}
-                {thisWeekReport.nextWeek && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Next week's plan</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.nextWeek}</div></div>}
+                {thisWeekReport.answers && thisWeekReport.answers.length ? (
+                  thisWeekReport.answers.map((x, i) => (
+                    <div key={i} style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>{x.q}</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{x.a}</div></div>
+                  ))
+                ) : (
+                  <>
+                    <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>What I did</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.did}</div></div>
+                    {thisWeekReport.blockers && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Blockers</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.blockers}</div></div>}
+                    {thisWeekReport.nextWeek && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Next week's plan</div><div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{thisWeekReport.nextWeek}</div></div>}
+                  </>
+                )}
                 {thisWeekReport.attachmentPath && <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hairline)" }}><div className="meta" style={{ marginBottom: 4 }}>Attachment</div><a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(thisWeekReport.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 13.5 }}>View attached file</a></div>}
                 <Note>Submitted — thanks. You can <a href="#" onClick={(e) => { e.preventDefault(); openReportEdit(thisWeekReport); }} style={{ color: "var(--flame)", textDecoration: "none" }}>edit it</a> anytime this week; the latest version is what HR sees.</Note>
               </>

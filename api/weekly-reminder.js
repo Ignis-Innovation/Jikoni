@@ -44,11 +44,11 @@ export default async function handler(req, res) {
     subject: "Weekly report reminder",
     text:
       `Hi ${name},\n\nHope you're doing well. Just a friendly reminder to submit your weekly report — ` +
-      `a quick note on what you did this week, any blockers, and next week's plan.\n\n` +
+      `five tight lines for your track (pipeline, technology or leadership). Keep it tight.\n\n` +
       `Kindly sign in to Jikoni and submit it here:\n${APP_LINK}\n\n— Ignis Innovation`,
     html:
       `<p>Hi ${name},</p><p>Hope you're doing well. Just a friendly reminder to submit your ` +
-      `<strong>weekly report</strong> — a quick note on what you did this week, any blockers, and next week's plan.</p>` +
+      `<strong>weekly report</strong> — five tight lines for your track (pipeline, technology or leadership). Keep it tight.</p>` +
       `<p>Kindly sign in to Jikoni and submit it here:</p><p><a href="${APP_LINK}">Sign in to Jikoni</a></p>` +
       `<p>— Ignis Innovation</p>`,
   });

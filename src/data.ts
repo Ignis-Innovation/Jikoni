@@ -37,18 +37,69 @@ export const teamColors: Record<string, string> = {
 };
 
 export interface SubTask { text: string; done: boolean }
+export interface Assignee { name: string; email: string }
 export interface WeekTask {
   id: string;
   t: string;
   s: string;
-  o: string;              // owner (assignee) name — denormalised
+  o: string;              // owner (primary assignee) name — denormalised
   p: string;
   pl: string;
   subtasks?: SubTask[];   // mini-tasks
   assignedBy?: string;    // set when someone else assigned it to the owner
-  ownerEmail?: string;    // owner's email — drives the "Mine" filter
+  ownerEmail?: string;    // primary owner's email — drives the "Mine" filter
   due?: string;           // ISO due date (YYYY-MM-DD) — drives overdue/due-soon flags
+  state?: string;         // 'open' | 'done' — done tasks stay visible with a Complete badge
+  priority?: string;      // 'low' | 'normal' | 'high'
+  assignees?: Assignee[]; // everyone the task is shared with (incl. the primary owner)
 }
+
+// Weekly-report tracks: each track shows its own five prompts. The track is
+// assigned per user by an admin; the DB just stores the answered {q,a} pairs.
+export type ReportTrack = "pipeline" | "technology" | "leadership";
+export const REPORT_TRACKS: Record<ReportTrack, { label: string; blurb: string; questions: string[] }> = {
+  pipeline: {
+    label: "Pipeline",
+    blurb: "Five lines on the pipeline — nothing more.",
+    questions: [
+      "Revenue & pipeline — this week vs last",
+      "Deals or partnerships advanced",
+      "Any deal stalled over 14 days — name it and the blocker",
+      "One win",
+      "One ask from leadership",
+    ],
+  },
+  technology: {
+    label: "Technology",
+    blurb: "Five lines on delivery — nothing more.",
+    questions: [
+      "Features shipped this week",
+      "Features blocked, and why",
+      "Uptime and any incidents",
+      "Three delivery commitments for next week",
+      "One ask from leadership",
+    ],
+  },
+  leadership: {
+    label: "Leadership",
+    blurb: "Your five CEO dashboard numbers.",
+    questions: [
+      "CEO dashboard number 1",
+      "CEO dashboard number 2",
+      "CEO dashboard number 3",
+      "CEO dashboard number 4",
+      "CEO dashboard number 5",
+    ],
+  },
+};
+export const reportTrackLabel = (t: string | null | undefined): string =>
+  t && (t in REPORT_TRACKS) ? REPORT_TRACKS[t as ReportTrack].label : "—";
+
+// Duplicate / legacy accounts hidden from every member list and assignment picker —
+// they stay in the database but never surface in the UI (e.g. a stray test login).
+export const HIDDEN_MEMBER_EMAILS = new Set<string>(["brian55mwangi@gmail.com"]);
+export const isHiddenMember = (email: string | null | undefined): boolean =>
+  !!email && HIDDEN_MEMBER_EMAILS.has(email.toLowerCase());
 
 // Seeded demo rows removed — these start empty and fill from real data.
 // My Week loads from the tasks table via bootstrap; the Status Board and the

@@ -636,7 +636,7 @@ export function ProformaDrawer() {
 
 /* ================= ACCESS ================= */
 export function AccessDrawer() {
-  const { accessEmail, closeAccess, perms, saveAccess, toast, members } = useApp();
+  const { accessEmail, closeAccess, perms, saveAccess, toast, members, setReportTrack } = useApp();
   const u = accessEmail ? members.find((x) => x.email === accessEmail) : null;
   const [draft, setDraft] = useState<Perms>({});
 
@@ -699,6 +699,15 @@ export function AccessDrawer() {
               <option value="fin">Finance</option>
               <option value="std">Standard</option>
               <option value="view">View only</option>
+            </select>
+          </div>
+          <div className="tmpl">
+            <label>Weekly report</label>
+            <select className="field" value={u.reportTrack ?? ""} onChange={(e) => accessEmail && setReportTrack(accessEmail, e.target.value)} style={{ minWidth: "auto", flex: 1 }}>
+              <option value="">Free-text (no track)</option>
+              <option value="pipeline">Pipeline — revenue, deals, stalled, win, ask</option>
+              <option value="technology">Technology — shipped, blocked, uptime, commitments, ask</option>
+              <option value="leadership">Leadership — five CEO numbers</option>
             </select>
           </div>
           <div>

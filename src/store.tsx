@@ -11,7 +11,7 @@ import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
   FieldActivity, AppNotification,
-  kes,
+  kes, isHiddenMember,
 } from "./data";
 
 // The Home-page "Switch to HR / Switch to Employee" toggle is now driven by role, not a
@@ -77,6 +77,7 @@ export interface PettyRequest {
 export interface WeeklyReport {
   id: string; ref: string; author: string; authorEmail: string; weekStart: string;
   did: string; blockers: string | null; nextWeek: string | null;
+  track: string | null; answers: { q: string; a: string }[] | null;
   state: "submitted" | "acknowledged";
   reviewedBy: string | null; reviewedAt: string | null; createdAt: string;
   attachmentPath: string | null;
@@ -167,7 +168,7 @@ export interface ComplianceData {
 }
 
 // the signed-in person (from bootstrap's `me`, keyed off the JWT email)
-export interface Me { name: string; email: string; roleTitle: string | null; color?: string | null }
+export interface Me { name: string; email: string; roleTitle: string | null; color?: string | null; reportTrack?: string | null }
 export interface OAuthStatus { google?: { connected: boolean; email?: string | null } | null; claude?: { connected: boolean } | null }
 
 // a real member row from public.app_users (replaces the old hardcoded demo list)
@@ -180,6 +181,7 @@ export interface Member {
   status: string;   // active | away | off
   state: string;    // active | invited | ...
   color: string | null;
+  reportTrack: string | null;   // pipeline | technology | leadership | null — drives the weekly-report form
 }
 
 interface AppApi {
@@ -200,9 +202,13 @@ interface AppApi {
   setTaskFilter: (f: "mine" | "team") => void;
   taskOpen: boolean;
   taskMode: "personal" | "assign";
+  taskEdit: WeekTask | null;
   openTask: (mode?: "personal" | "assign") => void;
+  openTaskEdit: (t: WeekTask) => void;
   closeTask: () => void;
-  createTask: (v: { title: string; due: string; dueDate?: string; link: string; assigneeEmail?: string; subtasks: string[] }) => void;
+  createTask: (v: { title: string; due: string; dueDate?: string; link: string; assigneeEmails?: string[]; subtasks: string[]; priority?: string }) => void;
+  updateTask: (v: { ref: string; title: string; due: string; dueDate?: string; link: string; assigneeEmails?: string[]; priority?: string }) => void;
+  deleteTask: (ref: string) => void;
   addSubtask: (ref: string, text: string) => void;
   toggleSubtask: (ref: string, idx: number) => void;
   setTaskDone: (ref: string, done: boolean) => void;
@@ -406,8 +412,9 @@ interface AppApi {
   openReport: () => void;
   openReportEdit: (r: WeeklyReport) => void;
   closeReport: () => void;
-  submitWeeklyReport: (v: { did: string; blockers: string; nextWeek: string; attachment?: string | null }) => void;
+  submitWeeklyReport: (v: { did?: string; blockers?: string; nextWeek?: string; attachment?: string | null; track?: string; answers?: { q: string; a: string }[] }) => void;
   acknowledgeWeeklyReport: (ref: string) => void;
+  setReportTrack: (email: string, track: string) => void;
   hrLeaveQueue: HrLeaveReq[];
   hrBalances: HrBalanceRow[];
   decideLeave: (ref: string, approve: boolean) => void;
@@ -561,6 +568,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [taskFilter, setTaskFilter] = useState<"mine" | "team">("mine");
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskMode, setTaskMode] = useState<"personal" | "assign">("personal");
+  const [taskEdit, setTaskEdit] = useState<WeekTask | null>(null);
 
   const [hrMode, setHrModeState] = useState<boolean>(() => {
     try { return localStorage.getItem("jikoni.hrMode") === "1"; } catch { return false; }
@@ -685,15 +693,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // filter "Mine" by the real signed-in user. Overrides bootstrap's lean tasks payload.
     const { data: taskRows } = await supabase
       .from("tasks")
-      .select("ref, title, sub, owner_name, due_pill, due_label, due_date, subtasks, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
-      .eq("state", "open")
+      .select("ref, title, sub, owner_name, due_pill, due_label, due_date, state, priority, assignees, subtasks, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
       .order("created_at", { ascending: false });
     if (taskRows) setMyWeek((taskRows as any[]).map((r) => {
       const owner = Array.isArray(r.owner) ? r.owner[0] : r.owner;
       const assigner = Array.isArray(r.assigner) ? r.assigner[0] : r.assigner;
       return {
         id: r.ref, t: r.title, s: r.sub, o: r.owner_name, p: r.due_pill, pl: r.due_label,
-        due: r.due_date ?? undefined,
+        due: r.due_date ?? undefined, state: r.state, priority: r.priority ?? "normal",
+        assignees: (r.assignees ?? []) as { name: string; email: string }[],
         subtasks: (r.subtasks ?? []) as { text: string; done: boolean }[],
         ownerEmail: owner?.email, assignedBy: assigner?.name && assigner.name !== r.owner_name ? assigner.name : undefined,
       } as WeekTask;
@@ -708,15 +716,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // people appear as soon as invite_user inserts them, since sendInvite re-runs loadFromDb.
     const { data: memberRows } = await supabase
       .from("app_users")
-      .select("name, email, role_key, role_title, two_fa, status, state, color")
+      .select("name, email, role_key, role_title, two_fa, status, state, color, report_track")
       .order("created_at");
-    setMembers(((memberRows ?? []) as any[]).map((m) => ({
+    setMembers(((memberRows ?? []) as any[]).filter((m) => !isHiddenMember(m.email)).map((m) => ({
       name: m.name, email: m.email, roleKey: m.role_key, roleTitle: m.role_title,
-      twoFa: !!m.two_fa, status: m.status, state: m.state, color: m.color,
+      twoFa: !!m.two_fa, status: m.status, state: m.state, color: m.color, reportTrack: m.report_track ?? null,
     })));
-    // my avatar colour (for the profile editor) + live integration status
-    const myColor = ((memberRows ?? []) as any[]).find((m) => m.email === (data.me as Me)?.email)?.color;
-    if (myColor) setMe((prev) => (prev ? { ...prev, color: myColor } : prev));
+    // my avatar colour (for the profile editor), my report track + live integration status
+    const myRow = ((memberRows ?? []) as any[]).find((m) => m.email === (data.me as Me)?.email);
+    if (myRow) setMe((prev) => (prev ? { ...prev, color: myRow.color ?? prev.color, reportTrack: myRow.report_track ?? null } : prev));
     const { data: oa } = await supabase.rpc("oauth_status");
     if (oa) setOauthStatus(oa as OAuthStatus);
     setProjectDetails(data.projects as Record<string, ProjectDetail>);
@@ -790,7 +798,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // (RLS scopes the rows).
     const { data: wr } = await supabase
       .from("weekly_reports")
-      .select("ref, week_start, did, blockers, next_week, state, reviewed_at, created_at, attachment_path, author:app_users!weekly_reports_author_id_fkey(name, email), reviewer:app_users!weekly_reports_reviewed_by_fkey(name)")
+      .select("ref, week_start, did, blockers, next_week, track, answers, state, reviewed_at, created_at, attachment_path, author:app_users!weekly_reports_author_id_fkey(name, email), reviewer:app_users!weekly_reports_reviewed_by_fkey(name)")
       .order("week_start", { ascending: false })
       .limit(500);
     setWeeklyReports(((wr ?? []) as any[]).map((r) => {
@@ -798,7 +806,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const rv = Array.isArray(r.reviewer) ? r.reviewer[0] : r.reviewer;
       return {
         id: r.ref, ref: r.ref, author: a?.name ?? "—", authorEmail: a?.email ?? "",
-        weekStart: r.week_start, did: r.did, blockers: r.blockers, nextWeek: r.next_week, state: r.state,
+        weekStart: r.week_start, did: r.did, blockers: r.blockers, nextWeek: r.next_week,
+        track: r.track ?? null, answers: (r.answers ?? null) as { q: string; a: string }[] | null, state: r.state,
         reviewedBy: rv?.name ?? null, reviewedAt: r.reviewed_at, createdAt: r.created_at,
         attachmentPath: r.attachment_path ?? null,
       } as WeeklyReport;
@@ -1110,53 +1119,98 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- tasks ---------- */
-  // Replace or update one task in My Week from a returned task_json (drop it if done/absent).
+  // Replace or update one task in My Week from a returned task_json (drop it if absent).
   const upsertTask = (t: WeekTask | null, ref?: string) =>
     setMyWeek((w) => {
       const key = t?.id ?? ref;
       const without = w.filter((x) => x.id !== key);
       return t ? [t, ...without] : without;
     });
-  async function createTask(v: { title: string; due: string; dueDate?: string; link: string; assigneeEmail?: string; subtasks: string[] }) {
-    const assignee = v.assigneeEmail && v.assigneeEmail !== me?.email ? v.assigneeEmail : null;
-    const { data, error } = await supabase.rpc("create_task", {
-      p_title: v.title, p_owner_email: assignee, p_due_key: v.due, p_link: v.link || "",
-      p_subtasks: v.subtasks.filter((s) => s.trim()),
-      p_due_date: v.dueDate || null,
-    });
-    if (error) { toast("Task not saved", error.message); return; }
-    const task = data as WeekTask;
-    setMyWeek((w) => [task, ...w.filter((x) => x.id !== task.id)]);
-    setTaskOpen(false);
-    // assigned to someone else → email them too (best-effort; the in-app bell is already written)
-    if (assignee) {
-      setTaskFilter("team");
-      const who = members.find((m) => m.email === assignee);
+  // Best-effort email to each teammate a task was assigned to (in-app bells already written server-side).
+  async function emailAssignees(emails: string[], title: string, subtasks: string[]) {
+    const subs = subtasks.filter((s) => s.trim());
+    await Promise.all(emails.filter((e) => e && e !== me?.email).map(async (to) => {
+      const who = members.find((m) => m.email === to);
       try {
         await fetch("/api/notify", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
           body: JSON.stringify({
-            to: assignee,
+            to,
             subject: `${me?.name ?? "A teammate"} assigned you a task`,
-            text: `Hi ${who?.name ?? ""},\n\n${me?.name ?? "A teammate"} assigned you a task: ${v.title}.${v.subtasks.filter((s) => s.trim()).length ? `\n\nSub-tasks:\n- ${v.subtasks.filter((s) => s.trim()).join("\n- ")}` : ""}\n\nOpen Jikoni Tool → Home → My Week to see it.`,
-            html: `<p>Hi ${who?.name ?? ""},</p><p><strong>${me?.name ?? "A teammate"}</strong> assigned you a task: <strong>${v.title}</strong>.</p>${v.subtasks.filter((s) => s.trim()).length ? `<p>Sub-tasks:</p><ul>${v.subtasks.filter((s) => s.trim()).map((s) => `<li>${s}</li>`).join("")}</ul>` : ""}<p>Open <strong>Jikoni Tool → Home → My Week</strong> to see it.</p>`,
+            text: `Hi ${who?.name ?? ""},\n\n${me?.name ?? "A teammate"} assigned you a task: ${title}.${subs.length ? `\n\nSub-tasks:\n- ${subs.join("\n- ")}` : ""}\n\nOpen Jikoni Tool → Home → My Week to see it.`,
+            html: `<p>Hi ${who?.name ?? ""},</p><p><strong>${me?.name ?? "A teammate"}</strong> assigned you a task: <strong>${title}</strong>.</p>${subs.length ? `<p>Sub-tasks:</p><ul>${subs.map((s) => `<li>${s}</li>`).join("")}</ul>` : ""}<p>Open <strong>Jikoni Tool → Home → My Week</strong> to see it.</p>`,
           }),
         });
       } catch { /* email is best-effort; the in-app notification still lands */ }
-      toast("Task assigned to " + task.o, `Now in ${task.o}'s My Week · emailed`);
+    }));
+  }
+  async function createTask(v: { title: string; due: string; dueDate?: string; link: string; assigneeEmails?: string[]; subtasks: string[]; priority?: string }) {
+    const emails = (v.assigneeEmails ?? []).filter(Boolean);
+    const { data, error } = await supabase.rpc("create_task", {
+      p_title: v.title, p_owner_emails: emails, p_due_key: v.due, p_link: v.link || "",
+      p_subtasks: v.subtasks.filter((s) => s.trim()),
+      p_due_date: v.dueDate || null, p_priority: v.priority || "normal",
+    });
+    if (error) { toast("Task not saved", error.message); return; }
+    const task = data as WeekTask;
+    setMyWeek((w) => [task, ...w.filter((x) => x.id !== task.id)]);
+    setTaskOpen(false); setTaskEdit(null);
+    const others = emails.filter((e) => e !== me?.email);
+    if (others.length) {
+      setTaskFilter("team");
+      await emailAssignees(others, v.title, v.subtasks);
+      toast(`Task assigned to ${task.o}${others.length > 1 ? ` +${others.length - 1}` : ""}`, `Now in their My Week · emailed`);
     } else {
       toast("Task added", "It's in your My Week");
     }
   }
-  const applyTaskRpc = async (fn: string, args: Record<string, unknown>, ref: string, doneRemoved = false) => {
+  async function updateTask(v: { ref: string; title: string; due: string; dueDate?: string; link: string; assigneeEmails?: string[]; priority?: string }) {
+    const { data, error } = await supabase.rpc("update_task", {
+      p_ref: v.ref, p_title: v.title, p_link: v.link || "", p_due_key: v.due,
+      p_due_date: v.dueDate || null, p_priority: v.priority || "normal",
+      p_owner_emails: v.assigneeEmails ?? null,
+    });
+    if (error) { toast("Task not saved", error.message); return; }
+    upsertTask(data as WeekTask, v.ref);
+    setTaskOpen(false); setTaskEdit(null);
+    toast("Task updated", "Changes saved");
+  }
+  async function deleteTask(ref: string) {
+    const { error } = await supabase.rpc("delete_task", { p_ref: ref });
+    if (error) { toast("Couldn't delete task", error.message); return; }
+    upsertTask(null, ref);
+    setTaskOpen(false); setTaskEdit(null);
+    toast(`${ref} deleted`, "Removed for everyone it was shared with");
+  }
+  const applyTaskRpc = async (fn: string, args: Record<string, unknown>, ref: string) => {
     const { data, error } = await supabase.rpc(fn, args);
     if (error) { toast("Couldn't update task", error.message); return; }
-    upsertTask(doneRemoved ? null : (data as WeekTask), ref);
+    upsertTask(data as WeekTask, ref);
   };
+  // Completing a task keeps it visible (Complete badge) and emails the assigner.
+  async function setTaskDone(ref: string, done: boolean) {
+    const { data, error } = await supabase.rpc("set_task_done", { p_ref: ref, p_done: done });
+    if (error) { toast("Couldn't update task", error.message); return; }
+    const d = data as { task: WeekTask; assignerEmail?: string | null; title?: string };
+    upsertTask(d.task, ref);
+    if (done && d.assignerEmail) {
+      try {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token ?? ""}` },
+          body: JSON.stringify({
+            to: d.assignerEmail,
+            subject: `${me?.name ?? "A teammate"} has completed the task: ${d.title ?? ""}`,
+            text: `${me?.name ?? "A teammate"} has completed the task: ${d.title ?? ""}.\n\nOpen Jikoni Tool → Home → My Week to see it.`,
+            html: `<p><strong>${me?.name ?? "A teammate"}</strong> has completed the task: <strong>${d.title ?? ""}</strong>.</p><p>Open <strong>Jikoni Tool → Home → My Week</strong> to see it.</p>`,
+          }),
+        });
+      } catch { /* email is best-effort; the in-app notification still lands */ }
+    }
+  }
   const addSubtask = (ref: string, text: string) => applyTaskRpc("add_task_subtask", { p_ref: ref, p_text: text }, ref);
   const toggleSubtask = (ref: string, idx: number) => applyTaskRpc("toggle_task_subtask", { p_ref: ref, p_idx: idx }, ref);
-  const setTaskDone = (ref: string, done: boolean) => applyTaskRpc("set_task_done", { p_ref: ref, p_done: done }, ref, done);
 
   /* ---------- drawers & cross-links ---------- */
   function closeAllDrawers() {
@@ -1749,15 +1803,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- weekly reports (Staff Portal → HR Weekly Reports) ---------- */
-  async function submitWeeklyReport(v: { did: string; blockers: string; nextWeek: string; attachment?: string | null }) {
+  async function submitWeeklyReport(v: { did?: string; blockers?: string; nextWeek?: string; attachment?: string | null; track?: string; answers?: { q: string; a: string }[] }) {
     const { data, error } = await supabase.rpc("submit_weekly_report", {
-      p_did: v.did.trim(), p_blockers: v.blockers.trim() || null, p_next_week: v.nextWeek.trim() || null,
+      p_did: v.did?.trim() || null, p_blockers: v.blockers?.trim() || null, p_next_week: v.nextWeek?.trim() || null,
       p_attachment: v.attachment || null,
+      p_track: v.track || null, p_answers: v.answers ?? null,
     });
     if (error) { toast("Report not submitted", error.message); return; }
     setReportOpen(false); setReportEdit(null);
     await loadFromDb();
     toast(`${(data as any)?.ref ?? "Report"} submitted`, "Sent to HR — thanks for the update");
+  }
+  async function setReportTrack(email: string, track: string) {
+    const { error } = await supabase.rpc("set_report_track", { p_email: email, p_track: track || "" });
+    if (error) { toast("Couldn't set report track", error.message); return; }
+    await loadFromDb();
+    toast("Report track updated", track ? `Now uses the ${track} format` : "Cleared — uses the free-text form");
   }
   async function acknowledgeWeeklyReport(ref: string) {
     const { error } = await supabase.rpc("acknowledge_weekly_report", { p_ref: ref });
@@ -2379,8 +2440,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     entity, cycleEntity,
     toasts, toast,
     myWeek, taskFilter, setTaskFilter,
-    taskOpen, taskMode, openTask: (mode: "personal" | "assign" = "personal") => { setTaskMode(mode); setTaskOpen(true); },
-    closeTask: () => setTaskOpen(false), createTask, addSubtask, toggleSubtask, setTaskDone,
+    taskOpen, taskMode, taskEdit,
+    openTask: (mode: "personal" | "assign" = "personal") => { setTaskEdit(null); setTaskMode(mode); setTaskOpen(true); },
+    openTaskEdit: (t: WeekTask) => { setTaskEdit(t); setTaskMode("assign"); setTaskOpen(true); },
+    closeTask: () => { setTaskOpen(false); setTaskEdit(null); },
+    createTask, updateTask, deleteTask, addSubtask, toggleSubtask, setTaskDone,
     engId, vendorName, projectName, accessEmail,
     openEng, closeEng: () => setEngId(null),
     openVendor: (n) => setVendorName(n), closeVendor: () => setVendorName(null),
@@ -2438,7 +2502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openReport: () => { setReportEdit(null); setReportOpen(true); },
     openReportEdit: (r) => { setReportEdit(r); setReportOpen(true); },
     closeReport: () => { setReportOpen(false); setReportEdit(null); },
-    submitWeeklyReport, acknowledgeWeeklyReport,
+    submitWeeklyReport, acknowledgeWeeklyReport, setReportTrack,
     hrLeaveQueue, hrBalances, decideLeave,
     hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
     addEmployee, preparePayroll, approvePayroll, postPayroll,

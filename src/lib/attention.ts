@@ -124,7 +124,8 @@ export function buildAttention({ projectDetails, apInvoices, myWeek, meEmail }: 
 
   // 4. My tasks that are overdue or due soon
   for (const t of myWeek) {
-    if (meEmail && t.ownerEmail !== meEmail) continue;
+    if (t.state === "done") continue;   // completed tasks stay visible in My Week but drop off the action feed
+    if (meEmail && t.ownerEmail !== meEmail && !(t.assignees ?? []).some((a) => a.email === meEmail)) continue;
     const dd = daysAway(t.due);
     const overdue = t.p === "over" || (dd != null && dd < 0);
     const soon = dd != null && dd >= 0 && dd <= 2;

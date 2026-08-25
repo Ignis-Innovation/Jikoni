@@ -41,13 +41,15 @@ function prettyAction(action: string): string {
   return verb || action.replace(/_/g, " ");
 }
 
-// One My Week row — click to expand its mini-tasks (checkboxes, add, mark done).
+// One My Week row — click to expand its mini-tasks (checkboxes, add, complete, edit, delete).
 function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
-  const { toggleSubtask, addSubtask, setTaskDone } = useApp();
+  const { toggleSubtask, addSubtask, setTaskDone, openTaskEdit, deleteTask } = useApp();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const subs = t.subtasks ?? [];
   const done = subs.filter((s) => s.done).length;
+  const isDone = t.state === "done";
+  const shared = (t.assignees?.length ?? 0) > 1;
 
   function add() {
     const v = draft.trim();
@@ -56,20 +58,22 @@ function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
   }
   return (
     <div>
-      <div className="task" onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer" }}>
+      <div className="task" onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer", opacity: isDone ? 0.72 : 1 }}>
         <span className="id">{t.id}</span>
         <span className="txt">
-          {t.t}
+          <span style={{ textDecoration: isDone ? "line-through" : "none" }}>{t.t}</span>
           {(t.s || t.assignedBy) ? <small>{[t.s, t.assignedBy ? `assigned by ${t.assignedBy}` : ""].filter(Boolean).join(" · ")}</small> : null}
         </span>
+        {t.priority === "high" && <span className="pill over" title="High priority" style={{ textTransform: "none" }}>High</span>}
+        {t.priority === "low" && <span className="pill week" title="Low priority" style={{ background: "transparent", border: "1px solid var(--line)", color: "var(--ink-soft)", textTransform: "none" }}>Low</span>}
         {subs.length > 0 && <span className="pill week" style={{ background: "transparent", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>{done}/{subs.length}</span>}
         {showOwner && (
-          <span className="ownerchip">
+          <span className="ownerchip" title={shared ? (t.assignees ?? []).map((a) => a.name).join(", ") : undefined}>
             <span className="oav" style={{ background: teamColors[t.o] || "#999" }}>{t.o[0]}</span>
-            {t.o}
+            {t.o}{shared ? ` +${(t.assignees?.length ?? 1) - 1}` : ""}
           </span>
         )}
-        <span className={`pill ${t.p}`}>{t.pl}</span>
+        {isDone ? <span className="pill done" style={{ textTransform: "none" }}>Complete</span> : <span className={`pill ${t.p}`}>{t.pl}</span>}
       </div>
       {open && (
         <div style={{ padding: "4px 14px 14px 76px", borderBottom: "1px solid var(--line)" }} onClick={(e) => e.stopPropagation()}>
@@ -79,12 +83,16 @@ function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
               <span style={{ textDecoration: s.done ? "line-through" : "none", color: s.done ? "var(--ink-soft)" : "var(--ink)" }}>{s.text}</span>
             </label>
           ))}
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <input className="field" style={{ flex: 1 }} placeholder="Add a mini-task…" value={draft}
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            {!isDone && <input className="field" style={{ flex: 1, minWidth: 160 }} placeholder="Add a mini-task…" value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
-            <button className="btn" onClick={add}>Add</button>
-            <button className="btn primary" onClick={() => setTaskDone(t.id, true)}>Mark done</button>
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />}
+            {!isDone && <button className="btn" onClick={add}>Add</button>}
+            <button className="btn" onClick={() => openTaskEdit(t)}>Edit</button>
+            <button className="btn" style={{ color: "var(--red)" }} onClick={() => { if (window.confirm(`Delete task "${t.t}"?`)) deleteTask(t.id); }}>Delete</button>
+            {isDone
+              ? <button className="btn" onClick={() => setTaskDone(t.id, false)}>Reopen</button>
+              : <button className="btn primary" onClick={() => setTaskDone(t.id, true)}>Mark done</button>}
           </div>
         </div>
       )}
@@ -116,7 +124,9 @@ export default function HomeView() {
     hrMode, setHrMode, isHrToggleUser, audit, members,
   } = useApp();
   const mine = taskFilter === "mine";
-  const list = mine ? myWeek.filter((t) => t.ownerEmail === me?.email) : myWeek;
+  const list = mine
+    ? myWeek.filter((t) => t.ownerEmail === me?.email || (t.assignees ?? []).some((a) => a.email === me?.email))
+    : myWeek;
 
   // Build the action feed from live data, ordered by the signed-in user's role.
   const attention = buildAttention({ projectDetails, apInvoices, myWeek, meEmail: me?.email });
