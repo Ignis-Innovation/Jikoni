@@ -969,6 +969,15 @@ export default function HrView() {
   // current-week roster: every active staff member, submitted or not (drives the N/A rows)
   const activeStaff = staff.filter((s) => s.state === "active").sort((a, b) => a.name.localeCompare(b.name));
   const missingThisWeek = activeStaff.filter((s) => !submittedEmails.has(s.email.toLowerCase()));
+  // anyone who submitted this week but isn't on the active roster (e.g. admins / HR
+  // who aren't HR "staff") — still surface their report so nothing is hidden.
+  const activeEmails = new Set(activeStaff.map((s) => s.email.toLowerCase()));
+  const extraThisWeek = thisWeekReports.filter((r) => !activeEmails.has(r.authorEmail.toLowerCase()));
+  // the rows the "This week" table renders: roster (submitted or N/A) + off-roster submitters
+  const weekRows = [
+    ...activeStaff.map((s) => ({ key: s.appUserId, name: s.name, email: s.email, report: thisWeekByEmail.get(s.email.toLowerCase()) })),
+    ...extraThisWeek.map((r) => ({ key: "x-" + r.id, name: r.author, email: r.authorEmail, report: r })),
+  ];
   const unreviewed = weeklyReports.filter((r) => r.state === "submitted");
   // history table excludes the current week — it has its own "This week" panel above
   const historyReports = reportsSorted.filter((r) => r.weekStart !== thisMonday);
@@ -1525,25 +1534,24 @@ export default function HrView() {
             <div className="panel-h">
               <h3>This week <span className="meta" style={{ fontWeight: 400 }}>· week of {fmtD(thisMonday)}</span></h3>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-                <span className="meta">{thisWeekReports.length} of {activeStaff.length} submitted · {missingThisWeek.length} N/A · {unreviewed.length} awaiting review</span>
+                <span className="meta">{thisWeekReports.length} submitted · {missingThisWeek.length} N/A · {unreviewed.length} awaiting review</span>
                 {canViewReports && (
-                  <button className="btn" style={{ padding: "5px 12px", fontSize: 12, gap: 6 }} disabled={exporting || !activeStaff.length} onClick={runCockpitExport}>
+                  <button className="btn" style={{ padding: "5px 12px", fontSize: 12, gap: 6 }} disabled={exporting || (!activeStaff.length && !thisWeekReports.length)} onClick={runCockpitExport}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                     {exporting ? "Building…" : "Download Excel"}
                   </button>
                 )}
               </span>
             </div>
-            {activeStaff.length ? (
+            {weekRows.length ? (
               <table className="tbl">
                 <thead><tr><th>Employee</th><th>Track</th><th>What they did</th><th>Blockers</th><th>Attachment</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  {activeStaff.map((s) => {
-                    const r = thisWeekByEmail.get(s.email.toLowerCase());
-                    const track = reportTrackLabel(r?.track ?? trackByEmail.get(s.email.toLowerCase()) ?? null);
+                  {weekRows.map(({ key, name, email, report: r }) => {
+                    const track = reportTrackLabel(r?.track ?? trackByEmail.get(email.toLowerCase()) ?? null);
                     return (
-                      <tr key={s.appUserId} style={r ? undefined : { background: "var(--wash, transparent)" }}>
-                        <td><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: dotFor(s.email), flex: "0 0 auto", opacity: r ? 1 : 0.4 }} /><strong style={{ color: r ? undefined : "var(--ink-soft)" }}>{s.name}</strong></span></td>
+                      <tr key={key} style={r ? undefined : { background: "var(--wash, transparent)" }}>
+                        <td><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: dotFor(email), flex: "0 0 auto", opacity: r ? 1 : 0.4 }} /><strong style={{ color: r ? undefined : "var(--ink-soft)" }}>{name}</strong></span></td>
                         <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{track}</td>
                         {r ? (
                           <>
