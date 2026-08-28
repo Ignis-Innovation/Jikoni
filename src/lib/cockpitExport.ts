@@ -64,8 +64,8 @@ const COCKPIT_PEOPLE = [
 // F Blocker · G Next action → owner · H Ask. Answers that share a column are
 // stacked (newline-joined), each prefixed with its question for readability.
 const TRACK_COLMAP: Record<ReportTrack, ("C" | "D" | "F" | "G" | "H")[]> = {
-  // shipped, blocked+why, uptime/incidents, next-week commitments, ask
-  technology: ["D", "F", "D", "C", "H"],
+  // shipped, blocked+why, uptime/incidents, next-week commitments → "Next action → owner", ask
+  technology: ["D", "F", "D", "G", "H"],
   // revenue&pipeline, deals advanced, deal stalled >14d, one win, one ask
   pipeline: ["D", "D", "F", "D", "H"],
   // five CEO dashboard numbers
