@@ -30,6 +30,25 @@ const WEEK1_HEADER_ROW = 4;
 const PERSON_ROW_OFFSET = 7; // first leadership row, relative to the WEEK header
 const MAX_WEEK = 13;
 
+// Person-row cells already wrap (wrapText:true) but the template pins every row to
+// 31.5pt, so long report content gets clipped/squeezed. We grow each filled row to
+// fit its wrapped content — columns keep their template widths, so the rest of the
+// sheet is untouched. Widths (chars) mirror the template's run-sheet columns.
+const COL_WIDTH: Record<string, number> = { C: 20, D: 18, E: 11, F: 22, G: 24, H: 18 };
+const LINE_PT = 13;      // ~points per wrapped line at the sheet's ~9-10pt font
+const MIN_ROW_H = 31.5;  // the template's default person-row height
+const MAX_ROW_H = 340;   // cap so one huge cell can't blow up the page
+// Wrapped-line count for a cell's text at its column width.
+const linesFor = (text: string, col: string) => {
+  const w = Math.max(6, COL_WIDTH[col] ?? 18);
+  return String(text || "").split("\n").reduce((n, ln) => n + Math.max(1, Math.ceil(ln.length / w)), 0);
+};
+// Row height that fits the tallest cell across the columns we wrote.
+const rowHeightFor = (vals: Record<string, string>) => {
+  const lines = Math.max(1, ...Object.entries(vals).map(([col, v]) => linesFor(v, col)));
+  return Math.min(MAX_ROW_H, Math.max(MIN_ROW_H, Math.round(lines * LINE_PT + 6)));
+};
+
 // The five fixed leadership rows, in the order they appear in every week block.
 // `match` is tested (lower-cased) against the start of the report author's name.
 const COCKPIT_PEOPLE = [
@@ -154,7 +173,12 @@ export async function exportCockpit(reports: WeeklyReport[]): Promise<CockpitExp
     COCKPIT_PEOPLE.forEach((person, i) => {
       const row = firstPersonRow + i;
       const report = weekReports.find((r) => cellText(r.author).toLowerCase().startsWith(person.match));
-      const set = (col: string, val: string | undefined) => { if (val !== undefined) ws.getCell(`${col}${row}`).value = val; };
+      const vals: Record<string, string> = {};
+      const set = (col: string, val: string | undefined) => {
+        if (val === undefined) return;
+        ws.getCell(`${col}${row}`).value = val; // keeps the cell's existing wrapText style
+        vals[col] = val ?? "";
+      };
 
       if (report) {
         const m = rowFromReport(report);
@@ -169,6 +193,8 @@ export async function exportCockpit(reports: WeeklyReport[]): Promise<CockpitExp
         set("D", "NO REPORT SUBMITTED");
         set("E", "Red");
       }
+      // Grow the row so the wrapped content isn't squeezed.
+      ws.getRow(row).height = rowHeightFor(vals);
     });
     weeksFilled.push(n);
   }
