@@ -34,8 +34,12 @@ const fmtD = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en
 // Tasks owned by, or shared with, the signed-in user.
 const myTasks = (tasks: WeekTask[], email: string) =>
   email ? tasks.filter((t) => t.ownerEmail === email || (t.assignees ?? []).some((a) => a.email === email)) : [];
-// One bullet per task, ref + title, for a report textarea (editable after fill).
-const taskBullets = (tasks: WeekTask[]) => tasks.map((t) => `• ${t.id} ${t.t}`).join("\n");
+// One bullet per task (title only), with its subtasks nested beneath — for a
+// report textarea, editable after fill.
+const taskBullets = (tasks: WeekTask[]) =>
+  tasks
+    .map((t) => [`• ${t.t}`, ...(t.subtasks ?? []).map((s) => `    – ${s.text}`)].join("\n"))
+    .join("\n");
 const fmtDT = (ts: string) => new Date(ts).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const fmtPeriod = (p: string) => { const [y, m] = p.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); };
 const statePill: Record<string, { cls: string; txt: string }> = {
@@ -221,7 +225,7 @@ function WeeklyReportModal() {
         )}
         {track ? (
           questions.map((q, i) => (
-            <div key={i}><label>{q}</label><textarea className="field" rows={2} placeholder="Keep it tight — one or two lines" value={answers[i] ?? ""} onChange={(e) => setAnswers((a) => a.map((x, j) => (j === i ? e.target.value : x)))} /></div>
+            <div key={i}><label>{q}</label><textarea className="field" rows={2} placeholder="One or two lines" value={answers[i] ?? ""} onChange={(e) => setAnswers((a) => a.map((x, j) => (j === i ? e.target.value : x)))} /></div>
           ))
         ) : (
           <>
