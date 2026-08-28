@@ -52,6 +52,7 @@ export interface WeekTask {
   state?: string;         // 'open' | 'done' — done tasks stay visible with a Complete badge
   priority?: string;      // 'low' | 'normal' | 'high'
   assignees?: Assignee[]; // everyone the task is shared with (incl. the primary owner)
+  updatedAt?: string;     // last change (timestamptz) — approximates completion time for the weekly report
 }
 
 // Weekly-report tracks: each track shows its own five prompts. The track is

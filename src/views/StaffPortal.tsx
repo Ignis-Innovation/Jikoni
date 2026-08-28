@@ -3,7 +3,7 @@ import { useApp } from "../store";
 import { Note } from "../components/ui";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
-import { kes, contractTypes, REPORT_TRACKS, type ReportTrack } from "../data";
+import { kes, contractTypes, REPORT_TRACKS, type ReportTrack, type WeekTask } from "../data";
 import { Crumb } from "../nav";
 import { FeedbackModal, ExitSteps } from "./Hr";
 
@@ -29,6 +29,13 @@ function mondayOf(d = new Date()) {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 }
 const fmtD = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
+// ----- weekly-report auto-fill from tasks -----
+// Tasks owned by, or shared with, the signed-in user.
+const myTasks = (tasks: WeekTask[], email: string) =>
+  email ? tasks.filter((t) => t.ownerEmail === email || (t.assignees ?? []).some((a) => a.email === email)) : [];
+// One bullet per task, ref + title, for a report textarea (editable after fill).
+const taskBullets = (tasks: WeekTask[]) => tasks.map((t) => `• ${t.id} ${t.t}`).join("\n");
 const fmtDT = (ts: string) => new Date(ts).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const fmtPeriod = (p: string) => { const [y, m] = p.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" }); };
 const statePill: Record<string, { cls: string; txt: string }> = {
@@ -139,7 +146,7 @@ function PettyCashModal() {
 // The five prompts follow the user's admin-assigned report track; users with no
 // track get the classic free-text form.
 function WeeklyReportModal() {
-  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, uploadFile, uploadedFileUrl, toast, me } = useApp();
+  const { reportOpen, reportEdit, closeReport, submitWeeklyReport, uploadFile, uploadedFileUrl, toast, me, myWeek } = useApp();
   const track = (me?.reportTrack && me.reportTrack in REPORT_TRACKS ? me.reportTrack : null) as ReportTrack | null;
   const questions = track ? REPORT_TRACKS[track].questions : [];
   const [did, setDid] = useState("");
@@ -150,13 +157,34 @@ function WeeklyReportModal() {
   const [existing, setExisting] = useState<string | null>(null); // attachment already on the report
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // A fresh report auto-fills from the user's tasks: what they finished this week,
+  // and what's still open (a starting point for next week). Editing an existing
+  // report keeps the saved text instead. Auto-fill for the structured form only
+  // seeds the technology track, whose prompts are task-shaped; the pipeline and
+  // leadership prompts aren't, so they're left blank.
+  const mine = myTasks(myWeek, me?.email ?? "");
+  // instant-based comparison so late-evening completions aren't dropped by the UTC/local offset
+  const mondayStart = new Date(mondayOf() + "T00:00:00").getTime();
+  const completedThisWeek = mine.filter((t) => t.state === "done" && t.updatedAt != null && new Date(t.updatedAt).getTime() >= mondayStart);
+  const stillOpen = mine.filter((t) => t.state !== "done");
+  const doneText = taskBullets(completedThisWeek);
+  const openText = taskBullets(stillOpen);
+  const autoFilled = !reportEdit && (completedThisWeek.length > 0 || stillOpen.length > 0);
+
   useEffect(() => {
     if (reportOpen) {
-      setDid(reportEdit?.did ?? "");
+      const fresh = !reportEdit;
+      setDid(reportEdit?.did ?? (fresh ? doneText : ""));
       setBlockers(reportEdit?.blockers ?? "");
-      setNextWeek(reportEdit?.nextWeek ?? "");
-      // prefill structured answers when editing a report on the same track
-      setAnswers(questions.map((q) => reportEdit?.answers?.find((x) => x.q === q)?.a ?? ""));
+      setNextWeek(reportEdit?.nextWeek ?? (fresh ? openText : ""));
+      // prefill structured answers when editing; seed shipped/commitments for a fresh technology report
+      setAnswers(questions.map((q, i) => {
+        const saved = reportEdit?.answers?.find((x) => x.q === q)?.a;
+        if (saved != null) return saved;
+        if (fresh && track === "technology") { if (i === 0) return doneText; if (i === 3) return openText; }
+        return "";
+      }));
       setFile(null);
       setExisting(reportEdit?.attachmentPath ?? null);
     }
@@ -183,9 +211,14 @@ function WeeklyReportModal() {
     <ModalShell open={reportOpen} onClose={closeReport} width={520}>
       <div className="mh">
         <h3>{reportEdit ? "Edit this week's report" : "Submit weekly report"}</h3>
-        <p>{track ? `${REPORT_TRACKS[track].blurb} It goes to HR. Due Thursday 5pm.` : "A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Thursday 5pm."}</p>
+        <p>{track ? `${REPORT_TRACKS[track].blurb} It goes to HR. Due Friday 11:59pm.` : "A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Friday 11:59pm."}</p>
       </div>
       <div className="mb">
+        {autoFilled && (
+          <div style={{ fontSize: 12, color: "var(--ink-soft)", background: "#fff", border: "1px solid var(--hairline)", borderRadius: 9, padding: "10px 12px" }}>
+            Pre-filled from your tasks — {completedThisWeek.length} done this week{stillOpen.length ? `, ${stillOpen.length} still open` : ""}. Edit anything before submitting.
+          </div>
+        )}
         {track ? (
           questions.map((q, i) => (
             <div key={i}><label>{q}</label><textarea className="field" rows={2} placeholder="Keep it tight — one or two lines" value={answers[i] ?? ""} onChange={(e) => setAnswers((a) => a.map((x, j) => (j === i ? e.target.value : x)))} /></div>
@@ -378,7 +411,7 @@ export default function StaffPortalView() {
       {tab === "sp-reports" && (
         <div className="hr-panel active">
           <div className="panel">
-            <div className="panel-h"><h3>This week</h3><span className="meta">Week of {fmtD(thisMonday)} · due Thursday 5pm</span></div>
+            <div className="panel-h"><h3>This week</h3><span className="meta">Week of {fmtD(thisMonday)} · due Friday 11:59pm</span></div>
             {thisWeekReport ? (
               <>
                 <div className="recon"><span>Status</span><span className={`pill ${thisWeekReport.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{thisWeekReport.state === "acknowledged" ? "Acknowledged by HR" : "Submitted"}</span></div>
@@ -397,7 +430,7 @@ export default function StaffPortalView() {
                 <Note>Submitted — thanks. You can <a href="#" onClick={(e) => { e.preventDefault(); openReportEdit(thisWeekReport); }} style={{ color: "var(--flame)", textDecoration: "none" }}>edit it</a> anytime this week; the latest version is what HR sees.</Note>
               </>
             ) : (
-              <Note noBorder>You haven't submitted this week's report yet. Use <strong>Submit weekly report</strong> — a quick note on what you did, any blockers, and next week's plan. It's due <strong>Thursday 5pm</strong> and goes to HR.</Note>
+              <Note noBorder>You haven't submitted this week's report yet. Use <strong>Submit weekly report</strong> — a quick note on what you did, any blockers, and next week's plan. It's due <strong>Friday 11:59pm</strong> and goes to HR.</Note>
             )}
           </div>
           <div className="panel" style={{ marginTop: 18 }}>

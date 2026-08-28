@@ -11,47 +11,6 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtD = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 const fmtPeriod = (p: string) => { const [y, m] = p.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" }); };
 
-// Weekly reports → Excel (HTML .xls so we can colour-code each employee's rows).
-// The export is the CURRENT-WEEK overview: every active staff member appears, each
-// in their own colour. Anyone who hasn't submitted shows "N/A — not submitted".
-// Columns: Employee, Email, Track, Week of, Report (five lines / free-text), Status.
-const REPORT_COLOURS = ["#FDE7E9", "#E7F0FD", "#E9F7EF", "#FEF5E7", "#F4ECF7", "#E8F8F5", "#FDEBD0", "#EBF5FB", "#F9EBEA", "#EAF2F8"];
-function exportWeeklyReports(
-  staff: { name: string; email: string; state: string }[],
-  weekReports: WeeklyReport[],
-  trackByEmail: Map<string, string | null>,
-  weekStart: string,
-  toast: (t: string, s?: string) => void,
-) {
-  const roster = staff.filter((s) => s.state === "active").sort((a, b) => a.name.localeCompare(b.name));
-  if (!roster.length) { toast("Nothing to export", "No active staff to report on yet"); return; }
-  const esc = (v: unknown) => (v == null ? "" : String(v)).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const ml = (v: unknown) => esc(v).replace(/\r?\n/g, "<br>");
-  // a stable colour per employee (everyone on the roster, submitted or not)
-  const colourOf = (email: string) => REPORT_COLOURS[roster.findIndex((s) => s.email === email) % REPORT_COLOURS.length];
-  const byEmail = new Map(weekReports.map((r) => [r.authorEmail.toLowerCase(), r] as const));
-  // one report body: the five track answers, or the legacy did/blockers/next
-  const reportCell = (r: WeeklyReport) => r.answers && r.answers.length
-    ? r.answers.map((x) => `<b>${esc(x.q)}:</b> ${ml(x.a)}`).join("<br>")
-    : [ml(r.did), r.blockers ? `<b>Blockers:</b> ${ml(r.blockers)}` : "", r.nextWeek ? `<b>Next week:</b> ${ml(r.nextWeek)}` : ""].filter(Boolean).join("<br>");
-  const head = ["Employee", "Email", "Track", "Week of", "Report", "Status"];
-  const th = head.map((h) => `<th style="padding:6px 10px;border:1px solid #ccc;text-align:left">${esc(h)}</th>`).join("");
-  const body = roster.map((s) => {
-    const r = byEmail.get(s.email.toLowerCase());
-    const track = reportTrackLabel(r?.track ?? trackByEmail.get(s.email.toLowerCase()) ?? null);
-    const status = r ? (r.state === "acknowledged" ? "Acknowledged" : "Submitted") : "Not submitted";
-    const reportHtml = r ? reportCell(r) : `<i style="color:#b00020">N/A — not submitted</i>`;
-    const cells = [esc(s.name), esc(s.email), esc(track), esc(weekStart), reportHtml, esc(status)];
-    return `<tr style="background:${colourOf(s.email)}">${cells.map((c) => `<td style="padding:6px 10px;border:1px solid #ddd;vertical-align:top">${c}</td>`).join("")}</tr>`;
-  }).join("");
-  const html = `<html><head><meta charset="utf-8"></head><body><h3 style="font-family:Calibri,Arial,sans-serif">Weekly reports — week of ${esc(weekStart)}</h3><table border="1" style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:12px"><tr style="background:#2c3e50;color:#fff;font-weight:bold">${th}</tr>${body}</table></body></html>`;
-  const url = URL.createObjectURL(new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" }));
-  const a = document.createElement("a");
-  a.href = url; a.download = `weekly-reports-${weekStart}.xls`;
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  const submitted = roster.filter((s) => byEmail.has(s.email.toLowerCase())).length;
-  toast("This week's reports exported", `${roster.length} staff · ${submitted} submitted, ${roster.length - submitted} N/A — colour-coded, opens in Excel`);
-}
 const contractLabel = (v: string) => contractTypes.find((c) => c.value === v)?.label ?? v;
 const PALETTE = ["#E2632A", "#12A3BE", "#3C8A5E", "#6D28D9", "#0e7d91", "#A16207", "#B91C1C", "#7C2D12"];
 const avColor = (s: { color: string | null; name: string }) => s.color || PALETTE[Math.abs([...s.name].reduce((a, c) => a + c.charCodeAt(0), 0)) % PALETTE.length];
@@ -917,6 +876,22 @@ export default function HrView() {
   const canEdit = hrLvl >= 2;
   const canFull = hrLvl >= 3;
   const [reportView, setReportView] = useState<WeeklyReport | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const runCockpitExport = async () => {
+    if (!activeStaff.length) { toast("Nothing to export", "No active staff to report on yet"); return; }
+    setExporting(true);
+    try {
+      const { exportCockpit } = await import("../lib/cockpitExport");
+      const { weeksFilled, skippedAuthored } = await exportCockpit(weeklyReports);
+      const wk = weeksFilled.length ? `week${weeksFilled.length > 1 ? "s" : ""} ${weeksFilled.join(", ")} filed` : "no new weeks to file";
+      const skip = skippedAuthored.length ? ` · ${skippedAuthored.length} authored week(s) left untouched` : "";
+      toast("Cockpit exported", `${wk}${skip} — opens in Excel with full styling`);
+    } catch (e) {
+      toast("Export failed", e instanceof Error ? e.message : "Could not build the workbook");
+    } finally {
+      setExporting(false);
+    }
+  };
   async function openCertDoc(path: string) { const url = await staffDocUrl(path); if (url) window.open(url, "_blank", "noopener"); }
   // the other side of an appraisal/exit/cert acts from the Staff Portal, and job applicants
   // apply from the public careers page — pull fresh state each time these tabs open
@@ -990,8 +965,13 @@ export default function HrView() {
   const reportsSorted = [...weeklyReports].sort((a, b) => (b.weekStart + b.ref).localeCompare(a.weekStart + a.ref));
   const thisWeekReports = weeklyReports.filter((r) => r.weekStart === thisMonday);
   const submittedEmails = new Set(thisWeekReports.map((r) => r.authorEmail.toLowerCase()));
-  const missingThisWeek = staff.filter((s) => s.state === "active" && !submittedEmails.has(s.email.toLowerCase()));
+  const thisWeekByEmail = new Map(thisWeekReports.map((r) => [r.authorEmail.toLowerCase(), r] as const));
+  // current-week roster: every active staff member, submitted or not (drives the N/A rows)
+  const activeStaff = staff.filter((s) => s.state === "active").sort((a, b) => a.name.localeCompare(b.name));
+  const missingThisWeek = activeStaff.filter((s) => !submittedEmails.has(s.email.toLowerCase()));
   const unreviewed = weeklyReports.filter((r) => r.state === "submitted");
+  // history table excludes the current week — it has its own "This week" panel above
+  const historyReports = reportsSorted.filter((r) => r.weekStart !== thisMonday);
   // per-employee colour + report track, keyed by email (drives the coloured dot + export)
   const colorByEmail = new Map(members.map((m) => [m.email.toLowerCase(), m.color] as const));
   const trackByEmail = new Map(members.map((m) => [m.email.toLowerCase(), m.reportTrack] as const));
@@ -1543,19 +1523,68 @@ export default function HrView() {
         <div className="hr-panel active">
           <div className="panel">
             <div className="panel-h">
-              <h3>Weekly reports</h3>
+              <h3>This week <span className="meta" style={{ fontWeight: 400 }}>· week of {fmtD(thisMonday)}</span></h3>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-                <span className="meta">{thisWeekReports.length} of {staff.filter((s) => s.state === "active").length} in this week · {unreviewed.length} awaiting review</span>
+                <span className="meta">{thisWeekReports.length} of {activeStaff.length} submitted · {missingThisWeek.length} N/A · {unreviewed.length} awaiting review</span>
                 {canViewReports && (
-                  <button className="btn" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => exportWeeklyReports(staff, thisWeekReports, trackByEmail, thisMonday, toast)}>Export this week</button>
+                  <button className="btn" style={{ padding: "5px 12px", fontSize: 12, gap: 6 }} disabled={exporting || !activeStaff.length} onClick={runCockpitExport}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                    {exporting ? "Building…" : "Download Excel"}
+                  </button>
                 )}
               </span>
             </div>
-            {reportsSorted.length ? (
+            {activeStaff.length ? (
+              <table className="tbl">
+                <thead><tr><th>Employee</th><th>Track</th><th>What they did</th><th>Blockers</th><th>Attachment</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {activeStaff.map((s) => {
+                    const r = thisWeekByEmail.get(s.email.toLowerCase());
+                    const track = reportTrackLabel(r?.track ?? trackByEmail.get(s.email.toLowerCase()) ?? null);
+                    return (
+                      <tr key={s.appUserId} style={r ? undefined : { background: "var(--wash, transparent)" }}>
+                        <td><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: dotFor(s.email), flex: "0 0 auto", opacity: r ? 1 : 0.4 }} /><strong style={{ color: r ? undefined : "var(--ink-soft)" }}>{s.name}</strong></span></td>
+                        <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{track}</td>
+                        {r ? (
+                          <>
+                            <td style={{ maxWidth: 300, fontSize: 12.5, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.did}</td>
+                            <td style={{ fontSize: 12.5, color: r.blockers ? "var(--ember)" : "var(--ink-soft)" }}>{r.blockers ? "⚑ yes" : "—"}</td>
+                            <td>{r.attachmentPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(r.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>View</a> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
+                            <td><span className={`pill ${r.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }} title={r.reviewedBy ? `by ${r.reviewedBy}` : ""}>{r.state === "acknowledged" ? "Acknowledged" : "New"}</span></td>
+                            <td>
+                              <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReportView(r)}>View</button>
+                                {canEdit && canViewReports && r.state === "submitted" && (
+                                  <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => acknowledgeWeeklyReport(r.ref)}>Acknowledge</button>
+                                )}
+                              </span>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>No submission this week</td>
+                            <td style={{ color: "var(--ink-soft)" }}>—</td>
+                            <td style={{ color: "var(--ink-soft)" }}>—</td>
+                            <td><span className="pill done" style={{ textTransform: "none" }}>N/A</span></td>
+                            <td />
+                          </>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No active staff yet — the current-week roster appears here once staff are onboarded.</Note>
+            )}
+          </div>
+          <div className="panel" style={{ marginTop: 14 }}>
+            <div className="panel-h"><h3>Earlier weeks</h3><span className="meta">{historyReports.length} report{historyReports.length === 1 ? "" : "s"}</span></div>
+            {historyReports.length ? (
               <table className="tbl">
                 <thead><tr><th>Ref</th><th>Employee</th><th>Track</th><th>Week of</th><th>What they did</th><th>Blockers</th><th>Attachment</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  {reportsSorted.map((r) => (
+                  {historyReports.map((r) => (
                     <tr key={r.id}>
                       <td className="mono">{r.ref}</td>
                       <td><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: dotFor(r.authorEmail), flex: "0 0 auto" }} /><strong>{r.author}</strong></span></td>
@@ -1578,17 +1607,7 @@ export default function HrView() {
                 </tbody>
               </table>
             ) : (
-              <Note noBorder>Nothing yet — reports from the Staff Portal land here. Staff are reminded every Thursday if they haven't submitted.</Note>
-            )}
-          </div>
-          <div className="panel sm" style={{ marginTop: 14 }}>
-            <div className="panel-h"><h3>Not submitted this week</h3><span className="meta">{missingThisWeek.length} of {staff.filter((s) => s.state === "active").length} active</span></div>
-            {missingThisWeek.length ? (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: 14 }}>
-                {missingThisWeek.map((s) => <span className="acc-chip" key={s.appUserId} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: dotFor(s.email), flex: "0 0 auto" }} />{s.name} <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>· N/A</span></span>)}
-              </div>
-            ) : (
-              <Note noBorder>Everyone active has submitted this week. 🎉</Note>
+              <Note noBorder>No reports from earlier weeks yet — this week's submissions are shown above.</Note>
             )}
           </div>
         </div>

@@ -693,7 +693,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // filter "Mine" by the real signed-in user. Overrides bootstrap's lean tasks payload.
     const { data: taskRows } = await supabase
       .from("tasks")
-      .select("ref, title, sub, owner_name, due_pill, due_label, due_date, state, priority, assignees, subtasks, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
+      .select("ref, title, sub, owner_name, due_pill, due_label, due_date, state, priority, assignees, subtasks, updated_at, owner:app_users!tasks_owner_id_fkey(name, email), assigner:app_users!tasks_assigned_by_id_fkey(name)")
       .order("created_at", { ascending: false });
     if (taskRows) setMyWeek((taskRows as any[]).map((r) => {
       const owner = Array.isArray(r.owner) ? r.owner[0] : r.owner;
@@ -704,6 +704,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         assignees: (r.assignees ?? []) as { name: string; email: string }[],
         subtasks: (r.subtasks ?? []) as { text: string; done: boolean }[],
         ownerEmail: owner?.email, assignedBy: assigner?.name && assigner.name !== r.owner_name ? assigner.name : undefined,
+        updatedAt: r.updated_at ?? undefined,
       } as WeekTask;
     }));
     setReqs(data.reqs as Req[]);

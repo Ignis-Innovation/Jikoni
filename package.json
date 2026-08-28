@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.0",
+    "exceljs": "^4.4.0",
     "mammoth": "^1.12.0",
     "nodemailer": "^9.0.3",
     "pdf-parse": "^1.1.1",
