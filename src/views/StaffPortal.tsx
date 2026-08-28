@@ -215,7 +215,7 @@ function WeeklyReportModal() {
     <ModalShell open={reportOpen} onClose={closeReport} width={520}>
       <div className="mh">
         <h3>{reportEdit ? "Edit this week's report" : "Submit weekly report"}</h3>
-        <p>{track ? `${REPORT_TRACKS[track].blurb} It goes to HR. Due Friday 11:59pm.` : "A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Friday 11:59pm."}</p>
+        <p>{track ? `${REPORT_TRACKS[track].blurb} It goes to HR. Due Friday 11:50pm.` : "A quick note on your week — what you did, anything blocking you, and what's next. It goes to HR. Due Friday 11:50pm."}</p>
       </div>
       <div className="mb">
         {autoFilled && (
@@ -415,7 +415,7 @@ export default function StaffPortalView() {
       {tab === "sp-reports" && (
         <div className="hr-panel active">
           <div className="panel">
-            <div className="panel-h"><h3>This week</h3><span className="meta">Week of {fmtD(thisMonday)} · due Friday 11:59pm</span></div>
+            <div className="panel-h"><h3>This week</h3><span className="meta">Week of {fmtD(thisMonday)} · due Friday 11:50pm</span></div>
             {thisWeekReport ? (
               <>
                 <div className="recon"><span>Status</span><span className={`pill ${thisWeekReport.state === "acknowledged" ? "done" : "today"}`} style={{ textTransform: "none" }}>{thisWeekReport.state === "acknowledged" ? "Acknowledged by HR" : "Submitted"}</span></div>
@@ -434,7 +434,7 @@ export default function StaffPortalView() {
                 <Note>Submitted — thanks. You can <a href="#" onClick={(e) => { e.preventDefault(); openReportEdit(thisWeekReport); }} style={{ color: "var(--flame)", textDecoration: "none" }}>edit it</a> anytime this week; the latest version is what HR sees.</Note>
               </>
             ) : (
-              <Note noBorder>You haven't submitted this week's report yet. Use <strong>Submit weekly report</strong> — a quick note on what you did, any blockers, and next week's plan. It's due <strong>Friday 11:59pm</strong> and goes to HR.</Note>
+              <Note noBorder>You haven't submitted this week's report yet. Use <strong>Submit weekly report</strong> — a quick note on what you did, any blockers, and next week's plan. It's due <strong>Friday 11:50pm</strong> and goes to HR.</Note>
             )}
           </div>
           <div className="panel" style={{ marginTop: 18 }}>

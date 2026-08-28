@@ -5,8 +5,8 @@
 //   * ?dry=1  : compute + return the recipient list (masked count) WITHOUT sending or belling.
 //   * ?test=<email> : send ONE reminder to that address only (SMTP path check) — no bells,
 //               no broad send. For verifying the wiring without nudging real staff.
-// Wired to a Thursday-morning Vercel cron (see vercel.json) — submissions are due Friday 11:59pm,
-// so this is the day-ahead "please get your report in" nudge.
+// Wired to a Friday-morning Vercel cron (see vercel.json) — submissions are due Friday 11:50pm,
+// so this is the same-day "please get your report in" nudge.
 //
 // Requires: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
 //   SMTP_HOST/PORT/USER/PASS/FROM, CRON_SECRET, (optional) INVITE_REDIRECT_URL
