@@ -390,6 +390,46 @@
   .modal .mrow.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
   .modal .mf{padding:16px 22px;background:#FCFAF6;border-top:1px solid var(--hairline);display:flex;gap:10px;justify-content:flex-end}
 
+  /* idle auto-logout — dark "stove" card with a draining countdown ring */
+  .idle-bg{position:fixed;inset:0;z-index:190;display:flex;align-items:center;justify-content:center;padding:20px;
+    background:rgba(15,17,21,.62);backdrop-filter:blur(6px)}
+  .idle-bg.show{animation:fade .22s ease}
+  .idle-card{position:relative;width:340px;max-width:100%;border-radius:22px;overflow:hidden;text-align:center;
+    padding:30px 30px 26px;color:#fff;border:1px solid #3A414D;
+    background:radial-gradient(120% 90% at 50% -10%,#333B47 0%,var(--stove-2) 42%,var(--stove) 100%);
+    box-shadow:0 40px 80px -20px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.05);
+    animation:idlePop .3s cubic-bezier(.2,.85,.25,1)}
+  @keyframes idlePop{from{opacity:0;transform:scale(.92) translateY(14px)}to{opacity:1;transform:none}}
+  .idle-ring{position:relative;width:132px;height:132px;margin:2px auto 20px}
+  .idle-ring svg{width:132px;height:132px;transform:rotate(-90deg)}
+  .idle-ring .trk{fill:none;stroke:rgba(255,255,255,.10);stroke-width:9}
+  .idle-ring .arc{fill:none;stroke:var(--ember);stroke-width:9;stroke-linecap:round;
+    transition:stroke-dashoffset .5s linear,stroke .4s ease;
+    filter:drop-shadow(0 0 6px rgba(240,145,62,.55))}
+  .idle-ring.danger .arc{stroke:var(--red);filter:drop-shadow(0 0 9px rgba(225,83,63,.7))}
+  .idle-ring .num{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .idle-ring .num b{font-family:var(--display);font-weight:600;font-size:46px;line-height:1;letter-spacing:-1px;
+    font-variant-numeric:tabular-nums;color:#fff}
+  .idle-ring .num span{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:2px;text-transform:uppercase;
+    color:var(--ink-faint);margin-top:6px}
+  .idle-ring.danger .num b{color:#FF8A78}
+  .idle-halo{position:absolute;inset:-10px;border-radius:50%;pointer-events:none}
+  .idle-ring.danger .idle-halo{animation:idlePulse 1s ease-in-out infinite;
+    box-shadow:0 0 0 0 rgba(225,83,63,.45)}
+  @keyframes idlePulse{0%{box-shadow:0 0 0 0 rgba(225,83,63,.5)}70%{box-shadow:0 0 0 16px rgba(225,83,63,0)}100%{box-shadow:0 0 0 0 rgba(225,83,63,0)}}
+  .idle-card h3{font-family:var(--display);font-size:19px;font-weight:600;letter-spacing:-.3px}
+  .idle-card p{font-size:13px;line-height:1.5;color:rgba(231,234,238,.62);margin:7px auto 22px;max-width:250px;text-wrap:pretty}
+  .idle-actions{display:flex;flex-direction:column;gap:9px}
+  .idle-actions .btn{width:100%;justify-content:center;padding:11px 15px;font-size:13.5px;border-radius:11px}
+  .idle-actions .stay{background:var(--ember);border-color:var(--ember);color:#241a10;font-weight:700}
+  .idle-actions .stay:hover{background:#F49E52;border-color:#F49E52}
+  .idle-actions .leave{background:transparent;border-color:rgba(255,255,255,.16);color:rgba(255,255,255,.72)}
+  .idle-actions .leave:hover{border-color:rgba(255,255,255,.32);color:#fff;background:rgba(255,255,255,.04)}
+  @media (prefers-reduced-motion:reduce){
+    .idle-card,.idle-bg.show{animation:none}
+    .idle-ring .arc{transition:none}
+    .idle-ring.danger .idle-halo{animation:none}}
+
   /* staff profile card — rectangular card layout for the staff-file detail view */
   .pcard{width:min(780px,calc(100vw - 32px))}
   .pcard-h{display:flex;align-items:center;gap:16px;padding:22px 56px 22px 24px;position:relative;
