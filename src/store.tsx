@@ -712,7 +712,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNewInvoices(data.salesInvoices as NewInvoice[]);
     setProformas((data.proformas ?? []) as ProformaRow[]);
     setPerms({ ...initialPerms, ...(data.perms as Record<string, Perms>) });
-    setBootReady(true);   // me + perms are in — safe to reveal the app with the right nav
     // User Management runs off the live app_users table (no hardcoded roster) — invited
     // people appear as soon as invite_user inserts them, since sendInvite re-runs loadFromDb.
     const { data: memberRows } = await supabase
@@ -954,6 +953,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBankChanges(((bc ?? []) as any[]).map((r) => ({
       id: r.id, vendor: r.vendor_name, oldBank: r.old_bank, newBank: r.new_bank, state: r.state, callbackNote: r.callback_note, when: r.created_at,
     })));
+    // Reveal the app only now that every home-page fold is in (tasks, projects,
+    // AP invoices, audit, members) — prevents the dashboard flashing empty then
+    // popping in. A late reveal keeps the boot splash up a beat longer instead.
+    setBootReady(true);
     return true;
   }
   // self-scoped HR record (leave balances + my applications) — my_hr_summary()
@@ -1073,7 +1076,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTimeout(() => supabase.auth.signOut(), 1200);
         return;
       }
-      loadFromDb();
+      // .finally guarantees the boot splash lifts even if a mid-boot query
+      // throws, so a network hiccup can never hang the app on the splash.
+      loadFromDb().finally(() => setBootReady(true));
       loadHr();
       loadLeaveQueue();
       loadHrModule();
