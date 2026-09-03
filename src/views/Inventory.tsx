@@ -175,7 +175,7 @@ function StockModal() {
 
 // Create a stock item (SKU auto-generated) or edit an existing one's reorder policy / cost.
 function ItemModal() {
-  const { itemModal, closeItemModal, createStockItem, updateStockItem, toast, level } = useApp();
+  const { itemModal, closeItemModal, createStockItem, updateStockItem, toast, level, vendors: procVendors } = useApp();
   const canEdit = level("inventory") >= 2;
   const editing = itemModal && itemModal !== "new" ? itemModal : null;
   const [name, setName] = useState("");
@@ -186,7 +186,9 @@ function ItemModal() {
   const [reorderQty, setReorderQty] = useState("");
   const [supplier, setSupplier] = useState("");
   const [supOpen, setSupOpen] = useState(false);      // supplier typeahead dropdown
-  const [vendors, setVendors] = useState<string[]>([]);
+  // Suggest existing Procurement vendors as suppliers, straight from the store
+  // (already loaded at boot) — no on-open fetch, so the list never flashes empty.
+  const vendors = [...new Set(procVendors.map((v) => v.name).filter(Boolean))].sort();
   useEffect(() => {
     if (!itemModal) return;
     if (editing) {
@@ -194,9 +196,6 @@ function ItemModal() {
       setUnitCost(String(editing.unitCost)); setReorderLevel(String(editing.reorderLevel)); setReorderQty(""); setSupplier(""); setSupOpen(false);
     } else {
       setName(""); setCategory(""); setUnit("unit"); setUnitCost(""); setReorderLevel(""); setReorderQty(""); setSupplier(""); setSupOpen(false);
-      // suggest existing Procurement vendors as suppliers; a new name is stored free-text
-      supabase.from("vendors").select("name").then(({ data }) =>
-        setVendors([...new Set(((data ?? []) as { name: string }[]).map((v) => v.name).filter(Boolean))].sort()));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemModal]);

@@ -686,7 +686,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /* ---------- bootstrap: one round-trip, everything in view shapes ---------- */
   async function loadFromDb(): Promise<boolean> {
     const { data, error } = await supabase.rpc("bootstrap");
-    if (error) { toast("Couldn't load records", error.message); setBootReady(true); return false; }
+    if (error) { toast("Couldn't load records", error.message); return false; }
     setMe((data.me as Me) ?? null);   // who's actually signed in — drives the sidebar identity
     setMyWeek(data.tasks as WeekTask[]);
     // Richer task read: subtasks + owner/assigner, so My Week can expand mini-tasks and
@@ -953,10 +953,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBankChanges(((bc ?? []) as any[]).map((r) => ({
       id: r.id, vendor: r.vendor_name, oldBank: r.old_bank, newBank: r.new_bank, state: r.state, callbackNote: r.callback_note, when: r.created_at,
     })));
-    // Reveal the app only now that every home-page fold is in (tasks, projects,
-    // AP invoices, audit, members) — prevents the dashboard flashing empty then
-    // popping in. A late reveal keeps the boot splash up a beat longer instead.
-    setBootReady(true);
+    // Reveal is handled centrally in the [session] boot effect, once every
+    // initial loader has settled — so no module flashes empty then pops in.
     return true;
   }
   // self-scoped HR record (leave balances + my applications) — my_hr_summary()
@@ -1076,12 +1074,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTimeout(() => supabase.auth.signOut(), 1200);
         return;
       }
-      // .finally guarantees the boot splash lifts even if a mid-boot query
-      // throws, so a network hiccup can never hang the app on the splash.
-      loadFromDb().finally(() => setBootReady(true));
-      loadHr();
-      loadLeaveQueue();
-      loadHrModule();
+      // Wait for every initial loader before revealing the app, so no module
+      // (home, HR, staff portal) flashes empty then pops in. allSettled means a
+      // single failed query can never hang the app on the boot splash.
+      await Promise.allSettled([loadFromDb(), loadHr(), loadLeaveQueue(), loadHrModule()]);
+      setBootReady(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
