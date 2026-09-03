@@ -255,7 +255,7 @@ function NoAccess() {
 // out. During the idle phase any activity resets it silently; once the overlay
 // is up only a deliberate action (button / key / click) resets it, so passive
 // mouse drift doesn't flicker the dialog.
-const IDLE_BEFORE_COUNTDOWN = 60; // seconds of no interaction before the countdown starts
+const IDLE_BEFORE_COUNTDOWN = 180; // seconds of no interaction before the countdown starts (3 min)
 const COUNTDOWN = 50;             // countdown length; sign-out at zero
 const DANGER_AT = 10;             // ring turns red inside this many seconds
 const RING = 54;                  // ring radius (px)
@@ -320,7 +320,7 @@ function IdleLogout() {
           <div className="num"><b>{remaining}</b><span>seconds</span></div>
         </div>
         <h3>Still there?</h3>
-        <p>You've been idle for a minute. We'll sign you out to keep your account secure.</p>
+        <p>You've been idle for a few minutes. We'll sign you out to keep your account secure.</p>
         <div className="idle-actions">
           <button className="btn stay" onClick={reset}>I'm still here</button>
           <button className="btn leave" onClick={() => { firedRef.current = true; signOutRef.current(); }}>Sign out now</button>
