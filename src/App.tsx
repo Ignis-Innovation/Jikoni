@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AppProvider, useApp } from "./store";
 import { flagColors, canManageUsers, moduleLevel, gatedViews } from "./data";
 import { moduleLabels, subnavs } from "./nav";
@@ -250,6 +250,47 @@ function NoAccess() {
   );
 }
 
+// Auto-logout after inactivity. Any interaction resets the timer; a live
+// countdown overlay appears for the final WARN_AT seconds before sign-out.
+const IDLE_LIMIT = 50; // seconds of no interaction before auto-logout
+const WARN_AT = 15;    // show the countdown overlay when this many seconds remain
+function IdleLogout() {
+  const { signOut } = useApp();
+  const signOutRef = useRef(signOut);
+  signOutRef.current = signOut;
+  const deadline = useRef(Date.now() + IDLE_LIMIT * 1000);
+  const firedRef = useRef(false);
+  const [remaining, setRemaining] = useState(IDLE_LIMIT);
+
+  useEffect(() => {
+    const bump = () => { deadline.current = Date.now() + IDLE_LIMIT * 1000; };
+    const evts = ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "wheel"];
+    evts.forEach((e) => window.addEventListener(e, bump, { passive: true }));
+    const iv = setInterval(() => {
+      const left = Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000));
+      setRemaining((prev) => (prev === left ? prev : left));
+      if (left <= 0 && !firedRef.current) { firedRef.current = true; signOutRef.current(); }
+    }, 500);
+    return () => { evts.forEach((e) => window.removeEventListener(e, bump)); clearInterval(iv); };
+  }, []);
+
+  if (remaining > WARN_AT) return null;
+  return (
+    <div className="modal-bg show" style={{ zIndex: 190 }}>
+      <div className="modal" style={{ width: 380 }}>
+        <div className="mh"><h3>Are you still there?</h3><p>You'll be signed out due to inactivity. Move the mouse or press a key to stay.</p></div>
+        <div className="mb" style={{ alignItems: "center", gap: 4 }}>
+          <div style={{ fontFamily: "var(--display)", fontSize: 52, fontWeight: 700, lineHeight: 1, color: "var(--flame)" }}>{remaining}</div>
+          <div className="meta">second{remaining === 1 ? "" : "s"} remaining</div>
+        </div>
+        <div className="mf" style={{ justifyContent: "center" }}>
+          <button className="btn primary" onClick={() => { deadline.current = Date.now() + IDLE_LIMIT * 1000; setRemaining(IDLE_LIMIT); }}>Stay signed in</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
   const { view, mainRef, me, perms } = useApp();
   // Block direct access (typed URL / stale nav) to any gated module the user has no
@@ -296,6 +337,7 @@ function Shell() {
       <PoAmendModal />
       <BankChangeModal />
       <Toasts />
+      <IdleLogout />
     </>
   );
 }
