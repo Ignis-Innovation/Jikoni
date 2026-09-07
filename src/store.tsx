@@ -949,21 +949,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // everyone's leave applications, for the HR approvals queue (RLS: read for authenticated)
   async function loadLeaveQueue() {
-    const { data, error } = await supabase
-      .from("leave_applications")
-      .select("ref, kind, from_date, to_date, days, reason, state, doc_path, applicant:app_users!leave_applications_app_user_id_fkey(name)")
-      .order("created_at", { ascending: false })
-      .limit(30);
+    // PERF: the queue + balances are independent — fetch them concurrently.
+    const [{ data, error }, { data: bals, error: balErr }] = await Promise.all([
+      supabase
+        .from("leave_applications")
+        .select("ref, kind, from_date, to_date, days, reason, state, doc_path, applicant:app_users!leave_applications_app_user_id_fkey(name)")
+        .order("created_at", { ascending: false })
+        .limit(30),
+      supabase
+        .from("leave_balances")
+        .select("entitled, used, reserved, app_users(name)")
+        .eq("kind", "annual")
+        .eq("year", new Date().getFullYear()),
+    ]);
     if (error) { toast("Couldn't load leave queue", error.message); return; }
     setHrLeaveQueue((data as any[]).map((r) => ({
       id: r.ref, who: r.applicant?.name ?? "—", kind: r.kind, from: r.from_date, to: r.to_date,
       days: Number(r.days), reason: r.reason, state: r.state, docPath: r.doc_path ?? null,
     })));
-    const { data: bals, error: balErr } = await supabase
-      .from("leave_balances")
-      .select("entitled, used, reserved, app_users(name)")
-      .eq("kind", "annual")
-      .eq("year", new Date().getFullYear());
     if (balErr) { toast("Couldn't load balances", balErr.message); return; }
     setHrBalances((bals as any[])
       .map((b) => ({ who: b.app_users?.name ?? "—", entitled: Number(b.entitled), used: Number(b.used), reserved: Number(b.reserved) }))
@@ -1787,8 +1790,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   async function removePettyInvoice(ref: string, path: string) {
     const { error } = await supabase.rpc("remove_petty_cash_invoice", { p_ref: ref });
     if (error) { toast("Couldn't remove invoice", error.message); return; }
-    await supabase.storage.from("uploads").remove([path]);
-    await loadFromDb();
+    // PERF: object cleanup + reload are independent — run them concurrently.
+    await Promise.all([supabase.storage.from("uploads").remove([path]), loadFromDb()]);
     toast(`${ref} — invoice removed`, "The attachment was deleted");
   }
   async function decidePettyRequest(ref: string, approve: boolean, note?: string) {
