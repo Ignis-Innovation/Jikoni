@@ -689,7 +689,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /* ---------- bootstrap: one round-trip, everything in view shapes ---------- */
-  async function loadFromDb(): Promise<boolean> {
+  async function loadFromDb(onCore?: () => void): Promise<boolean> {
     const { data, error } = await supabase.rpc("bootstrap");
     if (error) { toast("Couldn't load records", error.message); return false; }
     setMe((data.me as Me) ?? null);   // who's actually signed in — drives the sidebar identity
@@ -736,6 +736,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setExtraProjects(data.extraProjects as { name: string; funder: string }[]);
     setEngToProject(data.engToProject as Record<string, string>);
     setProjectToEng(data.projectToEng as Record<string, string>);
+    // Core (identity + perms + tasks + projects) is applied — the shell and Home
+    // can paint now. Callers that pass onCore reveal here instead of waiting for
+    // the secondary folds below, cutting a full round-trip off first paint.
+    onCore?.();
     // PERF: parallel folds — inventory enrichments bootstrap doesn't carry (dispatch
     // receipts, asset quantity, asset assignments), fetched concurrently by ref.
     const inv = data.inventory as InventoryData;
@@ -1049,21 +1053,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!session) { setBootReady(false); return; }
     (async () => {
-      // sweep due suspensions, then gate: an exited account is signed out
-      // before any module data loads (their exit's 24h grace has passed)
-      const { data: acc } = await supabase.rpc("my_access_state");
+      // PERF: every login round-trip that used to run one-after-another now runs
+      // concurrently. The exit gate (my_access_state), the core dataset (bootstrap)
+      // and the HR loaders all fire at once. Reveal waits on only two things —
+      // the exit check AND bootstrap's *core* (identity+perms+tasks+projects) — so
+      // first paint costs one round-trip, not four. The secondary folds and HR
+      // data land in the background. An exited account is still gated *before*
+      // reveal, so it never sees the app.
+      const bg = () => {};
+      const accP = supabase.rpc("my_access_state");
+      loadHr().catch(bg); loadLeaveQueue().catch(bg); loadHrModule().catch(bg);
+      let coreDone!: () => void;
+      const core = new Promise<void>((r) => { coreDone = r; });
+      loadFromDb(coreDone).catch(bg);            // folds continue after core resolves
+      const [{ data: acc }] = await Promise.all([accP, core]);
       if (acc?.state === "exited") {
+        setBootReady(false);
         toast("This account is closed", "Your exit was finalised — contact HR if you think this is wrong");
         setTimeout(() => supabase.auth.signOut(), 1200);
         return;
       }
-      // Reveal as soon as the home dataset (loadFromDb) is ready — that's the
-      // landing view. The HR-only loaders are kicked off concurrently but do NOT
-      // block reveal, so sign-in is fast for everyone; their data lands in the
-      // background before the user navigates to HR/Staff Portal. allSettled means
-      // a single failed query can never hang the app on the boot splash.
-      const bg = () => {}; loadHr().catch(bg); loadLeaveQueue().catch(bg); loadHrModule().catch(bg);
-      await Promise.allSettled([loadFromDb()]);
       setBootReady(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1243,25 +1252,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const r = data as Req & { routing: { label: string; who: string } };
     if (!v.asDraft && budgetLines[v.code]) budgetLines[v.code].u += v.amt; // keep the modal preview in step with the commitment
     setReqOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(r.id + (v.asDraft ? " saved as draft" : " raised · " + r.routing.label), v.asDraft ? "Submit it when you're ready" : cap(r.routing.who));
   }
   async function submitReqFinal(id: string) {
     const { data, error } = await supabase.rpc("submit_requisition_final", { p_ref: id });
     if (error) { toast("Couldn't submit", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(id + " submitted", data.status === "approved" ? "Auto-approved — ready to raise a PO" : "Routed for approval");
   }
   async function withdrawReq(id: string) {
     const { data, error } = await supabase.rpc("withdraw_requisition", { p_ref: id });
     if (error) { toast("Withdraw failed", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(id + (data.status === "discarded" ? " discarded" : " withdrawn"), data.status === "discarded" ? "Draft removed" : "Back to draft — budget released");
   }
   async function createCostCentre(name: string, budget: number) {
     const { data, error } = await supabase.rpc("upsert_cost_centre", { p_name: name, p_budget: budget });
     if (error) { toast("Cost centre not saved", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(data.code + " saved", "Available as coding on requisitions and budgets");
   }
   async function approvePR(id: string) {
@@ -1283,7 +1292,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { toast("PO blocked", error.message); return; }
     const po = data as NewPO;
     setPoFor(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(po.id + " issued to " + vendor, "Draft PO created — awaiting delivery & goods-received note");
   }
   // Upload a file to the shared 'uploads' bucket and return its public URL/path.
@@ -1307,13 +1316,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Vendor not added", error.message); return; }
     setVendorOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(data.name + " onboarded", "Screen for sanctions before a PO can be awarded");
   }
   async function screenVendor(name: string, result: "cleared" | "flagged", detail: string) {
     const { data, error } = await supabase.rpc("screen_vendor", { p_vendor_name: name, p_result: result, p_detail: detail || null });
     if (error) { toast("Screening failed", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${name} — ${result}`, result === "cleared" ? "Cleared for award" : "Flagged — cannot be awarded a PO");
   }
 
@@ -1326,7 +1335,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("GRN blocked", error.message); return; }
     setGrnFor(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${data.id} recorded`, `${poRef} — ${data.received} of ${data.ordered} received${data.over ? " · over-delivery flagged" : ""}`);
   }
 
@@ -1338,26 +1347,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Invoice not captured", error.message); return; }
     setInvoiceFor(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${data.id} captured`, data.match === "matched" ? "Three-way match clean — approve for payment" : "Held as an exception — check the match");
   }
   async function approveInvoice(invRef: string) {
     const { error } = await supabase.rpc("approve_ap_invoice", { p_inv_ref: invRef });
     if (error) { toast("Approval blocked", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${invRef} approved for payment`, "A different person from whoever captured it");
   }
   async function payInvoice(invRef: string, method: string) {
     const { data, error } = await supabase.rpc("pay_invoice", { p_inv_ref: invRef, p_method: method });
     if (error) { toast("Payment blocked", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${data.id} paid`, `${invRef} settled · net ${Math.round(data.net).toLocaleString()} · journal ${data.journal}`);
   }
   // One-click pay — marks a supplier invoice paid without the separate approve step.
   async function markInvoicePaid(invRef: string, method = "bank") {
     const { data, error } = await supabase.rpc("mark_invoice_paid", { p_inv_ref: invRef, p_method: method });
     if (error) { toast("Payment blocked", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${data.id} paid`, `${invRef} settled · net ${Math.round(data.net).toLocaleString()} · journal ${data.journal}`);
   }
 
@@ -1368,13 +1377,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Amendment failed", error.message); return; }
     setPoAmendFor(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${poRef} amended`, data.reapproval ? `+${data.deltaPct}% — routed for re-approval` : "Within tolerance — applied");
   }
   async function approvePoAmendment(poRef: string) {
     const { error } = await supabase.rpc("approve_po_amendment", { p_po_ref: poRef });
     if (error) { toast("Approval failed", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${poRef} amendment approved`, "Cleared to receive and invoice");
   }
 
@@ -1383,13 +1392,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const { error } = await supabase.rpc("request_vendor_bank_change", { p_vendor_name: vendor, p_new_bank: newBank });
     if (error) { toast("Change not requested", error.message); return; }
     setBankChangeFor(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast("Bank change pending", "Verify by callback before it takes effect — the old details stay in use until then");
   }
   async function approveBankChange(id: string, callbackNote: string) {
     const { error } = await supabase.rpc("approve_vendor_bank_change", { p_change_id: id, p_callback_note: callbackNote });
     if (error) { toast("Verification failed", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast("Bank details verified", "New account is now on file");
   }
 
@@ -1406,7 +1415,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const { data, error } = await supabase.rpc("update_my_profile", { p_name: v.name, p_role_title: v.roleTitle, p_color: v.color });
     if (error) { toast("Profile not saved", error.message); return; }
     setMe(data as Me);
-    await loadFromDb();   // refresh the roster so avatars/names update everywhere
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload   // refresh the roster so avatars/names update everywhere
     toast("Profile updated", "Your details are saved");
   }
   // Change the signed-in user's password. Returns an error string, or null on success.
@@ -1453,14 +1462,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const si = data as NewInvoice;
     setNewInvoices((prev) => [si, ...prev]);
     setInvOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(si.id + " issued to " + cust, "Filed to eTIMS · total KES " + si.tot.toLocaleString());
   }
   async function recordReceipt(invRef: string, amount: number, method: string) {
     const { data, error } = await supabase.rpc("record_ar_receipt", { p_inv_ref: invRef, p_amount: amount, p_method: method });
     if (error) { toast("Receipt not recorded", error.message); return; }
     setReceiptFor(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${invRef} settled`, `Collection posted · journal ${data.journal}`);
   }
 
@@ -1473,19 +1482,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Proforma not issued", error.message); return; }
     setPfOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${(data as any)?.ref ?? "Proforma"} issued to ${v.customer}`, "A priced offer — nothing posts to the ledger until it's accepted");
   }
   async function acceptProforma(ref: string) {
     const { data, error } = await supabase.rpc("accept_proforma", { p_ref: ref });
     if (error) { toast("Couldn't accept", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} accepted`, `Converted to tax invoice ${(data as any)?.invoice ?? ""} · filed to eTIMS · now a receivable to collect`);
   }
   async function declineProforma(ref: string, reason: string) {
     const { error } = await supabase.rpc("decline_proforma", { p_ref: ref, p_reason: reason || null });
     if (error) { toast("Couldn't record decline", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} declined`, "Recorded — nothing posts to the ledger; the reason feeds the conversion rate");
   }
 
@@ -1601,7 +1610,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       } catch { /* email is best-effort; the in-app notification still lands for staff */ }
     }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast("Field activity assigned", `${v.assignee} · ${v.projectName}${v.email ? " · emailed" : ""}`);
   }
   const setProjectState = (projectId: string, state: string) =>
@@ -1656,7 +1665,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const { error } = await supabase.rpc("invite_user", { p_name: name, p_email: email, p_role_key: role });
     if (error) { toast("Invite failed", error.message); return; }
     setInviteOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     try {
       const res = await fetch("/api/invite", {
         method: "POST",
@@ -1758,7 +1767,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       `${me?.name ?? "A teammate"} requested petty cash: ${v.item} (${amt}).\n\nOpen Jikoni Tool → Finance → Petty Cash to approve or reject it.`,
       `<p><strong>${me?.name ?? "A teammate"}</strong> requested petty cash: <strong>${v.item}</strong> (${amt}).</p><p>Open <strong>Jikoni Tool → Finance → Petty Cash</strong> to approve or reject it.</p>`,
     )));
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     if (d?.autoApproved) toast(`${ref} approved`, "Auto-approved — Super Admin requests don't need a second approver");
     else toast(`${ref} submitted`, d?.approverRole === "super" ? "Sent to a Super Admin to approve — you'll see the decision here" : "Sent to HR to approve — you'll see the decision here");
   }
@@ -1768,13 +1777,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Couldn't update request", error.message); return; }
     setPettyOpen(false); setPettyEdit(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} updated`, "Still pending — the approver sees the new details");
   }
   async function deletePettyRequest(ref: string) {
     const { error } = await supabase.rpc("delete_petty_cash_request", { p_ref: ref });
     if (error) { toast("Couldn't withdraw request", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} withdrawn`, "Removed from the approval queue");
   }
   // Attach an invoice/receipt to an approved petty-cash request (requester or approver).
@@ -1783,7 +1792,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!path) return;
     const { error } = await supabase.rpc("attach_petty_cash_invoice", { p_ref: ref, p_path: path });
     if (error) { toast("Couldn't attach invoice", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} — invoice attached`, `${file.name} is now on the request`);
   }
   // Remove the attached invoice (requester or approver); best-effort drop of the object too.
@@ -1808,7 +1817,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         `<p>Hi ${d.requester ?? ""},</p><p>Your petty cash request for <strong>${d.item}</strong> (${amt}) has been <strong>${word}</strong>${note ? ` — ${note}` : ""}.</p><p>Open <strong>Jikoni Tool → Staff Portal</strong> to see the details.</p>`,
       );
     }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} ${approve ? "approved" : "rejected"}`,
       approve ? "The requester is emailed and can see it approved in their portal" : "The requester is emailed and notified");
   }
@@ -1822,19 +1831,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Report not submitted", error.message); return; }
     setReportOpen(false); setReportEdit(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${(data as any)?.ref ?? "Report"} submitted`, "Sent to HR — thanks for the update");
   }
   async function setReportTrack(email: string, track: string) {
     const { error } = await supabase.rpc("set_report_track", { p_email: email, p_track: track || "" });
     if (error) { toast("Couldn't set report track", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast("Report track updated", track ? `Now uses the ${track} format` : "Cleared — uses the free-text form");
   }
   async function acknowledgeWeeklyReport(ref: string) {
     const { error } = await supabase.rpc("acknowledge_weekly_report", { p_ref: ref });
     if (error) { toast("Couldn't acknowledge", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} acknowledged`, "Marked as reviewed");
   }
 
@@ -2151,7 +2160,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       } catch { /* email is best-effort; the in-app notification still lands */ }
     }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${data.id} created`, `${name} · ${owner}${data.taggedEmail ? " · teammate tagged" : ""}${file ? " · document attached" : ""}`);
   }
   async function logEngagementNote(ref: string, v: { channel: string; who: string; note: string; stageTo: string; file?: File | null }) {
@@ -2162,13 +2171,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { toast("Update not saved", error.message); return; }
     if (v.file) await uploadEngagementDoc(ref, v.file, v.who);
     setEngUpdateOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} updated`, `Now at ${(data as any)?.stage ?? "—"}${v.file ? " · document attached" : ""}`);
   }
   async function setEngagementPartners(ref: string, partnerIds: string[]) {
     const { error } = await supabase.rpc("set_engagement_partners", { p_eng_ref: ref, p_partner_ids: partnerIds });
     if (error) { toast("Partners not linked", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} — partners linked`, partnerIds.length ? `${partnerIds.length} linked` : "All links cleared");
   }
   async function createPartner(v: { name: string; type: string; country: string; owner: string; status: string; contactName: string; email: string; phone: string }) {
@@ -2178,7 +2187,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Partner not added", error.message); return; }
     setPartnerOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(v.name + " added to the registry", `${v.type} · ${v.country} · ${v.owner}`);
   }
   async function createOpportunity(name: string, type: string, deadline: string, linkedTo: string, status: string) {
@@ -2187,7 +2196,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Opportunity not created", error.message); return; }
     setOppOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(name + " added to the map", `${type} · ${status}`);
   }
 
@@ -2215,7 +2224,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   async function markObligationFiled(obligation: string) {
     const { data, error } = await supabase.rpc("mark_obligation_filed", { p_obligation: obligation });
     if (error) { toast("Couldn't mark filed", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${obligation} filed`, `Next due ${(data as any)?.nextDue ?? "—"}`);
   }
   async function createRisk(v: { risk: string; category: string; likelihood: number; impact: number; mitigation: string; owner: string }) {
@@ -2225,7 +2234,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Risk not logged", error.message); return; }
     setRiskOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${(data as any)?.ref ?? "Risk"} logged`, `${v.risk} · severity ${v.likelihood * v.impact}`);
   }
   async function addPolicy(v: { code: string; title: string; effectiveFrom: string; file?: File | null }) {
@@ -2236,7 +2245,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Policy not saved", error.message); return; }
     setPolicyOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${v.code} ${(data as any)?.version ?? ""} saved`, `${v.title}${v.file ? " · document attached" : ""}`);
   }
   async function addCompanyDocument(v: { name: string; kind: string; expiresOn: string; file?: File | null }) {
@@ -2247,7 +2256,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Document not saved", error.message); return; }
     setDocOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${v.name} saved`, v.expiresOn ? `Expiry ${v.expiresOn}${v.file ? " · attached" : ""}` : (v.file ? "Document attached" : "On file"));
   }
   async function addContract(v: { counterparty: string; kind: string; title: string; detail: string; expiresOn: string; file?: File | null }) {
@@ -2259,7 +2268,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Contract not saved", error.message); return; }
     setContractOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${v.title} registered`, `${v.counterparty} · ${v.kind}${v.file ? " · document attached" : ""}`);
   }
 
@@ -2270,7 +2279,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Receipt failed", error.message); return; }
     setStockModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${qty} × ${sku} received into ${location}`, "On hand now " + data.onHand + " — movement posted to the ledger");
   }
   async function issueStock(sku: string, location: string, qty: number, reason: string) {
@@ -2279,7 +2288,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Issue failed", error.message); return; }
     setStockModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${qty} × ${sku} issued from ${location}`,
       data.autoRequisition
         ? `Below reorder level — ${data.autoRequisition} auto-raised into Procurement`
@@ -2292,27 +2301,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Dispatch failed", error.message); return; }
     setStockModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(data.id + " dispatched to " + destination, project ? "Linked to " + project + " — stock issued from the central store" : "Stock issued from the central store");
   }
   async function transferStock(sku: string, from: string, to: string, qty: number) {
     const { error } = await supabase.rpc("transfer_stock", { p_sku: sku, p_from: from, p_to: to, p_qty: qty });
     if (error) { toast("Transfer failed", error.message); return; }
     setStockModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${qty} × ${sku} transferred`, `${from} → ${to} — two movements posted to the ledger`);
   }
   async function adjustStock(sku: string, location: string, newQty: number, reason: string) {
     const { data, error } = await supabase.rpc("adjust_stock", { p_sku: sku, p_location: location, p_new_qty: newQty, p_reason: reason || null });
     if (error) { toast("Adjustment failed", error.message); return; }
     setStockModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${sku} adjusted to ${newQty} in ${location}`, data.delta === 0 ? "No change" : `${data.delta > 0 ? "+" : ""}${data.delta} correction posted to the ledger`);
   }
   async function setDispatchState(ref: string, state: "delivered" | "cancelled") {
     const { error } = await supabase.rpc("set_dispatch_state", { p_ref: ref, p_state: state });
     if (error) { toast("Couldn't update dispatch", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} ${state}`, state === "delivered" ? "Marked received at the destination" : "Dispatch cancelled");
   }
   // Upload a proof-of-delivery receipt for a dispatch → Storage, then record the path.
@@ -2323,7 +2332,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (up.error) { toast("Upload failed", up.error.message); return; }
     const { error } = await supabase.rpc("attach_dispatch_receipt", { p_ref: ref, p_path: path });
     if (error) { toast("Couldn't save receipt", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`Receipt saved for ${ref}`, "Proof of delivery attached to the dispatch");
   }
   // Public URL for a stored receipt path (bucket is public-read).
@@ -2383,7 +2392,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Item not created", error.message); return; }
     setItemModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${v.name} added to the registry`, `${data.sku} — receive stock to open its balance`);
   }
   async function updateStockItem(sku: string, reorderLevel: number, reorderQty: number, unitCost: number) {
@@ -2392,7 +2401,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Item not updated", error.message); return; }
     setItemModal(null);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(sku + " updated", "Reorder policy and cost saved");
   }
 
@@ -2403,25 +2412,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) { toast("Asset not registered", error.message); return; }
     setAssetOpen(false);
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(data.id + " registered", `${v.name} — ${v.quantity} on the register`);
   }
   async function assignAsset(assetRef: string, employee: string, qty: number) {
     const { data, error } = await supabase.rpc("assign_asset", { p_asset_ref: assetRef, p_employee: employee, p_qty: qty });
     if (error) { toast("Couldn't assign asset", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${data.asset} assigned`, `${data.qty} to ${data.employee}`);
   }
   async function disposeAsset(ref: string, reason: string) {
     const { error } = await supabase.rpc("dispose_asset", { p_ref: ref, p_reason: reason || null });
     if (error) { toast("Couldn't dispose asset", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(ref + " disposed", "Removed from the active register");
   }
   async function runDepreciation(period: string) {
     const { data, error } = await supabase.rpc("run_depreciation", { p_period: period });
     if (error) { toast("Depreciation run failed", error.message); return; }
-    await loadFromDb();
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`Depreciation posted for ${period}`,
       data.assets ? `${data.assets} asset${data.assets === 1 ? "" : "s"} · KES ${Number(data.total).toLocaleString()} to the GL` : "Nothing to post — already run or fully depreciated");
   }

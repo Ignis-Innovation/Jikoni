@@ -29,7 +29,6 @@ function LoginShell({ children }: { children: React.ReactNode }) {
       <LoginBg />
       <div className="login-stage">
         <div className="login-card">{children}</div>
-        <div className="login-foot">Protected workspace · Ignis Innovation</div>
       </div>
     </>
   );
