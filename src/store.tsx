@@ -11,7 +11,7 @@ import {
   Entity, WeekTask, initialMyWeek, initialPerms, Perms, roleTemplates, budgetLines,
   initialProjectDetails, ProjectDetail, initialEngToProject, initialProjectToEng,
   FieldActivity, AppNotification,
-  kes, isHiddenMember,
+  kes, isHiddenMember, isGlobalEditor, ALL_FULL_PERMS, ProjectMember,
 } from "./data";
 
 // The Home-page "Switch to HR / Switch to Employee" toggle is now driven by role, not a
@@ -372,6 +372,11 @@ interface AppApi {
   closeFieldActivity: () => void;
   createFieldActivity: (v: { projectName: string; assignee: string; phone: string; email: string; date: string; note: string }) => void;
   setProjectState: (projectId: string, state: string) => void;
+  addBudgetItem: (projectId: string, name: string, description: string, amount: number) => void;
+  updateBudgetItem: (itemId: string, name: string, description: string, amount: number) => void;
+  removeBudgetItem: (itemId: string) => void;
+  listProjectMembers: (projectId: string) => Promise<ProjectMember[]>;
+  setProjectMemberRole: (projectId: string, email: string, role: string) => Promise<ProjectMember[] | null>;
   addProjectDocument: (projectId: string, file: File) => void;
   projectDocUrl: (path: string, downloadName?: string) => string;
 
@@ -731,24 +736,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setExtraProjects(data.extraProjects as { name: string; funder: string }[]);
     setEngToProject(data.engToProject as Record<string, string>);
     setProjectToEng(data.projectToEng as Record<string, string>);
-    // Dispatch receipts live on a column bootstrap doesn't return — fold them in by ref.
+    // PERF: parallel folds — inventory enrichments bootstrap doesn't carry (dispatch
+    // receipts, asset quantity, asset assignments), fetched concurrently by ref.
     const inv = data.inventory as InventoryData;
-    const { data: rc } = await supabase.from("dispatches").select("ref, receipt_path");
+    const [{ data: rc }, { data: aq }, { data: asn }] = await Promise.all([
+      supabase.from("dispatches").select("ref, receipt_path"),
+      supabase.from("assets").select("ref, quantity"),
+      supabase.from("asset_assignments").select("ref, asset_ref, employee, qty, assigned_at").order("assigned_at", { ascending: false }),
+    ]);
     if (rc) {
       const byRef = new Map((rc as { ref: string; receipt_path: string | null }[]).map((r) => [r.ref, r.receipt_path]));
       inv.dispatches = inv.dispatches.map((d) => ({ ...d, receipt: byRef.get(d.id) ?? null }));
     }
-    // Asset quantity and employee assignments live on columns/tables bootstrap
-    // doesn't return — fold them in by ref (same approach as dispatch receipts).
-    const { data: aq } = await supabase.from("assets").select("ref, quantity");
     if (aq) {
       const qtyByRef = new Map((aq as { ref: string; quantity: number }[]).map((r) => [r.ref, r.quantity]));
       inv.assets = inv.assets.map((a) => ({ ...a, quantity: qtyByRef.get(a.id) ?? 1 }));
     }
-    const { data: asn } = await supabase
-      .from("asset_assignments")
-      .select("ref, asset_ref, employee, qty, assigned_at")
-      .order("assigned_at", { ascending: false });
     inv.assetAssignments = ((asn ?? []) as { ref: string; asset_ref: string; employee: string; qty: number; assigned_at: string }[])
       .map((r) => ({ ref: r.ref, assetRef: r.asset_ref, assetName: inv.assets.find((a) => a.id === r.asset_ref)?.name ?? r.asset_ref, employee: r.employee, qty: r.qty, assignedAt: r.assigned_at }));
     setInventory(inv);
@@ -856,28 +859,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     for (const [k, v] of Object.entries(blData)) { budgetLines[k] = { b: v.b, u: v.u }; }
     setCostCentres(Object.entries(blData).map(([code, v]) => ({ code, budget: v.b, used: v.u })));
     // ---- Procurement + Finance spine read models (bootstrap doesn't carry these) ----
-    const { data: vn } = await supabase
-      .from("vendors")
-      .select("id, name, category, country, tax_status, screen_status, rating, open_pos, state, bank")
-      .order("created_at", { ascending: false });
+    // PERF: parallel folds — the whole spine loads concurrently in one wait instead
+    // of ~11 serial round-trips (the main sign-in bottleneck).
+    const reqStatus: Record<string, Req["status"]> = { draft: "draft", submitted: "await", md_review: "md", approved: "approved", converted: "po", rejected: "rejected" };
+    const myEmail = (data.me as any)?.email ?? null;
+    const [
+      { data: vn }, { data: po }, { data: rqs }, { data: gr }, { data: ap },
+      { data: meRow }, { data: pay }, { data: je }, { data: bal }, { data: cfg },
+      { data: au }, { data: bc },
+    ] = await Promise.all([
+      supabase.from("vendors").select("id, name, category, country, tax_status, screen_status, rating, open_pos, state, bank").order("created_at", { ascending: false }),
+      supabase.from("purchase_orders").select("id, ref, vendor_name, amount, delivery, state, needs_reapproval, qty, unit_price, goods_received_notes(qty_received, state)").order("created_at", { ascending: false }),
+      supabase.from("requisitions").select("ref, item, amount, budget_code, budget_chip, budget_chip_txt, state, qty, unit, unit_price, project_code, justification, created_at, app_users(name)").order("created_at", { ascending: false }),
+      supabase.from("goods_received_notes").select("ref, coverage, pct, qty_received, over_delivery, note, created_at, purchase_orders(ref, vendor_name)").order("created_at", { ascending: false }),
+      supabase.from("invoices_ap").select("ref, amount, state, match_note, created_at, invoice_number, invoice_date, currency, wht_amount, captured_by, purchase_orders(ref, vendor_name)").order("created_at", { ascending: false }),
+      myEmail ? supabase.from("app_users").select("id").eq("email", myEmail).maybeSingle() : Promise.resolve({ data: null }),
+      supabase.from("payments").select("ref, amount, method, journal_ref, created_at, invoices_ap(ref)").order("created_at", { ascending: false }),
+      supabase.from("journal_entries").select("ref, memo, source_type, created_at, journal_lines(account_code, debit, credit)").order("created_at", { ascending: false }).limit(40),
+      supabase.rpc("account_balances"),
+      supabase.from("app_config").select("key, value"),
+      supabase.from("audit_log").select("id, actor_email, action, record_type, record_ref, detail, created_at").order("created_at", { ascending: false }).limit(200),
+      supabase.from("vendor_bank_changes").select("id, vendor_name, old_bank, new_bank, state, callback_note, created_at").order("created_at", { ascending: false }),
+    ]);
+    const myId = (meRow as any)?.id ?? null;
     setVendors(((vn ?? []) as any[]).map((r) => ({
       id: r.id, name: r.name, category: r.category, country: r.country, taxStatus: r.tax_status,
       screenStatus: r.screen_status, rating: r.rating, openPos: r.open_pos, state: r.state, bank: r.bank,
     })));
-    const { data: po } = await supabase
-      .from("purchase_orders")
-      .select("id, ref, vendor_name, amount, delivery, state, needs_reapproval, qty, unit_price, goods_received_notes(qty_received, state)")
-      .order("created_at", { ascending: false });
     setPoRows(((po ?? []) as any[]).map((r) => {
       const recv = ((r.goods_received_notes ?? []) as any[]).filter((g) => g.state === "received").reduce((s, g) => s + Number(g.qty_received || 0), 0);
       return { id: r.ref, vendor: r.vendor_name, amt: Number(r.amount), delivery: r.delivery, state: r.state, reapproval: !!r.needs_reapproval, qty: Number(r.qty ?? 1), unitPrice: Number(r.unit_price ?? r.amount), received: recv };
     }));
-    // Richer requisitions read model (draft state + the full form's fields) — overrides bootstrap's reqs.
-    const reqStatus: Record<string, Req["status"]> = { draft: "draft", submitted: "await", md_review: "md", approved: "approved", converted: "po", rejected: "rejected" };
-    const { data: rqs } = await supabase
-      .from("requisitions")
-      .select("ref, item, amount, budget_code, budget_chip, budget_chip_txt, state, qty, unit, unit_price, project_code, justification, created_at, app_users(name)")
-      .order("created_at", { ascending: false });
     setReqs(((rqs ?? []) as any[]).map((r) => {
       const rel = r.app_users; const who = Array.isArray(rel) ? rel[0]?.name : rel?.name;
       return {
@@ -890,21 +902,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         raisedBy: who ?? "—", date: r.created_at,
       };
     }));
-    const { data: gr } = await supabase
-      .from("goods_received_notes")
-      .select("ref, coverage, pct, qty_received, over_delivery, note, created_at, purchase_orders(ref, vendor_name)")
-      .order("created_at", { ascending: false });
     setGrns(((gr ?? []) as any[]).map((r) => {
       const rel = r.purchase_orders; const po = Array.isArray(rel) ? rel[0] : rel;
       return { id: r.ref, po: po?.ref ?? "—", vendor: po?.vendor_name ?? "—", coverage: r.coverage, pct: r.pct, qtyReceived: Number(r.qty_received ?? 0), over: !!r.over_delivery, note: r.note, when: r.created_at };
     }));
-    const { data: ap } = await supabase
-      .from("invoices_ap")
-      .select("ref, amount, state, match_note, created_at, invoice_number, invoice_date, currency, wht_amount, captured_by, purchase_orders(ref, vendor_name)")
-      .order("created_at", { ascending: false });
-    const myEmail = (data.me as any)?.email ?? null;
-    const { data: meRow } = myEmail ? await supabase.from("app_users").select("id").eq("email", myEmail).maybeSingle() : { data: null };
-    const myId = (meRow as any)?.id ?? null;
     setApInvoices(((ap ?? []) as any[]).map((r) => {
       const rel = r.purchase_orders; const po = Array.isArray(rel) ? rel[0] : rel;
       return {
@@ -913,43 +914,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         capturedByMe: myId != null && r.captured_by === myId,
       };
     }));
-    const { data: pay } = await supabase
-      .from("payments")
-      .select("ref, amount, method, journal_ref, created_at, invoices_ap(ref)")
-      .order("created_at", { ascending: false });
     setPayments(((pay ?? []) as any[]).map((r) => {
       const rel = r.invoices_ap; const inv = Array.isArray(rel) ? rel[0] : rel;
       return { ref: r.ref, invoice: inv?.ref ?? "—", amount: Number(r.amount), method: r.method, journalRef: r.journal_ref, when: r.created_at };
     }));
-    const { data: je } = await supabase
-      .from("journal_entries")
-      .select("ref, memo, source_type, created_at, journal_lines(account_code, debit, credit)")
-      .order("created_at", { ascending: false })
-      .limit(40);
     setJournals(((je ?? []) as any[]).map((r) => ({
       ref: r.ref, memo: r.memo, sourceType: r.source_type, when: r.created_at,
       lines: ((r.journal_lines ?? []) as any[]).map((l) => ({ account: l.account_code, debit: Number(l.debit), credit: Number(l.credit) })),
     })));
-    const { data: bal } = await supabase.rpc("account_balances");
     setAccounts(((bal ?? []) as any[]).map((r) => ({
       code: r.code, name: r.name, kind: r.kind, debit: Number(r.debit), credit: Number(r.credit), balance: Number(r.balance),
     })));
-    // configurable rules (Settings → Approval & Matching Rules) + audit trail + bank-change queue
-    const { data: cfg } = await supabase.from("app_config").select("key, value");
     setAppConfigState(Object.fromEntries(((cfg ?? []) as any[]).map((r) => [r.key, r.value])));
-    const { data: au } = await supabase
-      .from("audit_log")
-      .select("id, actor_email, action, record_type, record_ref, detail, created_at")
-      .order("created_at", { ascending: false })
-      .limit(200);
     setAudit(((au ?? []) as any[]).map((r) => ({
       id: r.id, when: r.created_at, actor: r.actor_email || "system", action: r.action,
       recordType: r.record_type, recordRef: r.record_ref, detail: r.detail || {},
     })));
-    const { data: bc } = await supabase
-      .from("vendor_bank_changes")
-      .select("id, vendor_name, old_bank, new_bank, state, callback_note, created_at")
-      .order("created_at", { ascending: false });
     setBankChanges(((bc ?? []) as any[]).map((r) => ({
       id: r.id, vendor: r.vendor_name, oldBank: r.old_bank, newBank: r.new_bank, state: r.state, callbackNote: r.callback_note, when: r.created_at,
     })));
@@ -1074,10 +1054,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTimeout(() => supabase.auth.signOut(), 1200);
         return;
       }
-      // Wait for every initial loader before revealing the app, so no module
-      // (home, HR, staff portal) flashes empty then pops in. allSettled means a
-      // single failed query can never hang the app on the boot splash.
-      await Promise.allSettled([loadFromDb(), loadHr(), loadLeaveQueue(), loadHrModule()]);
+      // Reveal as soon as the home dataset (loadFromDb) is ready — that's the
+      // landing view. The HR-only loaders are kicked off concurrently but do NOT
+      // block reveal, so sign-in is fast for everyone; their data lands in the
+      // background before the user navigates to HR/Staff Portal. allSettled means
+      // a single failed query can never hang the app on the boot splash.
+      const bg = () => {}; loadHr().catch(bg); loadLeaveQueue().catch(bg); loadHrModule().catch(bg);
+      await Promise.allSettled([loadFromDb()]);
       setBootReady(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1620,6 +1603,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
   const setProjectState = (projectId: string, state: string) =>
     projectRpc("set_project_state", { p_project_id: projectId, p_new_state: state }, "Project status updated", state);
+
+  // Budget items (planned allocations) + expenses (actuals) — used by the IRENA
+  // workspace. Each RPC returns { name, detail }, so projectRpc re-renders the project.
+  const addBudgetItem = (projectId: string, name: string, description: string, amount: number) =>
+    projectRpc("add_project_budget_item", { p_project_id: projectId, p_name: name, p_description: description || null, p_amount: amount || 0 }, "Budget item added", name);
+  const updateBudgetItem = (itemId: string, name: string, description: string, amount: number) =>
+    projectRpc("update_project_budget_item", { p_id: itemId, p_name: name, p_description: description || null, p_amount: amount || 0 }, "Budget item updated", name);
+  const removeBudgetItem = (itemId: string) =>
+    projectRpc("delete_project_budget_item", { p_id: itemId }, "Budget item removed", "Removed from the project");
+  // Per-project members (IRENA Members tab): list the roster + effective role, and
+  // (global editors only) set a person's role on this project. Returns the fresh list.
+  async function listProjectMembers(projectId: string): Promise<ProjectMember[]> {
+    const { data, error } = await supabase.rpc("list_project_members", { p_project_id: projectId });
+    if (error) { toast("Couldn't load members", error.message); return []; }
+    return (data ?? []) as ProjectMember[];
+  }
+  async function setProjectMemberRole(projectId: string, email: string, role: string): Promise<ProjectMember[] | null> {
+    const { data, error } = await supabase.rpc("set_project_member_role", { p_project_id: projectId, p_email: email, p_role: role });
+    if (error) { toast("Couldn't update access", error.message); return null; }
+    toast("Access updated", `${email} — ${role === "editor" ? "can edit IRENA" : "view only"}`);
+    return (data ?? []) as ProjectMember[];
+  }
 
   // Upload a document to the project-docs bucket and record it against the project.
   async function addProjectDocument(projectId: string, file: File) {
@@ -2429,14 +2434,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [members, me]
   );
   const isHrToggleUser = myRoleKey === "sub";
+  // Company-wide edit lock (see GLOBAL_EDITORS in data.ts). The three editor
+  // accounts get full access everywhere; everyone else is clamped to view-only
+  // (each module grant reduced to at most "View" = 1, so hidden modules — level 0
+  // — stay hidden). This overrides role templates, per-person grants AND the HR
+  // toggle: there is no in-app path to grant edit to anyone outside the list.
   const effectivePerms = useMemo(() => {
-    if (!isHrToggleUser || !me?.email) return perms;
-    const base = perms[me.email] ?? {};
-    const profile: Perms = hrMode
-      ? { ...base, hr: 3, compliance: 2, users: 2 }
-      : { ...base, hr: 0, users: 0, compliance: 1 };
-    return { ...perms, [me.email]: profile };
-  }, [perms, isHrToggleUser, hrMode, me]);
+    const email = me?.email;
+    if (isGlobalEditor(email)) {
+      return { ...perms, [email!.trim().toLowerCase()]: { ...ALL_FULL_PERMS }, [email!]: { ...ALL_FULL_PERMS } };
+    }
+    if (!email) return perms;
+    const granted = perms[email] ?? {};
+    const clamped: Perms = {};
+    for (const [mod, lvl] of Object.entries(granted)) clamped[mod] = Math.min(lvl, 1);
+    return { ...perms, [email]: clamped };
+  }, [perms, me]);
 
   const api: AppApi = {
     view, tabs, go, goTab, mainRef,
@@ -2487,6 +2500,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addMilestone, setMilestoneStatus, addDrawdown, setDrawdownStatus, logFieldActivity, setProjectState,
     fieldActivities,
     fieldActivityOpen, openFieldActivity: () => setFieldActivityOpen(true), closeFieldActivity: () => setFieldActivityOpen(false), createFieldActivity,
+    addBudgetItem, updateBudgetItem, removeBudgetItem, listProjectMembers, setProjectMemberRole,
     addProjectDocument, projectDocUrl,
     hrMe, leaveOpen, leaveEdit,
     openLeave: () => { setLeaveEdit(null); setLeaveOpen(true); },

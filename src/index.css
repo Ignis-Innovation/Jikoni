@@ -604,3 +604,65 @@
   .appcard-actions .lnk.busy{color:var(--ink-faint);cursor:default}
   .appcard-verdict{margin-top:11px;padding:10px 12px;background:var(--counter);border:1px solid var(--hairline);border-radius:9px}
   .appcard-chip{font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;cursor:help}
+
+  /* ---------- LOGIN ---------- */
+  .login-split{position:fixed;inset:0;display:grid;grid-template-columns:1.05fr 1fr;background:var(--counter);overflow:hidden}
+
+  /* media panel — looping brand video / poster with a legibility gradient */
+  .login-media{position:relative;overflow:hidden;background:var(--stove)}
+  .login-media-el{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  .login-media-overlay{position:absolute;inset:0;
+    background:linear-gradient(180deg,rgba(20,24,30,.28) 0%,rgba(20,24,30,.30) 40%,rgba(18,22,28,.72) 100%)}
+  .login-media-copy{position:absolute;left:0;right:0;bottom:0;padding:44px 48px;color:#fff}
+  .login-media-title{font-family:var(--display);font-weight:700;font-size:40px;letter-spacing:-.5px;line-height:1}
+  .login-media-tag{font-size:15px;color:rgba(255,255,255,.82);margin-top:8px;max-width:340px;line-height:1.45}
+
+  /* form pane */
+  .login-form-pane{display:grid;place-items:center;padding:32px;background:var(--counter)}
+  .login-card{width:100%;max-width:380px;background:var(--card);border:1px solid var(--hairline-2);
+    border-radius:18px;padding:36px 34px;box-shadow:0 18px 48px -24px rgba(20,24,30,.28);
+    animation:loginCardIn .5s cubic-bezier(.16,.84,.44,1) both}
+  .login-fields{display:flex;flex-direction:column;gap:16px}
+  .login-head{display:flex;align-items:center;gap:12px}
+  .login-head .mark{width:40px;height:40px;border-radius:11px;background:#fff;border:1px solid var(--hairline-2);
+    display:grid;place-items:center;flex-shrink:0}
+  .login-head .mark svg{width:26px;height:26px}
+  .login-title{font-family:var(--display);font-weight:700;font-size:27px;letter-spacing:-.5px;line-height:1.05}
+  .login-sub{font-size:11.5px;color:var(--ink-soft);margin-top:2px;letter-spacing:.3px}
+  .login-lede{font-size:13px;color:var(--ink-soft);line-height:1.5}
+  .login-input{min-height:44px}
+  .login-err{font-size:12.5px;color:var(--red);background:var(--red-soft);
+    border:1px solid rgba(225,83,63,.28);border-radius:9px;padding:9px 11px;line-height:1.45}
+  .login-fields .btn.primary{min-height:44px;font-size:14px}
+
+  @keyframes loginCardIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  /* keyboard affordance — text-link buttons + inputs get a visible focus ring, and
+     links underline on hover/focus so they don't rely on colour alone (a11y) */
+  .login-fields button[type="button"]:hover,
+  .login-fields button[type="button"]:focus-visible{text-decoration:underline}
+  .login-fields button:focus-visible,
+  .login-input:focus-visible{outline:2px solid var(--flame);outline-offset:2px}
+
+  @media (max-width:820px){
+    .login-split{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+    .login-media{min-height:180px}
+    .login-media-copy{padding:22px 24px}
+    .login-media-title{font-size:30px}
+    .login-media-tag{font-size:13px}
+    .login-form-pane{padding:24px 18px;align-items:start}
+    .login-card{margin-top:8px;padding:28px 24px;box-shadow:0 12px 32px -22px rgba(20,24,30,.3)}
+  }
+  @media (max-width:480px){
+    .login-media{display:none}
+    .login-split{grid-template-rows:1fr}
+    .login-form-pane{align-items:center;
+      background:linear-gradient(180deg,var(--counter),var(--flame-soft))}
+  }
+
+  /* ---------- NOT FOUND ---------- */
+  .notfound{min-height:60vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:48px 24px;gap:6px}
+  .notfound-code{font-family:var(--display);font-weight:700;font-size:88px;line-height:1;letter-spacing:-2px;
+    color:var(--flame);opacity:.9}
+  .notfound-title{font-family:var(--display);font-weight:600;font-size:26px;letter-spacing:-.4px;margin-top:10px}
+  .notfound-sub{font-size:14px;color:var(--ink-soft);line-height:1.55;max-width:420px;margin:6px 0 18px}

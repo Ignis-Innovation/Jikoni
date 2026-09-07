@@ -104,12 +104,11 @@ export default function ComplianceView() {
           <div className="panel">
             <div className="panel-h"><h3>Risk register</h3><span className="meta">owner · severity · mitigation</span></div>
             <table className="tbl">
-              <thead><tr><th>Ref</th><th>Risk</th><th>Owner</th><th>Severity</th><th>Mitigation</th></tr></thead>
+              <thead><tr><th>Risk</th><th>Owner</th><th>Severity</th><th>Mitigation</th></tr></thead>
               <tbody>
-                {risks.length === 0 && <tr><td colSpan={5} className="meta">No risks logged.</td></tr>}
+                {risks.length === 0 && <tr><td colSpan={4} className="meta">No risks logged.</td></tr>}
                 {risks.map((r) => (
                   <tr key={r.ref}>
-                    <td className="mono">{r.ref}</td>
                     <td>{r.risk}</td>
                     <td>{r.owner ?? "—"}</td>
                     <td><span className={`pill ${r.statusCls}`}>{r.statusTxt}</span> <span className="meta">L{r.likelihood}×I{r.impact}</span></td>

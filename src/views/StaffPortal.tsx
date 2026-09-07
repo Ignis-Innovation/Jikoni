@@ -441,11 +441,10 @@ export default function StaffPortalView() {
             <div className="panel-h"><h3>My past reports</h3><span className="meta">{myReports.length} submitted</span></div>
             {myReports.length ? (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Week of</th><th>What I did</th><th>Attachment</th><th>Status</th></tr></thead>
+                <thead><tr><th>Week of</th><th>What I did</th><th>Attachment</th><th>Status</th></tr></thead>
                 <tbody>
                   {myReports.map((r) => (
                     <tr key={r.id}>
-                      <td className="mono">{r.ref}</td>
                       <td className="mono">{fmtD(r.weekStart)}</td>
                       <td style={{ maxWidth: 380, fontSize: 12.5, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.did}</td>
                       <td>{r.attachmentPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(r.attachmentPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>View</a> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
@@ -468,11 +467,10 @@ export default function StaffPortalView() {
               <div className="panel-h"><h3>My leave applications</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openLeave(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Apply for leave</a></span></div>
               {apps.length ? (
                 <table className="tbl">
-                  <thead><tr><th>Ref</th><th>Type</th><th>Dates</th><th>Days</th><th>Status</th><th></th></tr></thead>
+                  <thead><tr><th>Type</th><th>Dates</th><th>Days</th><th>Status</th><th></th></tr></thead>
                   <tbody>
                     {apps.map((a) => (
                       <tr key={a.id}>
-                        <td className="mono">{a.id}</td>
                         <td>{cap(a.kind)}</td>
                         <td>{fmtD(a.from)} – {fmtD(a.to)}</td>
                         <td className="mono">{a.days}</td>
@@ -517,11 +515,10 @@ export default function StaffPortalView() {
             <div className="panel-h"><h3>My petty-cash requests</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openPetty(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Request petty cash</a></span></div>
             {myPetty.length ? (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Item</th><th>Amount</th><th>Needed by</th><th>Reason</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Item</th><th>Amount</th><th>Needed by</th><th>Reason</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {myPetty.map((r) => (
                     <tr key={r.id}>
-                      <td className="mono">{r.id}</td>
                       <td>{r.item}</td>
                       <td className="mono">{kes(r.amount)}</td>
                       <td className="mono">{r.needBy ? fmtD(r.needBy) : "—"}</td>
@@ -715,7 +712,6 @@ export default function StaffPortalView() {
               {mySentFb.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nothing sent yet — named feedback you send shows its status here.</div>}
               {mySentFb.map((f) => (
                 <div className="task" key={f.ref} style={{ cursor: "default" }}>
-                  <span className="id" style={{ color: "var(--flame)" }}>{f.ref}</span>
                   <span className="txt">{f.body}<small>to {f.audience === "hr" ? "HR / People" : "Leadership"} · named</small></span>
                   <span className={`pill ${fbPill[f.state]?.cls ?? "week"}`} style={{ textTransform: "none" }}>{fbPill[f.state]?.l ?? f.state}</span>
                 </div>
@@ -736,7 +732,7 @@ export default function StaffPortalView() {
           ) : (
             <>
               <div className="panel" style={{ marginBottom: 18 }}>
-                <div className="panel-h"><h3>Leaving Ignis — {myExit.ref}</h3><span className="meta">{myExit.reason || "—"}{myExit.finalDay ? ` · final day ${fmtD(myExit.finalDay)}` : ""}</span></div>
+                <div className="panel-h"><h3>Leaving Ignis</h3><span className="meta">{myExit.reason || "—"}{myExit.finalDay ? ` · final day ${fmtD(myExit.finalDay)}` : ""}</span></div>
                 <div className="pad">
                   <ExitSteps exit={myExit} />
                 </div>

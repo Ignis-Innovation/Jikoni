@@ -9,6 +9,51 @@ const labelStyle: React.CSSProperties = {
   textTransform: "uppercase", display: "block", marginBottom: 6,
 };
 
+// Media panel — looping brand video with a poster fallback. When the visitor
+// prefers reduced motion we skip the playing video entirely and show the poster
+// still, keeping the same framing and overlay.
+function LoginMedia() {
+  const reduce = typeof window !== "undefined" && window.matchMedia
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+  return (
+    <div className="login-media" aria-hidden="true">
+      {reduce ? (
+        <img className="login-media-el" src="/orbis-login.jpg" alt="" />
+      ) : (
+        <video
+          className="login-media-el"
+          autoPlay
+          loop
+          muted
+          playsInline
+          poster="/orbis-login.jpg"
+          preload="metadata"
+        >
+          <source src="/orbis-login.mp4" type="video/mp4" />
+        </video>
+      )}
+      <div className="login-media-overlay" />
+      <div className="login-media-copy">
+        <div className="login-media-title">Jikoni</div>
+        <div className="login-media-tag">Ignis operations, one workspace.</div>
+      </div>
+    </div>
+  );
+}
+
+// Shared shell so the sign-in and forgot-password screens share the split layout.
+function LoginShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="login-split">
+      <LoginMedia />
+      <div className="login-form-pane">
+        <div className="login-card">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 export function LoginGate() {
   const [mode, setMode] = useState<"signin" | "forgot">("signin");
   const [email, setEmail] = useState("");
@@ -55,32 +100,32 @@ export function LoginGate() {
 
   if (mode === "forgot") {
     return (
-      <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "var(--counter)" }}>
-        <form onSubmit={sendReset} style={{ width: 360, background: "#fff", border: "1px solid var(--hairline-2)", borderRadius: 16, padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <LoginShell>
+        <form onSubmit={sendReset} className="login-fields">
+          <div className="login-head">
             <div className="mark"><BrandMark /></div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 16 }}>Reset your password</div>
-              <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Jikoni Tool</div>
+              <h1 className="login-title">Reset your password</h1>
+              <div className="login-sub">Jikoni Tool</div>
             </div>
           </div>
           {sent ? (
             <>
-              <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{sent}</div>
-              <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Open the link in that email to choose a new password, then sign in.</div>
+              <div className="login-lede">{sent}</div>
+              <div className="login-lede">Open the link in that email to choose a new password, then sign in.</div>
               <button type="button" className="btn" onClick={goSignin} style={{ justifyContent: "center" }}>Back to sign in</button>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+              <div className="login-lede">
                 Enter your email and we'll send you a link to set a new password.
               </div>
               <div>
                 <label style={labelStyle}>Email</label>
-                <input className="field" type="email" autoComplete="email" style={{ width: "100%" }}
+                <input className="field login-input" type="email" autoComplete="email" style={{ width: "100%" }}
                   value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@ignis.africa" />
               </div>
-              {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}
+              {err && <div className="login-err">{err}</div>}
               <button className="btn primary" type="submit" disabled={busy || !email.trim()} style={{ justifyContent: "center" }}>
                 {busy ? "Sending…" : "Send reset link"}
               </button>
@@ -88,46 +133,40 @@ export function LoginGate() {
             </>
           )}
         </form>
-      </div>
+      </LoginShell>
     );
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "var(--counter)" }}>
-      <form
-        onSubmit={signIn}
-        style={{
-          width: 360, background: "#fff", border: "1px solid var(--hairline-2)",
-          borderRadius: 16, padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <LoginShell>
+      <form onSubmit={signIn} className="login-fields">
+        <div className="login-head">
           <div className="mark"><BrandMark /></div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Jikoni Tool</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Operations Suite</div>
+            <h1 className="login-title">Jikoni Tool</h1>
+            <div className="login-sub">Operations Suite</div>
           </div>
         </div>
-        <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+        <div className="login-lede">
           Sign in — every action is recorded against your name.
         </div>
         <div>
           <label style={labelStyle}>Email</label>
-          <input className="field" type="email" autoComplete="email" style={{ width: "100%" }}
+          <input className="field login-input" type="email" autoComplete="email" style={{ width: "100%" }}
             value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@ignis.africa" />
         </div>
         <div>
           <label style={labelStyle}>Password</label>
-          <PasswordInput autoComplete="current-password" wrapStyle={{ width: "100%" }} style={{ width: "100%" }}
+          <PasswordInput autoComplete="current-password" wrapStyle={{ width: "100%" }} className="field login-input"
             value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
         </div>
-        {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}
+        {err && <div className="login-err">{err}</div>}
         <button className="btn primary" type="submit" disabled={busy} style={{ justifyContent: "center" }}>
           {busy ? "Signing in…" : "Sign in"}
         </button>
         <button type="button" onClick={goForgot} style={{ ...linkStyle, alignSelf: "center" }}>Forgot password?</button>
       </form>
-    </div>
+    </LoginShell>
   );
 }
 
@@ -155,33 +194,33 @@ export function SetPassword({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "var(--counter)" }}>
-      <form onSubmit={save} style={{ width: 360, background: "#fff", border: "1px solid var(--hairline-2)", borderRadius: 16, padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <LoginShell>
+      <form onSubmit={save} className="login-fields">
+        <div className="login-head">
           <div className="mark"><BrandMark /></div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Set your password</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Jikoni Tool</div>
+            <h1 className="login-title">Set your password</h1>
+            <div className="login-sub">Jikoni Tool</div>
           </div>
         </div>
-        <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+        <div className="login-lede">
           Choose the password you'll use to sign in from now on.
         </div>
         <div>
           <label style={labelStyle}>New password</label>
-          <PasswordInput autoComplete="new-password" wrapStyle={{ width: "100%" }} style={{ width: "100%" }}
+          <PasswordInput autoComplete="new-password" wrapStyle={{ width: "100%" }} className="field login-input"
             value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" />
         </div>
         <div>
           <label style={labelStyle}>Confirm password</label>
-          <PasswordInput autoComplete="new-password" wrapStyle={{ width: "100%" }} style={{ width: "100%" }}
+          <PasswordInput autoComplete="new-password" wrapStyle={{ width: "100%" }} className="field login-input"
             value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Re-enter it" />
         </div>
-        {err && <div style={{ fontSize: 12.5, color: "var(--red)" }}>{err}</div>}
+        {err && <div className="login-err">{err}</div>}
         <button className="btn primary" type="submit" disabled={busy} style={{ justifyContent: "center" }}>
           {busy ? "Saving…" : "Save password & continue"}
         </button>
       </form>
-    </div>
+    </LoginShell>
   );
 }

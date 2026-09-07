@@ -4,7 +4,7 @@ import { Pulse, Note, ViewOnly } from "../components/ui";
 import { Donut, ChartLegend, StaticBars } from "../components/charts";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
-import { kes, contractTypes, hrDepartments, candidateStages, kenyaLocations, employmentTypes, educationLevels, educationLabel, employmentLabel, reportTrackLabel } from "../data";
+import { kes, contractTypes, hrDepartments, candidateStages, kenyaLocations, employmentTypes, educationLevels, educationLabel, employmentLabel, reportTrackLabel, accessModules, lvlName, isGlobalEditor } from "../data";
 import { Crumb } from "../nav";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -867,7 +867,7 @@ function StaffProfileModal() {
 
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, uploadedFileUrl, level, members } = useApp();
+  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, uploadedFileUrl, level, members, perms } = useApp();
   const tab = tabs.hr;
   // HR access: View (1) is read-only; Edit (2) can add/edit staff, upload docs,
   // record leave, prepare payroll, review weekly reports; Full (3) can approve —
@@ -1372,7 +1372,6 @@ export default function HrView() {
               {feedback.length === 0 && <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nothing yet — feedback sent to HR / People or Leadership lands here.</div>}
               {feedback.map((f) => (
                 <div className="task" key={f.ref} style={{ cursor: "default" }}>
-                  <span className="id" style={{ color: "var(--flame)" }}>{f.ref}</span>
                   <span className="txt">{f.body}<small>{f.category || "—"} · {f.author ? "named" : "anonymous"} · {ago(f.created)}{f.audience === "leadership" ? " · to Leadership" : ""}</small></span>
                   {canEdit && fbNext[f.state] && (
                     <button className="btn" style={{ padding: "4px 10px", fontSize: 11, marginRight: 6 }} onClick={() => setFeedbackState(f.ref, fbNext[f.state].to)}>{fbNext[f.state].l}</button>
@@ -1470,11 +1469,10 @@ export default function HrView() {
             <div className="panel-h"><h3>Leave approvals</h3><span className="meta">{pendingLeave.length} waiting on you</span></div>
             {hrLeaveQueue.length ? (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Reason</th><th>Decision</th></tr></thead>
+                <thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Reason</th><th>Decision</th></tr></thead>
                 <tbody>
                   {[...pendingLeave, ...decidedLeave].map((r) => (
                     <tr key={r.id}>
-                      <td className="mono">{r.id}</td>
                       <td><strong>{r.who}</strong></td>
                       <td>{cap(r.kind)}</td>
                       <td>{fmtD(r.from)} – {fmtD(r.to)}</td>
@@ -1590,11 +1588,10 @@ export default function HrView() {
             <div className="panel-h"><h3>Earlier weeks</h3><span className="meta">{historyReports.length} report{historyReports.length === 1 ? "" : "s"}</span></div>
             {historyReports.length ? (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Employee</th><th>Track</th><th>Week of</th><th>What they did</th><th>Blockers</th><th>Attachment</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Employee</th><th>Track</th><th>Week of</th><th>What they did</th><th>Blockers</th><th>Attachment</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {historyReports.map((r) => (
                     <tr key={r.id}>
-                      <td className="mono">{r.ref}</td>
                       <td><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: dotFor(r.authorEmail), flex: "0 0 auto" }} /><strong>{r.author}</strong></span></td>
                       <td style={{ fontSize: 12.5 }}>{reportTrackLabel(r.track)}</td>
                       <td className="mono">{fmtD(r.weekStart)}</td>
@@ -1679,11 +1676,11 @@ export default function HrView() {
             <div className="panel" style={{ marginTop: 18 }}>
               <div className="panel-h"><h3>Run history</h3><span className="meta">{runs.length} runs</span></div>
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Period</th><th>Staff</th><th>Gross</th><th>Net</th><th>State</th></tr></thead>
+                <thead><tr><th>Period</th><th>Staff</th><th>Gross</th><th>Net</th><th>State</th></tr></thead>
                 <tbody>
                   {runs.map((r) => (
                     <tr key={r.ref}>
-                      <td className="mono">{r.ref}</td><td>{fmtPeriod(r.period)}</td>
+                      <td>{fmtPeriod(r.period)}</td>
                       <td className="mono">{r.totals?.staff ?? r.items.length}</td>
                       <td className="mono">{kes(Number(r.totals?.gross ?? 0))}</td>
                       <td className="mono">{kes(Number(r.totals?.net ?? 0))}</td>
@@ -1715,14 +1712,13 @@ export default function HrView() {
                 <span className="meta">{recruitment.length} roles</span>
               </div>
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Role</th><th>Status</th><th>Applicants</th><th></th></tr></thead>
+                <thead><tr><th>Role</th><th>Status</th><th>Applicants</th><th></th></tr></thead>
                 <tbody>
-                  {recruitment.length === 0 && <tr><td colSpan={5} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No job openings yet.</td></tr>}
+                  {recruitment.length === 0 && <tr><td colSpan={4} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No job openings yet.</td></tr>}
                   {recruitment.map((r) => {
                     const top = Math.max(0, ...r.candidates.map((c) => c.eligibility));
                     return (
                       <tr key={r.ref} style={{ cursor: "pointer" }} onClick={() => openHrModal({ kind: "postingDetail", ref: r.ref })}>
-                        <td className="mono">{r.ref}</td>
                         <td><strong>{r.roleTitle}</strong><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{r.dept || "—"}</div></td>
                         <td><span className={`pill ${r.published ? "done" : ""}`} style={{ textTransform: "none" }}>{r.published ? "Published" : "Draft"}</span></td>
                         <td className="mono">{r.candidates.length}{r.candidates.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}> · top {top}%</span>}</td>
@@ -1816,6 +1812,59 @@ export default function HrView() {
               </tbody>
             </table>
             <Note>Field sign-offs (GRNs, installation reports) flow through to Deployment and to project accounting for cost allocation.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "h-access" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h">
+              <h3>Access &amp; privileges</h3>
+              <span className="meta">{members.filter((m) => m.state !== "invited").length} people</span>
+            </div>
+            <Note>
+              Company policy: everyone can view the system, but only the three authorised accounts can make changes.
+              Everyone else is view-only across every module. This is a read-only summary — access is managed in User Management.
+            </Note>
+            <table className="tbl">
+              <thead><tr><th>Person</th><th>Access</th><th>Privileges by module</th></tr></thead>
+              <tbody>
+                {members.filter((m) => m.state !== "invited").map((m) => {
+                  const p = perms[m.email] ?? {};
+                  const editor = isGlobalEditor(m.email);
+                  const canChange = editor || Object.values(p).some((v) => (v as number) >= 2);
+                  const mods = accessModules
+                    .map((mod) => ({ label: mod.l, lvl: editor ? 3 : (p[mod.k] ?? 0) }))
+                    .filter((x) => x.lvl >= 1);
+                  return (
+                    <tr key={m.email}>
+                      <td>
+                        <div className="who">
+                          <div className="av-sm" style={{ background: m.color ?? "#D8D2C7" }}>{m.name[0]}</div>
+                          <div><div className="nm">{m.name}</div><div className="em">{m.email}</div></div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`pill ${canChange ? "done" : "week"}`} style={{ textTransform: "none" }}>
+                          {canChange ? "Can make changes" : "View only"}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                          {mods.length === 0 && <span className="meta">No module access</span>}
+                          {mods.map((x) => (
+                            <span key={x.label} className="pill week" style={{ textTransform: "none", background: "transparent", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+                              {x.label} · {lvlName[x.lvl]}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

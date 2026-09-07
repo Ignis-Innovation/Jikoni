@@ -47,6 +47,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "h-recruit", l: "Recruitment" },
     { t: "h-exit", l: "Offboarding & Exit" },
     { t: "h-field", l: "Field Workforce" },
+    { t: "h-access", l: "Access & Privileges" },
   ],
   staffportal: [
     { t: "sp-me", l: "This Month" },
@@ -60,6 +61,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
   ],
   projects: [
     { t: "pr-projects", l: "Projects" },
+    { t: "pr-irena", l: "IRENA" },
     { t: "pr-budget", l: "Budgets" },
     { t: "pr-milestones", l: "Milestones" },
     { t: "pr-grants", l: "Grants & Drawdowns" },

@@ -125,21 +125,18 @@ export default function ProcurementView() {
             <div className="panel-h"><h3>Needs attention</h3><span className="meta">across the chain</span></div>
             {awaiting.map((r) => (
               <div className="task" key={"aw" + r.id} onClick={() => goTab("procurement", "p-req")}>
-                <span className="id" style={{ color: "var(--ember)" }}>{r.id}</span>
                 <span className="txt">{r.item}<small>requisition awaiting approval</small></span>
                 <span className="pill today">Approve</span>
               </div>
             ))}
             {exceptions.map((i) => (
               <div className="task" key={"ex" + i.ref} onClick={() => goTab("procurement", "p-grn")}>
-                <span className="id" style={{ color: "var(--red)" }}>{i.ref}</span>
                 <span className="txt">{i.vendor} — {i.po}<small>{i.matchNote || "match exception"}</small></span>
                 <span className="pill over">Held</span>
               </div>
             ))}
             {toPay.map((i) => (
               <div className="task" key={"pay" + i.ref} onClick={() => goTab("procurement", "p-grn")}>
-                <span className="id" style={{ color: "var(--green)" }}>{i.ref}</span>
                 <span className="txt">{i.vendor} — {kes(i.amount)}<small>matched — ready to pay</small></span>
                 <span className="pill done">Pay</span>
               </div>
@@ -381,14 +378,13 @@ function ApTable({ invoices, invoiceablePOs, poRows, grns, openCaptureInvoice, a
         </span>
       </div>
       <table className="tbl">
-        <thead><tr><th>Invoice</th><th>PO</th><th>Amount</th><th>Match</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+        <thead><tr><th>PO</th><th>Amount</th><th>Match</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
         <tbody>
           {invoices.length === 0 ? (
-            <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>Nothing to match yet.</td></tr>
+            <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>Nothing to match yet.</td></tr>
           ) : invoices.map((i) => (
             <Fragment key={i.ref}>
               <tr>
-                <td className="mono">{i.ref}{i.invoiceNumber ? <small style={{ color: "var(--ink-soft)", display: "block" }}>{i.invoiceNumber}</small> : null}</td>
                 <td className="mono">{i.po}</td>
                 <td className="mono">{i.amount.toLocaleString()}{i.wht > 0 ? <small style={{ color: "var(--ink-soft)", display: "block" }}>WHT {i.wht.toLocaleString()}</small> : null}</td>
                 <td>
@@ -408,7 +404,7 @@ function ApTable({ invoices, invoiceablePOs, poRows, grns, openCaptureInvoice, a
                 </td>
               </tr>
               {open === i.ref && (
-                <tr><td colSpan={5} style={{ background: "#FCFAF6", padding: 0 }}><RunMatch inv={i} po={poRows.find((p) => p.id === i.po)} grns={grns.filter((g) => g.po === i.po)} /></td></tr>
+                <tr><td colSpan={4} style={{ background: "#FCFAF6", padding: 0 }}><RunMatch inv={i} po={poRows.find((p) => p.id === i.po)} grns={grns.filter((g) => g.po === i.po)} /></td></tr>
               )}
             </Fragment>
           ))}

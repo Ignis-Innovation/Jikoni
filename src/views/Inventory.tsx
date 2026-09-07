@@ -419,7 +419,6 @@ function DispatchItem({ d }: { d: DispatchRow }) {
   const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div className="task" style={{ cursor: "default" }}>
-      <span className="id">{d.id}</span>
       <span className="txt">{d.destination}{d.project ? ` — ${d.project}` : ""}
         <small>{d.lines.map((l) => `${l.qty} × ${l.name}`).join(" · ")}</small>
       </span>
@@ -533,7 +532,6 @@ export default function InventoryView() {
               )}
               {below.map((i) => (
                 <div className="task" key={i.sku}>
-                  <span className="id" style={{ color: "var(--ember)" }}>{i.sku}</span>
                   <span className="txt">{i.name} — {i.onHand} of {i.reorderLevel} minimum
                     <small>{i.autoReq ? `${i.autoReq} auto-raised — track it in Procurement` : "auto-requisition pending"}</small>
                   </span>
@@ -542,7 +540,6 @@ export default function InventoryView() {
               ))}
               {enRoute.map((d) => (
                 <div className="task" key={d.id} style={{ cursor: "default" }}>
-                  <span className="id">{d.id}</span>
                   <span className="txt">En route to {d.destination}{d.project ? ` — ${d.project}` : ""}
                     <small>{d.lines.map((l) => `${l.qty} × ${l.name}`).join(" · ")} — confirm delivery on the Dispatches tab</small>
                   </span>
@@ -551,7 +548,6 @@ export default function InventoryView() {
               ))}
               {awaitingReceipt.map((d) => (
                 <div className="task" key={d.id} style={{ cursor: "default" }}>
-                  <span className="id">{d.id}</span>
                   <span className="txt">{d.destination} delivered — no receipt attached
                     <small>Upload the proof-of-delivery on the Dispatches tab</small>
                   </span>
@@ -563,7 +559,6 @@ export default function InventoryView() {
               <div className="panel-h"><h3>Latest movements</h3><span className="meta">ledger tail</span></div>
               {movements.slice(0, 6).map((m, idx) => (
                 <div className="task" key={idx} style={{ cursor: "default" }}>
-                  <span className="id">{m.sku}</span>
                   <span className="txt">{m.type}{m.source ? ` · ${m.source}` : ""}{m.note ? ` — ${m.note}` : ""}
                     <small className="mono">{m.when}{m.from ? ` · from ${m.from}` : ""}{m.to ? ` · to ${m.to}` : ""}</small>
                   </span>
@@ -670,14 +665,13 @@ export default function InventoryView() {
               </span>
             </div>
             <table className="tbl">
-              <thead><tr><th>Ref</th><th>Asset</th><th>Category</th><th>Qty</th><th>Date received</th><th>Assigned</th><th></th></tr></thead>
+              <thead><tr><th>Asset</th><th>Category</th><th>Qty</th><th>Date received</th><th>Assigned</th><th></th></tr></thead>
               <tbody>
-                {assets.length === 0 && <tr><td colSpan={7} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No assets yet — use Add asset to register a laptop, vehicle or equipment.</td></tr>}
+                {assets.length === 0 && <tr><td colSpan={6} style={{ color: "var(--ink-soft)", fontSize: 13 }}>No assets yet — use Add asset to register a laptop, vehicle or equipment.</td></tr>}
                 {assets.map((a) => {
                   const out = assignedByAsset[a.id] || 0;
                   return (
                     <tr key={a.id} style={{ opacity: a.state === "disposed" ? 0.55 : 1 }}>
-                      <td className="mono">{a.id}</td>
                       <td><strong>{a.name}</strong>{a.state === "disposed" && <span className="pill over" style={{ marginLeft: 7 }}>disposed</span>}</td>
                       <td style={{ fontSize: 12 }}>{a.category || "—"}</td>
                       <td className="mono">{a.quantity}</td>

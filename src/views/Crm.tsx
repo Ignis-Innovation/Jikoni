@@ -79,14 +79,13 @@ export default function CrmView() {
             </div>
             <div style={{ padding: "4px 18px 10px", fontSize: 11.5, color: "var(--ink-soft)" }}>{d.meta}</div>
             <table className="tbl">
-              <thead><tr><th>ID</th><th>Partner</th><th>Stage</th><th>Owner</th><th>Next action</th></tr></thead>
+              <thead><tr><th>Partner</th><th>Stage</th><th>Owner</th><th>Next action</th></tr></thead>
               <tbody>
                 {engRows.length === 0 && (
-                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No {pipeline === "up" ? "upstream" : "downstream"} engagements yet — use “New engagement” above.</td></tr>
+                  <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No {pipeline === "up" ? "upstream" : "downstream"} engagements yet — use “New engagement” above.</td></tr>
                 )}
                 {engRows.map((r) => (
                   <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => openEng(r.id)}>
-                    <td className="mono" style={{ color: "var(--flame)", fontWeight: 600 }}>{r.id}</td>
                     <td><strong>{r.n}</strong></td>
                     <td>{r.st}</td>
                     <td>{r.o}</td>
@@ -102,7 +101,6 @@ export default function CrmView() {
               <div className="pad" style={{ fontSize: 13, color: "var(--ink-soft)" }}>No updates logged yet — open an engagement and hit Update.</div>
             ) : recentUpdates.map((u, i) => (
               <div className="task" key={u.engId + i} style={{ cursor: "pointer" }} onClick={() => openEng(u.engId)}>
-                <span className="id">{u.engId}</span>
                 <span className="txt">{u.engName} — {u.note}<small>{u.ch} · {u.who} · {u.d}</small></span>
                 <span className="pill done">Logged</span>
               </div>

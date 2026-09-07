@@ -4,6 +4,7 @@ import { teamColors } from "../data";
 import type { WeekTask } from "../data";
 import type { PulseStat } from "../data";
 import { Pulse, Note } from "../components/ui";
+import { ModalShell } from "../components/modals";
 import { buildAttention, orderForRole, type AttentionItem } from "../lib/attention";
 import { ExportI, CheckSqI, FlameGlyphI, PlusI, BellI } from "../components/icons";
 
@@ -43,9 +44,10 @@ function prettyAction(action: string): string {
 
 // One My Week row — click to expand its mini-tasks (checkboxes, add, complete, edit, delete).
 function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
-  const { toggleSubtask, addSubtask, setTaskDone, openTaskEdit, deleteTask } = useApp();
+  const { toggleSubtask, addSubtask, setTaskDone, openTaskEdit, deleteTask, toast } = useApp();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const subs = t.subtasks ?? [];
   const done = subs.filter((s) => s.done).length;
   const isDone = t.state === "done";
@@ -59,7 +61,6 @@ function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
   return (
     <div>
       <div className="task" onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer", opacity: isDone ? 0.72 : 1 }}>
-        <span className="id">{t.id}</span>
         <span className="txt">
           <span style={{ textDecoration: isDone ? "line-through" : "none" }}>{t.t}</span>
           {(t.s || t.assignedBy) ? <small>{[t.s, t.assignedBy ? `assigned by ${t.assignedBy}` : ""].filter(Boolean).join(" · ")}</small> : null}
@@ -89,13 +90,26 @@ function TaskRow({ t, showOwner }: { t: WeekTask; showOwner: boolean }) {
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />}
             {!isDone && <button className="btn" onClick={add}>Add</button>}
             <button className="btn" onClick={() => openTaskEdit(t)}>Edit</button>
-            <button className="btn" style={{ color: "var(--red)" }} onClick={() => { if (window.confirm(`Delete task "${t.t}"?`)) deleteTask(t.id); }}>Delete</button>
+            <button className="btn" style={{ color: "var(--red)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
             {isDone
               ? <button className="btn" onClick={() => setTaskDone(t.id, false)}>Reopen</button>
               : <button className="btn primary" onClick={() => setTaskDone(t.id, true)}>Mark done</button>}
           </div>
         </div>
       )}
+      <ModalShell open={confirmDelete} onClose={() => setConfirmDelete(false)} width={440}>
+        <div className="mh">
+          <h3>Delete task?</h3>
+          <p>You're about to delete <strong>{t.t}</strong>.</p>
+        </div>
+        <div className="mb">
+          <Note noBorder>This removes it from your My Week. This can't be undone.</Note>
+        </div>
+        <div className="mf">
+          <button className="btn" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          <button className="btn" style={{ color: "var(--red)" }} onClick={() => { deleteTask(t.id); setConfirmDelete(false); toast("Task deleted", t.t); }}>Delete task</button>
+        </div>
+      </ModalShell>
     </div>
   );
 }

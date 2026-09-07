@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { budgetLines, kes, reqRouting, reqBudgetState, engStages, engChannels } from "../data";
 import { useUsdKesRate, getUsdKesRate, FALLBACK_USD_KES } from "../lib/fx";
+import { Note } from "./ui";
 
 export function ModalShell({ open, onClose, width, className, children }: { open: boolean; onClose: () => void; width?: number; className?: string; children: React.ReactNode }) {
   return (
@@ -70,6 +71,7 @@ export function TaskModal() {
   const [link, setLink] = useState("");
   const [subs, setSubs] = useState<string[]>([]);
   const [subDraft, setSubDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (taskOpen) {
@@ -107,12 +109,8 @@ export function TaskModal() {
     const allSubs = subDraft.trim() ? [...subs, subDraft.trim()] : subs;
     createTask({ title: title.trim(), due, dueDate: dueDate || undefined, link: link.trim(), assigneeEmails: assign ? assignees : undefined, subtasks: allSubs, priority });
   }
-  function onDelete() {
-    if (!taskEdit) return;
-    if (window.confirm(`Delete task "${taskEdit.t}"? This removes it for everyone it's shared with.`)) deleteTask(taskEdit.id);
-  }
-
   return (
+    <>
     <ModalShell open={taskOpen} onClose={closeTask}>
       <div className="mh">
         <h3>{edit ? "Edit task" : assign ? "Assign a task" : "Add a task"}</h3>
@@ -183,13 +181,27 @@ export function TaskModal() {
         )}
       </div>
       <div className="mf" style={{ justifyContent: edit ? "space-between" : undefined }}>
-        {edit && <button className="btn" style={{ color: "var(--red)" }} onClick={onDelete}>Delete</button>}
+        {edit && <button className="btn" style={{ color: "var(--red)" }} onClick={() => setConfirmDelete(true)}>Delete</button>}
         <span style={{ display: "flex", gap: 8 }}>
           <button className="btn" onClick={closeTask}>Cancel</button>
           <button className="btn primary" onClick={save}>{edit ? "Save changes" : assign ? "Assign task" : "Add task"}</button>
         </span>
       </div>
     </ModalShell>
+    <ModalShell open={confirmDelete} onClose={() => setConfirmDelete(false)} width={440}>
+      <div className="mh">
+        <h3>Delete task?</h3>
+        <p>You're about to delete <strong>{taskEdit?.t}</strong>.</p>
+      </div>
+      <div className="mb">
+        <Note noBorder>This removes it for everyone it's shared with. This can't be undone.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={() => setConfirmDelete(false)}>Cancel</button>
+        <button className="btn" style={{ color: "var(--red)" }} onClick={() => { if (taskEdit) { deleteTask(taskEdit.id); toast("Task deleted", taskEdit.t); } setConfirmDelete(false); }}>Delete task</button>
+      </div>
+    </ModalShell>
+    </>
   );
 }
 

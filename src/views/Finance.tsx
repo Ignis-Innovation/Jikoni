@@ -194,7 +194,6 @@ export default function FinanceView() {
               {toApprove.length === 0 && toPay.length === 0 ? <EmptyBody>Nothing awaiting your approval.</EmptyBody> : <>
                 {toApprove.map((i) => (
                   <div className="task" key={i.ref}>
-                    <span className="id" style={{ color: "var(--green)" }}>{i.ref}</span>
                     <span className="txt">{i.vendor} — {kes(i.amount)}<small>{i.po} · matched</small></span>
                     {i.capturedByMe ? <span className="pill week">you captured</span>
                       : canFull ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => approveInvoice(i.ref)}>Approve</button>
@@ -203,7 +202,6 @@ export default function FinanceView() {
                 ))}
                 {toPay.map((i) => (
                   <div className="task" key={i.ref}>
-                    <span className="id" style={{ color: "var(--green)" }}>{i.ref}</span>
                     <span className="txt">{i.vendor} — {kes(i.amount)}<small>{i.po} · approved</small></span>
                     {canFull && <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => payInvoice(i.ref, "bank")}>Pay</button>}
                   </div>
@@ -221,11 +219,10 @@ export default function FinanceView() {
               <div className="panel-h"><h3>Chart of accounts</h3><span className="meta">balances · KES</span></div>
               {accounts.length === 0 ? <EmptyBody>No balances yet — post a journal to begin.</EmptyBody> : (
                 <table className="tbl">
-                  <thead><tr><th>Code</th><th>Account</th><th>Type</th><th style={{ textAlign: "right" }}>Balance</th></tr></thead>
+                  <thead><tr><th>Account</th><th>Type</th><th style={{ textAlign: "right" }}>Balance</th></tr></thead>
                   <tbody>
                     {accounts.map((a) => (
                       <tr key={a.code}>
-                        <td className="mono">{a.code}</td>
                         <td>{a.name}</td>
                         <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{a.kind}</td>
                         <td className="mono" style={{ textAlign: "right" }}>{a.balance.toLocaleString()}</td>
@@ -242,7 +239,6 @@ export default function FinanceView() {
                   {journals.slice(0, 12).map((j) => (
                     <div key={j.ref} style={{ borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
-                        <strong className="mono">{j.ref}</strong>
                         <span style={{ color: "var(--ink-soft)" }}>{j.sourceType}</span>
                       </div>
                       <div style={{ fontSize: 12, color: "var(--ink-soft)", margin: "2px 0 4px" }}>{j.memo}</div>
@@ -293,13 +289,12 @@ export default function FinanceView() {
                 </span>
               </div>
               <table className="tbl">
-                <thead><tr><th>Invoice</th><th>Vendor</th><th>Amount</th><th>Match</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <thead><tr><th>Vendor</th><th>Amount</th><th>Match</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
                 <tbody>
                   {apInvoices.length === 0 ? (
-                    <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No supplier invoices yet.</td></tr>
+                    <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No supplier invoices yet.</td></tr>
                   ) : apInvoices.map((i) => (
                     <tr key={i.ref}>
-                      <td className="mono">{i.ref}</td>
                       <td>{i.vendor}</td>
                       <td className="mono">{i.amount.toLocaleString()}</td>
                       <td><span className={`pill ${apPill[i.state]?.cls || "week"}`} title={i.matchNote || ""}>{apPill[i.state]?.txt || i.state}</span></td>
@@ -352,13 +347,12 @@ export default function FinanceView() {
                 <span className="meta">{pettyPending.length} awaiting approval{canDecidePetty ? "" : " · view only"}</span>
               </div>
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Route to</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <thead><tr><th>Requester</th><th>Item</th><th>Amount</th><th>Route to</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
                 <tbody>
                   {pettyPending.length === 0 ? (
-                    <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No requests awaiting approval. Staff raise these in the Staff Portal → Petty Cash.</td></tr>
+                    <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No requests awaiting approval. Staff raise these in the Staff Portal → Petty Cash.</td></tr>
                   ) : pettyPending.map((r) => (
                     <tr key={r.id}>
-                      <td className="mono">{r.id}</td>
                       <td>{r.requester}{r.reason ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{r.reason}</small> : null}</td>
                       <td>{r.item}</td>
                       <td className="mono">{kes(r.amount)}</td>
@@ -397,11 +391,10 @@ export default function FinanceView() {
             <div className="panel-h"><h3>Petty-cash history</h3><span className="meta">{pettyRequests.length} request{pettyRequests.length === 1 ? "" : "s"} · all statuses</span></div>
             {pettyRequests.length === 0 ? <EmptyBody>No petty-cash requests yet.</EmptyBody> : (
               <table className="tbl">
-                <thead><tr><th>Ref</th><th>Requester</th><th>Item</th><th>Amount</th><th>Status</th><th>Invoice</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <thead><tr><th>Requester</th><th>Item</th><th>Amount</th><th>Status</th><th>Invoice</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
                 <tbody>
                   {pettyRequests.map((r) => (
                     <tr key={r.id}>
-                      <td className="mono">{r.id}</td>
                       <td>{r.requester}</td>
                       <td>{r.item}</td>
                       <td className="mono">{kes(r.amount)}</td>
@@ -550,14 +543,13 @@ function Receivables() {
           ))}
         </div>
         <table className="tbl">
-          <thead><tr><th>Customer</th><th>Proforma</th><th>Value</th><th>Valid to</th><th>Status</th></tr></thead>
+          <thead><tr><th>Customer</th><th>Value</th><th>Valid to</th><th>Status</th></tr></thead>
           <tbody>
             {pfRows.length === 0 ? (
-              <tr><td colSpan={5} style={{ padding: "16px 18px", color: "var(--ink-soft)", fontSize: 12.5 }}>{proformas.length === 0 ? "No proformas yet — use “+ Raise proforma”." : "None in this view."}</td></tr>
+              <tr><td colSpan={4} style={{ padding: "16px 18px", color: "var(--ink-soft)", fontSize: 12.5 }}>{proformas.length === 0 ? "No proformas yet — use “+ Raise proforma”." : "None in this view."}</td></tr>
             ) : pfRows.map((p) => (
               <tr key={p.ref} style={{ cursor: "pointer" }} onClick={() => openProformaRec(p.ref)}>
                 <td><strong>{p.customer}</strong></td>
-                <td className="mono">{p.ref}</td>
                 <td className="mono">{kes(p.subtotal)}</td>
                 <td className="mono">{p.validTo}</td>
                 <td><span className={`pill ${p.statusCls}`}>{p.statusTxt}</span></td>
@@ -578,14 +570,13 @@ function Receivables() {
             <span className="meta">issue · file eTIMS · collect</span>
           </div>
           <table className="tbl">
-            <thead><tr><th>Institution</th><th>Invoice</th><th>Amount</th><th>eTIMS</th><th>Due</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+            <thead><tr><th>Institution</th><th>Amount</th><th>eTIMS</th><th>Due</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
             <tbody>
               {newInvoices.length === 0 ? (
-                <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No customer invoices yet — use “+ New invoice”.</td></tr>
+                <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No customer invoices yet — use “+ New invoice”.</td></tr>
               ) : newInvoices.map((inv) => (
                 <tr key={inv.id}>
                   <td>{inv.cust}</td>
-                  <td className="mono">{inv.id}</td>
                   <td className="mono">{inv.tot.toLocaleString()}</td>
                   <td><span className="rcv ok">filed ✓</span></td>
                   <td><span className={`pill ${inv.pillCls}`}>{inv.pillTxt}</span></td>

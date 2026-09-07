@@ -170,6 +170,20 @@ export const lvlClass = ["", "view", "edit", "full"];
 
 export type Perms = Record<string, number>;
 const allFull: Perms = Object.fromEntries(accessModules.map((m) => [m.k, 3]));
+export const ALL_FULL_PERMS: Perms = allFull;
+
+// Company-wide edit lock. Only these three accounts may make changes anywhere in
+// the app — everyone else is strictly view-only (their module grants are clamped
+// to "View", regardless of role templates, per-person grants or the HR toggle).
+// This is a deliberate hard lock: there is no in-app way to grant edit to anyone
+// else. Enforced in store.tsx (effectivePerms). Compared case-insensitively.
+export const GLOBAL_EDITORS: ReadonlySet<string> = new Set([
+  "jwanjiku@ignis-innovation.com",
+  "dnderitu@ignis-innovation.com",
+  "brian55mwangi@gmail.com",
+]);
+export const isGlobalEditor = (email?: string | null): boolean =>
+  !!email && GLOBAL_EDITORS.has(email.trim().toLowerCase());
 
 export const roleTemplates: Record<string, Perms> = {
   super: { ...allFull },
@@ -264,11 +278,19 @@ export interface ProjectDetail {
   createdByMe?: boolean;   // caller created this project (or has full projects access) → can edit/delete
   milestones: { id?: string; t: string; s: "done" | "now" | "todo"; amount?: number; start?: string; end?: string }[];
   drawdowns: { id?: string; t: string; v: string; s: string }[];
+  // Planned budget allocations (drive budgetAmount) and actual expenses (roll into
+  // spentAmount) — added for the IRENA project's overview/budget/expenses tabs.
+  budgetItems?: { id: string; name: string; description?: string | null; amount: number; addedBy?: string | null }[];
+  expenses?: { id: string; description: string; amount: number; spentOn?: string | null; addedBy?: string | null }[];
   reporting: string;
   field: string;
   // legacy seed docs are plain strings; uploaded docs are { name, path } objects
   docs: (string | { name: string; path: string })[];
 }
+
+// A person's membership/role on one project (IRENA Members tab). "locked" = a
+// global editor whose role is fixed and can't be changed here.
+export interface ProjectMember { email: string; name: string; role: "viewer" | "editor"; locked: boolean; }
 
 // A field-activity assignment — someone sent to check a site (folded in via loadFromDb).
 export interface FieldActivity {

@@ -8,19 +8,21 @@ import {
 } from "./components/icons";
 import { Toasts } from "./components/ui";
 import HomeView from "./views/Home";
-import DeployView from "./views/Deploy";
-import ReadinessView from "./views/Readiness";
-import RaiseView from "./views/Raise";
-import ProcurementView from "./views/Procurement";
-import InventoryView from "./views/Inventory";
-import ProjectsView from "./views/Projects";
-import CrmView from "./views/Crm";
-import FinanceView from "./views/Finance";
-import HrView from "./views/Hr";
-import StaffPortalView from "./views/StaffPortal";
-import ComplianceView from "./views/Compliance";
-import UsersView from "./views/Users";
-import SettingsView from "./views/Settings";
+// Every module view except Home is code-split: the initial bundle only carries the
+// shell + Home, and each module's chunk is fetched the first time it's opened.
+const DeployView = React.lazy(() => import("./views/Deploy"));
+const ReadinessView = React.lazy(() => import("./views/Readiness"));
+const RaiseView = React.lazy(() => import("./views/Raise"));
+const ProcurementView = React.lazy(() => import("./views/Procurement"));
+const InventoryView = React.lazy(() => import("./views/Inventory"));
+const ProjectsView = React.lazy(() => import("./views/Projects"));
+const CrmView = React.lazy(() => import("./views/Crm"));
+const FinanceView = React.lazy(() => import("./views/Finance"));
+const HrView = React.lazy(() => import("./views/Hr"));
+const StaffPortalView = React.lazy(() => import("./views/StaffPortal"));
+const ComplianceView = React.lazy(() => import("./views/Compliance"));
+const UsersView = React.lazy(() => import("./views/Users"));
+const SettingsView = React.lazy(() => import("./views/Settings"));
 import { EngDrawer, VendorDrawer, ProjectDrawer, AccessDrawer, ProformaDrawer } from "./components/drawers";
 import { InviteModal, TaskModal, ReqModal, POModal, PoPickerModal, InvoiceModal, ProformaModal, LeaveModal, EngagementModal, EngUpdateModal, PartnerModal, OpportunityModal, RiskModal, PolicyModal, DocumentModal, ContractModal, ProjectModal, FieldActivityModal, VendorModal, GrnModal, CaptureInvoiceModal, ReceiptModal, PoAmendModal, BankChangeModal } from "./components/modals";
 
@@ -250,12 +252,28 @@ function NoAccess() {
   );
 }
 
+// Shown when the active view isn't a known module — the app is state-driven, so
+// an unknown `view` key would otherwise render nothing. Calm, on-brand empty state.
+function NotFound() {
+  const { go } = useApp();
+  return (
+    <div className="notfound">
+      <div className="notfound-code">404</div>
+      <h1 className="notfound-title">Page not found</h1>
+      <p className="notfound-sub">
+        This workspace area doesn't exist or has moved. Let's get you back to somewhere useful.
+      </p>
+      <button className="btn primary" onClick={() => go("home")}>Back to Home</button>
+    </div>
+  );
+}
+
 // Auto-logout after inactivity. After IDLE_BEFORE_COUNTDOWN seconds of no
 // interaction, a COUNTDOWN-second countdown overlay appears; at zero it signs
 // out. During the idle phase any activity resets it silently; once the overlay
 // is up only a deliberate action (button / key / click) resets it, so passive
 // mouse drift doesn't flicker the dialog.
-const IDLE_BEFORE_COUNTDOWN = 180; // seconds of no interaction before the countdown starts (3 min)
+const IDLE_BEFORE_COUNTDOWN = 600; // seconds of no interaction before the countdown starts (10 min)
 const COUNTDOWN = 50;             // countdown length; sign-out at zero
 const DANGER_AT = 10;             // ring turns red inside this many seconds
 const RING = 54;                  // ring radius (px)
@@ -336,14 +354,16 @@ function Shell() {
   // grant on — the nav already hides these, this is the belt-and-braces backstop.
   const gate = gatedViews[view];
   const blocked = !!gate && moduleLevel(perms, me?.email, gate) < 1;
-  const Active = blocked ? NoAccess : views[view];
+  const Active = blocked ? NoAccess : (views[view] ?? NotFound);
   return (
     <>
       <Sidebar />
       <main className="main" ref={mainRef}>
         <Topbar />
         <section className="view active" id={view}>
-          <Active />
+          <React.Suspense fallback={<div style={{ padding: 40, color: "var(--ink-faint)", fontSize: 14 }}>Loading…</div>}>
+            <Active />
+          </React.Suspense>
         </section>
       </main>
       <EngDrawer />

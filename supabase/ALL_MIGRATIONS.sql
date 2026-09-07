@@ -11220,3 +11220,452 @@ update public.app_users set report_track = 'technology'
 
 update public.app_users set report_track = 'leadership'
   where lower(email) = 'dnderitu@ignis-innovation.com';
+
+-- ======== supabase/migrations/0072_project_budget_expenses.sql ========
+-- ============================================================
+-- 0072 — Projects: budget items & expenses (actuals coding)
+-- HR (Ciku) needs to create the IRENA project and code money already
+-- spent against it so it accrues in the project's actuals. Adds two child
+-- tables under projects:
+--   * project_budget_items — planned allocations (name, description, amount)
+--   * project_expenses     — actual spend (description, amount, spent_on)
+-- Budget items drive the project's budget_amount; expenses roll into
+-- spentAmount alongside completed milestones. Both surface in the bootstrap
+-- project JSON (budgetItems / expenses). Also seeds the IRENA – Taita Taveta
+-- project. RPCs are edit-gated via assert_access('projects', 2).
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+-- ---------- tables ----------
+create table if not exists public.project_budget_items (
+  id          uuid primary key default gen_random_uuid(),
+  project_id  uuid not null references public.projects(id) on delete cascade,
+  name        text not null,
+  description text,
+  amount      numeric not null default 0 check (amount >= 0),
+  added_by    text,
+  sort        bigint not null default (extract(epoch from now())*1000)::bigint,
+  created_at  timestamptz not null default now()
+);
+create index if not exists idx_pbi_project on public.project_budget_items(project_id);
+
+create table if not exists public.project_expenses (
+  id          uuid primary key default gen_random_uuid(),
+  project_id  uuid not null references public.projects(id) on delete cascade,
+  description text not null,
+  amount      numeric not null default 0 check (amount >= 0),
+  spent_on    date,
+  added_by    text,
+  sort        bigint not null default (extract(epoch from now())*1000)::bigint,
+  created_at  timestamptz not null default now()
+);
+create index if not exists idx_pexp_project on public.project_expenses(project_id);
+
+-- Access to these child tables is via the security-definer RPCs below (same
+-- model as milestones/drawdowns). Enable RLS with no direct policies so the
+-- tables are not readable/writable through PostgREST directly.
+alter table public.project_budget_items enable row level security;
+alter table public.project_expenses     enable row level security;
+
+-- ---------- recompute: spent now includes expenses ----------
+create or replace function public.recompute_project_money(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_spent numeric; v_budget numeric;
+begin
+  select coalesce(sum(amount), 0)
+       + coalesce((select sum(amount) from public.project_expenses where project_id = p_id), 0)
+    into v_spent
+    from public.project_milestones where project_id = p_id and status = 'done';
+  select budget_amount into v_budget from public.projects where id = p_id;
+  update public.projects
+     set spent_txt  = public.fmt_kes(v_spent),
+         pct        = case when coalesce(v_budget, 0) > 0
+                           then round(v_spent / v_budget * 100)::text || '%' else '0%' end,
+         updated_at = now()
+   where id = p_id;
+end $$;
+
+-- Set a project's budget_amount to the sum of its budget items (used by the
+-- budget-item RPCs; projects without items keep their create-time budget).
+create or replace function public.recompute_project_budget(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_budget numeric;
+begin
+  select coalesce(sum(amount), 0) into v_budget
+    from public.project_budget_items where project_id = p_id;
+  update public.projects
+     set budget_amount = v_budget,
+         budget_txt    = public.fmt_kes(v_budget),
+         updated_at    = now()
+   where id = p_id;
+  perform public.recompute_project_money(p_id);
+end $$;
+
+-- ---------- read model: add budgetItems + expenses, expenses in spentAmount ----------
+create or replace function public.project_detail_json(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', p.id, 'state', p.state,
+    'funder', p.funder, 'status', p.status, 'budget', p.budget_txt, 'spent', p.spent_txt,
+    'pct', p.pct, 'timeline', p.timeline, 'team', p.team, 'reporting', p.reporting, 'field', p.field,
+    'budgetAmount', p.budget_amount,
+    'spentAmount', coalesce((select sum(amount) from public.project_milestones
+                             where project_id = p.id and status = 'done'), 0)
+                 + coalesce((select sum(amount) from public.project_expenses
+                             where project_id = p.id), 0),
+    'startDate', p.start_date, 'endDate', p.end_date,
+    'updatedAt', p.updated_at,
+    'location', p.location, 'docs', p.docs,
+    'createdByMe', (
+      (p.created_by is not null and p.created_by = (select id from public.app_users where auth_id = auth.uid()))
+      or coalesce((select level from public.user_permissions
+                   where email = lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''))
+                     and module = 'projects'), 0) >= 3
+    ),
+    'milestones', coalesce((select jsonb_agg(jsonb_build_object('id', id, 't', title, 's', status,
+                             'amount', amount, 'start', start_date, 'end', end_date) order by sort)
+                            from public.project_milestones where project_id = p.id), '[]'::jsonb),
+    'drawdowns',  coalesce((select jsonb_agg(jsonb_build_object('id', id, 't', title, 'v', amount_txt, 's', status) order by sort)
+                            from public.project_drawdowns where project_id = p.id), '[]'::jsonb),
+    'budgetItems', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name,
+                             'description', description, 'amount', amount, 'addedBy', added_by) order by sort)
+                            from public.project_budget_items where project_id = p.id), '[]'::jsonb),
+    'expenses',   coalesce((select jsonb_agg(jsonb_build_object('id', id, 'description', description,
+                             'amount', amount, 'spentOn', spent_on, 'addedBy', added_by) order by sort)
+                            from public.project_expenses where project_id = p.id), '[]'::jsonb))
+  from public.projects p where p.id = p_id
+$$;
+
+-- ---------- caller display name helper (added_by) ----------
+create or replace function public._caller_name() returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select name from public.app_users
+      where lower(email) = lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''))
+      limit 1),
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email',
+    'Someone');
+$$;
+
+-- ---------- RPCs: budget items ----------
+create or replace function public.add_project_budget_item(
+  p_project_id uuid, p_name text, p_description text, p_amount numeric
+) returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  perform public.assert_access('projects', 2);
+  if not exists (select 1 from public.projects where id = p_project_id) then
+    raise exception 'Project not found';
+  end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'A budget item name is required';
+  end if;
+  if coalesce(p_amount, 0) < 0 then raise exception 'Amount must be zero or more'; end if;
+  insert into public.project_budget_items(project_id, name, description, amount, added_by)
+  values (p_project_id, trim(p_name), nullif(trim(coalesce(p_description, '')), ''),
+          coalesce(p_amount, 0), public._caller_name());
+  perform public.recompute_project_budget(p_project_id);
+  perform public.audit_write('project.budget_item_added', 'project', p_project_id::text,
+    jsonb_build_object('name', p_name, 'amount', p_amount));
+  return public.project_payload(p_project_id);
+end $$;
+
+create or replace function public.delete_project_budget_item(p_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  perform public.assert_access('projects', 2);
+  select project_id into v_project from public.project_budget_items where id = p_id;
+  if v_project is null then raise exception 'Budget item not found'; end if;
+  delete from public.project_budget_items where id = p_id;
+  perform public.recompute_project_budget(v_project);
+  perform public.audit_write('project.budget_item_removed', 'project', v_project::text,
+    jsonb_build_object('item', p_id));
+  return public.project_payload(v_project);
+end $$;
+
+-- ---------- RPCs: expenses ----------
+create or replace function public.add_project_expense(
+  p_project_id uuid, p_description text, p_amount numeric, p_spent_on date
+) returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  perform public.assert_access('projects', 2);
+  if not exists (select 1 from public.projects where id = p_project_id) then
+    raise exception 'Project not found';
+  end if;
+  if nullif(trim(coalesce(p_description, '')), '') is null then
+    raise exception 'An expense description is required';
+  end if;
+  if coalesce(p_amount, 0) < 0 then raise exception 'Amount must be zero or more'; end if;
+  insert into public.project_expenses(project_id, description, amount, spent_on, added_by)
+  values (p_project_id, trim(p_description), coalesce(p_amount, 0),
+          coalesce(p_spent_on, current_date), public._caller_name());
+  perform public.recompute_project_money(p_project_id);
+  perform public.audit_write('project.expense_added', 'project', p_project_id::text,
+    jsonb_build_object('description', p_description, 'amount', p_amount, 'spentOn', p_spent_on));
+  return public.project_payload(p_project_id);
+end $$;
+
+create or replace function public.delete_project_expense(p_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  perform public.assert_access('projects', 2);
+  select project_id into v_project from public.project_expenses where id = p_id;
+  if v_project is null then raise exception 'Expense not found'; end if;
+  delete from public.project_expenses where id = p_id;
+  perform public.recompute_project_money(v_project);
+  perform public.audit_write('project.expense_removed', 'project', v_project::text,
+    jsonb_build_object('expense', p_id));
+  return public.project_payload(v_project);
+end $$;
+
+-- ---------- seed the IRENA – Taita Taveta project ----------
+do $$
+declare v_entity uuid := (select id from public.entities where code = 'KE');
+begin
+  if not exists (select 1 from public.projects where lower(name) like '%irena%' and lower(name) like '%taita%') then
+    insert into public.projects(entity_id, name, funder, status, budget_amount, budget_txt, spent_txt, pct,
+                                start_date, end_date, timeline, team, reporting, field, is_extra, state)
+    values (v_entity, 'IRENA – Taita Taveta',
+            'IRENA / UK-PACT',
+            'Active', 0, public.fmt_kes(0), 'KES 0', '0%',
+            date '2026-01-01', date '2026-12-31', 'Jan 2026 → Dec 2026',
+            'Programmes', 'Quarterly to IRENA', 'Taita Taveta County', true, 'active');
+  end if;
+end $$;
+
+-- ---------- grants ----------
+revoke execute on function public.add_project_budget_item(uuid,text,text,numeric) from public, anon;
+grant  execute on function public.add_project_budget_item(uuid,text,text,numeric) to authenticated;
+revoke execute on function public.delete_project_budget_item(uuid) from public, anon;
+grant  execute on function public.delete_project_budget_item(uuid) to authenticated;
+revoke execute on function public.add_project_expense(uuid,text,numeric,date) from public, anon;
+grant  execute on function public.add_project_expense(uuid,text,numeric,date) to authenticated;
+revoke execute on function public.delete_project_expense(uuid) from public, anon;
+grant  execute on function public.delete_project_expense(uuid) to authenticated;
+
+-- ======== supabase/migrations/0073_editor_hard_lock.sql ========
+-- ============================================================
+-- 0073 — Server-side hard edit lock (three editor accounts only)
+-- The client hides edit controls for everyone except three accounts
+-- (GLOBAL_EDITORS in src/data.ts). This makes the lock real: assert_access —
+-- the gate every module-write RPC calls — now denies ANY write (level >= 2) to
+-- anyone who is not one of the three editors, regardless of their
+-- user_permissions grants. Self-service RPCs (personal tasks, weekly reports,
+-- leave requests, password) do NOT call assert_access, so staff keep those.
+-- Also: clamp existing non-editor grants to view, and ensure the three editors
+-- hold full grants (for read-model consistency, e.g. createdByMe / bootstrap).
+-- Idempotent: safe to re-run.
+-- ============================================================
+
+create or replace function public.assert_access(p_module text, p_min_level int) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_on boolean := coalesce((select value::text = 'true' from public.app_config where key = 'enforce_access'), false);
+  v_email text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', '');
+  v_level int;
+  v_editor boolean := lower(v_email) in (
+    'jwanjiku@ignis-innovation.com', 'dnderitu@ignis-innovation.com', 'brian55mwangi@gmail.com');
+begin
+  if not v_on then return; end if;
+  if coalesce(current_setting('jikoni.system_action', true), '') = 'true' then return; end if;
+  -- Company-wide hard lock: only the three editor accounts may perform writes
+  -- (level >= 2) anywhere. Everyone else is strictly view-only, whatever their
+  -- user_permissions say. Reads (level < 2) still honour per-module grants.
+  if v_editor then return; end if;
+  if p_min_level >= 2 then
+    raise exception 'Access denied: this account is view-only';
+  end if;
+  select level into v_level from public.user_permissions where email = v_email and module = p_module;
+  if coalesce(v_level, 0) < p_min_level then
+    raise exception 'Access denied: % requires level % on %', coalesce(nullif(v_email,''),'(no user)'), p_min_level, p_module;
+  end if;
+end $$;
+
+-- Reduce every non-editor account to view-only in the grants table (0 stays 0 so
+-- hidden modules remain hidden; 2/3 drop to 1). Belt-and-suspenders with the gate
+-- above, and keeps read-model checks (createdByMe) consistent with the lock.
+update public.user_permissions
+   set level = least(level, 1), updated_at = now()
+ where lower(email) not in (
+         'jwanjiku@ignis-innovation.com', 'dnderitu@ignis-innovation.com', 'brian55mwangi@gmail.com')
+   and level > 1;
+
+-- Ensure the three editors hold full access across every module.
+insert into public.user_permissions(email, module, level)
+select e.email, m.module, 3
+from   (values ('jwanjiku@ignis-innovation.com'), ('dnderitu@ignis-innovation.com'),
+               ('brian55mwangi@gmail.com')) as e(email),
+       (values ('finance'), ('procurement'), ('inventory'), ('hr'), ('deploy'), ('readiness'),
+               ('raise'), ('crm'), ('projects'), ('reports'), ('compliance'), ('dataroom'),
+               ('settings'), ('users')) as m(module)
+on conflict (email, module) do update set level = 3, updated_at = now();
+
+-- ======== supabase/migrations/0074_budget_item_update.sql ========
+-- ============================================================
+-- 0074 — Projects: edit a budget item
+-- Adds update_project_budget_item so the IRENA Budget tab can edit an existing
+-- allocation (name / description / amount), recomputing budget_amount. Edit-gated
+-- via assert_access('projects', 2) — same as add/delete. Idempotent.
+-- ============================================================
+
+create or replace function public.update_project_budget_item(
+  p_id uuid, p_name text, p_description text, p_amount numeric
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  perform public.assert_access('projects', 2);
+  select project_id into v_project from public.project_budget_items where id = p_id;
+  if v_project is null then raise exception 'Budget item not found'; end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'A budget item name is required';
+  end if;
+  if coalesce(p_amount, 0) < 0 then raise exception 'Amount must be zero or more'; end if;
+  update public.project_budget_items
+     set name = trim(p_name),
+         description = nullif(trim(coalesce(p_description, '')), ''),
+         amount = coalesce(p_amount, 0)
+   where id = p_id;
+  perform public.recompute_project_budget(v_project);
+  perform public.audit_write('project.budget_item_updated', 'project', v_project::text,
+    jsonb_build_object('item', p_id, 'name', p_name, 'amount', p_amount));
+  return public.project_payload(v_project);
+end $$;
+
+revoke execute on function public.update_project_budget_item(uuid,text,text,numeric) from public, anon;
+grant  execute on function public.update_project_budget_item(uuid,text,text,numeric) to authenticated;
+
+-- ======== supabase/migrations/0075_project_members.sql ========
+-- ============================================================
+-- 0075 — Per-project members & delegated edit (IRENA Members tab)
+-- HR needs to grant IRENA edit rights to specific people WITHOUT giving them
+-- global edit. Adds project_members(project_id,email,role) and a project-scoped
+-- gate assert_project_edit(): a write to a project's budget is allowed if the
+-- caller is a global editor OR an 'editor' member of THAT project. Managing
+-- membership (set_project_member_role) stays restricted to the global editors
+-- (HR = jwanjiku). The three global editors are always effective editors;
+-- brian55mwangi@gmail.com is never listed/managed here. Idempotent.
+-- ============================================================
+
+create table if not exists public.project_members (
+  project_id uuid not null references public.projects(id) on delete cascade,
+  email      text not null,
+  role       text not null default 'viewer' check (role in ('viewer','editor')),
+  updated_at timestamptz not null default now(),
+  primary key (project_id, email)
+);
+alter table public.project_members enable row level security;  -- access via RPCs only
+
+-- Project-scoped edit gate. Global editors pass everywhere; otherwise the caller
+-- must be an 'editor' member of this specific project. Honours enforce_access +
+-- the system_action bypass, exactly like assert_access.
+create or replace function public.assert_project_edit(p_project_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_on boolean := coalesce((select value::text = 'true' from public.app_config where key = 'enforce_access'), false);
+  v_email text := lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''));
+  v_editor boolean := v_email in ('jwanjiku@ignis-innovation.com','dnderitu@ignis-innovation.com','brian55mwangi@gmail.com');
+begin
+  if not v_on then return; end if;
+  if coalesce(current_setting('jikoni.system_action', true), '') = 'true' then return; end if;
+  if v_editor then return; end if;
+  if exists (select 1 from public.project_members
+             where project_id = p_project_id and lower(email) = v_email and role = 'editor') then
+    return;
+  end if;
+  raise exception 'Access denied: you have view-only access to this project';
+end $$;
+
+-- Repoint the budget-item RPCs at the project-scoped gate (was assert_access('projects',2),
+-- which the global lock restricts to the 3 accounts). Bodies otherwise unchanged.
+create or replace function public.add_project_budget_item(
+  p_project_id uuid, p_name text, p_description text, p_amount numeric
+) returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  perform public.assert_project_edit(p_project_id);
+  if not exists (select 1 from public.projects where id = p_project_id) then raise exception 'Project not found'; end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'A budget item name is required'; end if;
+  if coalesce(p_amount, 0) < 0 then raise exception 'Amount must be zero or more'; end if;
+  insert into public.project_budget_items(project_id, name, description, amount, added_by)
+  values (p_project_id, trim(p_name), nullif(trim(coalesce(p_description, '')), ''), coalesce(p_amount, 0), public._caller_name());
+  perform public.recompute_project_budget(p_project_id);
+  perform public.audit_write('project.budget_item_added', 'project', p_project_id::text, jsonb_build_object('name', p_name, 'amount', p_amount));
+  return public.project_payload(p_project_id);
+end $$;
+
+create or replace function public.update_project_budget_item(
+  p_id uuid, p_name text, p_description text, p_amount numeric
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  select project_id into v_project from public.project_budget_items where id = p_id;
+  if v_project is null then raise exception 'Budget item not found'; end if;
+  perform public.assert_project_edit(v_project);
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'A budget item name is required'; end if;
+  if coalesce(p_amount, 0) < 0 then raise exception 'Amount must be zero or more'; end if;
+  update public.project_budget_items
+     set name = trim(p_name), description = nullif(trim(coalesce(p_description, '')), ''), amount = coalesce(p_amount, 0)
+   where id = p_id;
+  perform public.recompute_project_budget(v_project);
+  perform public.audit_write('project.budget_item_updated', 'project', v_project::text, jsonb_build_object('item', p_id, 'name', p_name, 'amount', p_amount));
+  return public.project_payload(v_project);
+end $$;
+
+create or replace function public.delete_project_budget_item(p_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  select project_id into v_project from public.project_budget_items where id = p_id;
+  if v_project is null then raise exception 'Budget item not found'; end if;
+  perform public.assert_project_edit(v_project);
+  delete from public.project_budget_items where id = p_id;
+  perform public.recompute_project_budget(v_project);
+  perform public.audit_write('project.budget_item_removed', 'project', v_project::text, jsonb_build_object('item', p_id));
+  return public.project_payload(v_project);
+end $$;
+
+-- List members + their effective IRENA role. Every real app user except the
+-- always-hidden ones and brian55mwangi@gmail.com. Global editors show as editors.
+-- Readable by project editors (and global editors) — the ones who manage the tab.
+create or replace function public.list_project_members(p_project_id uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'email', u.email, 'name', u.name,
+           'role', case when lower(u.email) in ('jwanjiku@ignis-innovation.com','dnderitu@ignis-innovation.com','brian55mwangi@gmail.com')
+                        then 'editor' else coalesce(pm.role, 'viewer') end,
+           'locked', lower(u.email) in ('jwanjiku@ignis-innovation.com','dnderitu@ignis-innovation.com','brian55mwangi@gmail.com')
+         ) order by u.name), '[]'::jsonb)
+  from public.app_users u
+  left join public.project_members pm on pm.project_id = p_project_id and lower(pm.email) = lower(u.email)
+  where u.state <> 'invited'
+    and lower(u.email) <> 'brian55mwangi@gmail.com'
+$$;
+
+-- Set a member's role on one project. Only the global editors (HR) may call.
+-- Cannot change a global editor's role (fixed) and never manages brian55mwangi.
+create or replace function public.set_project_member_role(p_project_id uuid, p_email text, p_role text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_email text := lower(coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email', ''));
+  v_caller_editor boolean := v_email in ('jwanjiku@ignis-innovation.com','dnderitu@ignis-innovation.com','brian55mwangi@gmail.com');
+  v_sys boolean := coalesce(current_setting('jikoni.system_action', true), '') = 'true';
+  v_target text := lower(trim(coalesce(p_email, '')));
+begin
+  if not (v_caller_editor or v_sys) then raise exception 'Only an authorised administrator can change project access'; end if;
+  if p_role not in ('viewer','editor') then raise exception 'Role must be viewer or editor'; end if;
+  if v_target in ('jwanjiku@ignis-innovation.com','dnderitu@ignis-innovation.com','brian55mwangi@gmail.com') then
+    raise exception 'That account''s access is fixed and cannot be changed here';
+  end if;
+  if not exists (select 1 from public.app_users where lower(email) = v_target) then raise exception 'No such user'; end if;
+  insert into public.project_members(project_id, email, role) values (p_project_id, v_target, p_role)
+  on conflict (project_id, email) do update set role = excluded.role, updated_at = now();
+  perform public.audit_write('project.member_role_set', 'project', p_project_id::text, jsonb_build_object('email', v_target, 'role', p_role));
+  return public.list_project_members(p_project_id);
+end $$;
+
+revoke execute on function public.assert_project_edit(uuid) from public, anon;
+grant  execute on function public.assert_project_edit(uuid) to authenticated;
+revoke execute on function public.list_project_members(uuid) from public, anon;
+grant  execute on function public.list_project_members(uuid) to authenticated;
+revoke execute on function public.set_project_member_role(uuid,text,text) from public, anon;
+grant  execute on function public.set_project_member_role(uuid,text,text) to authenticated;

@@ -3,10 +3,14 @@ import { Pulse, Note, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { StaticBars, Donut, ChartLegend, GroupedBars } from "../components/charts";
 import { useUsdKesRate } from "../lib/fx";
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import { Crumb } from "../nav";
 import { PlusI } from "../components/icons";
 import { budgetOf, spentOf, burnOf, progressOf, projectHealth, buildAttention } from "../lib/attention";
+
+// IRENA programme workspace — lazy so ECharts + the baseline dataset only load
+// when the IRENA sub-tab is opened.
+const IrenaView = lazy(() => import("./Irena"));
 
 /* Chart palette — projects are coloured by position so the donut, legend and
    burn bars all agree on a colour per project. */
@@ -294,6 +298,12 @@ export default function ProjectsView() {
         </div>
       )}
 
+      {tab === "pr-irena" && (
+        <Suspense fallback={<div className="proj-panel active"><Note>Loading IRENA workspace…</Note></div>}>
+          <IrenaView />
+        </Suspense>
+      )}
+
       {tab === "pr-budget" && (
         <div className="proj-panel active">
           <div className="grid g-2">
@@ -366,7 +376,6 @@ export default function ProjectsView() {
               <div className="panel-h"><h3>Reporting calendar</h3><span className="meta">funder obligations</span></div>
               {reportingRows.map((p) => (
                 <div className="task" key={p.name}>
-                  <span className="id">{p.short}</span>
                   <span className="txt">{p.reporting}<small>{p.funder}</small></span>
                   <span className={`pill ${/jul|due/i.test(p.reporting) ? "over" : "week"}`}>{/jul|due/i.test(p.reporting) ? "Due" : "Upcoming"}</span>
                 </div>
