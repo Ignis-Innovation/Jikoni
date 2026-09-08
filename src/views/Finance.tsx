@@ -354,7 +354,7 @@ export default function FinanceView() {
                   ) : pettyPending.map((r) => (
                     <tr key={r.id}>
                       <td>{r.requester}{r.reason ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{r.reason}</small> : null}</td>
-                      <td>{r.item}</td>
+                      <td>{r.item}{r.project ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ {r.project}</small> : null}</td>
                       <td className="mono">{kes(r.amount)}</td>
                       <td style={{ fontSize: 11 }}>
                         <span className="pill today" title={r.approverRole === "super" ? "HR's own request — a Super Admin approves it" : "A Super Admin or HR approves it"}>→ {pettyRouteLabel(r)}</span>

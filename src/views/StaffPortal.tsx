@@ -100,17 +100,20 @@ function MyCertModal() {
 
 // Raise or edit a petty-cash request from the portal — routes to Finance/HR.
 function PettyCashModal() {
-  const { pettyOpen, pettyEdit, closePetty, submitPettyRequest, updatePettyRequest, toast } = useApp();
+  const { pettyOpen, pettyEdit, closePetty, submitPettyRequest, updatePettyRequest, projectDetails, toast } = useApp();
   const [item, setItem] = useState("");
   const [amount, setAmount] = useState("");
   const [needBy, setNeedBy] = useState("");
   const [reason, setReason] = useState("");
+  const [project, setProject] = useState("");
+  const projects = Object.keys(projectDetails);
   useEffect(() => {
     if (pettyOpen) {
       setItem(pettyEdit?.item ?? "");
       setAmount(pettyEdit ? String(pettyEdit.amount) : "");
       setNeedBy(pettyEdit?.needBy ?? "");
       setReason(pettyEdit?.reason ?? "");
+      setProject(pettyEdit?.project ?? "");
     }
   }, [pettyOpen, pettyEdit]);
 
@@ -118,7 +121,7 @@ function PettyCashModal() {
     const amt = Number(amount);
     if (!item.trim()) { toast("What is it for?", "Add the item you're requesting money for"); return; }
     if (!amt || amt <= 0) { toast("Enter an amount", "How much do you need? (KES)"); return; }
-    const v = { item: item.trim(), amount: amt, needBy, reason };
+    const v = { item: item.trim(), amount: amt, needBy, reason, project };
     if (pettyEdit) updatePettyRequest(pettyEdit.id, v);
     else submitPettyRequest(v);
   }
@@ -135,8 +138,15 @@ function PettyCashModal() {
           <div style={{ flex: 1 }}><label>Amount (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 3500" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
           <div style={{ flex: 1 }}><label>Needed by <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" type="date" style={{ width: "100%" }} value={needBy} onChange={(e) => setNeedBy(e.target.value)} /></div>
         </div>
+        <div>
+          <label>Project <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+          <select className="field" style={{ width: "100%" }} value={project} onChange={(e) => setProject(e.target.value)}>
+            <option value="">Not tied to a project</option>
+            {projects.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
         <div><label>Reason <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={3} placeholder="What's it for and why now?" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
-        <Note>Approved requests show as <strong>Approved</strong> here; if it's turned down you'll see <strong>Rejected</strong> with any note.</Note>
+        <Note>Once approved, this amount is coded to the chosen project and shows in its actuals. Approved requests show as <strong>Approved</strong> here; if turned down you'll see <strong>Rejected</strong> with any note.</Note>
       </div>
       <div className="mf">
         <button className="btn" onClick={closePetty}>Cancel</button>

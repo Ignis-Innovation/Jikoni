@@ -67,6 +67,7 @@ export interface HrBalanceRow { who: string; entitled: number; used: number; res
 // Petty-cash request raised from the Staff Portal, decided in Finance → Petty Cash.
 export interface PettyRequest {
   id: string; item: string; amount: number; needBy: string | null; reason: string | null;
+  project: string | null;
   state: "pending" | "approved" | "rejected" | "cancelled";
   requester: string; requesterEmail: string; approverRole: string | null;
   superApprovedBy: string | null; hrApprovedBy: string | null;
@@ -402,8 +403,8 @@ interface AppApi {
   openPetty: () => void;
   openPettyEdit: (r: PettyRequest) => void;
   closePetty: () => void;
-  submitPettyRequest: (v: { item: string; amount: number; needBy: string; reason: string }) => void;
-  updatePettyRequest: (ref: string, v: { item: string; amount: number; needBy: string; reason: string }) => void;
+  submitPettyRequest: (v: { item: string; amount: number; needBy: string; reason: string; project?: string }) => void;
+  updatePettyRequest: (ref: string, v: { item: string; amount: number; needBy: string; reason: string; project?: string }) => void;
   deletePettyRequest: (ref: string) => void;
   decidePettyRequest: (ref: string, approve: boolean, note?: string) => void;
   attachPettyInvoice: (ref: string, file: File) => void;
@@ -785,7 +786,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Petty Cash tab shows the queue. RLS returns all rows for authenticated.
     const { data: pcr } = await supabase
       .from("petty_cash_requests")
-      .select("ref, item, amount, need_by, reason, state, approver_role, decided_at, decision_note, created_at, invoice_path, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
+      .select("ref, item, amount, need_by, reason, state, project_code, approver_role, decided_at, decision_note, created_at, invoice_path, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
       .order("created_at", { ascending: false })
       .limit(200);
     setPettyRequests(((pcr ?? []) as any[]).map((r) => {
@@ -795,6 +796,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const hr = Array.isArray(r.hrApprover) ? r.hrApprover[0] : r.hrApprover;
       return {
         id: r.ref, item: r.item, amount: Number(r.amount), needBy: r.need_by, reason: r.reason, state: r.state,
+        project: r.project_code ?? null,
         requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "", approverRole: r.approver_role ?? null,
         superApprovedBy: su?.name ?? null, hrApprovedBy: hr?.name ?? null, decidedBy: dc?.name ?? null,
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
@@ -1751,9 +1753,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch { /* email is best-effort; the in-app notification still lands */ }
   }
 
-  async function submitPettyRequest(v: { item: string; amount: number; needBy: string; reason: string }) {
+  async function submitPettyRequest(v: { item: string; amount: number; needBy: string; reason: string; project?: string }) {
     const { data, error } = await supabase.rpc("submit_petty_cash_request", {
-      p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null,
+      p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null, p_project_code: v.project || null,
     });
     if (error) { toast("Request not submitted", error.message); return; }
     setPettyOpen(false); setPettyEdit(null);
@@ -1771,9 +1773,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (d?.autoApproved) toast(`${ref} approved`, "Auto-approved — Super Admin requests don't need a second approver");
     else toast(`${ref} submitted`, d?.approverRole === "super" ? "Sent to a Super Admin to approve — you'll see the decision here" : "Sent to HR to approve — you'll see the decision here");
   }
-  async function updatePettyRequest(ref: string, v: { item: string; amount: number; needBy: string; reason: string }) {
+  async function updatePettyRequest(ref: string, v: { item: string; amount: number; needBy: string; reason: string; project?: string }) {
     const { error } = await supabase.rpc("edit_petty_cash_request", {
-      p_ref: ref, p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null,
+      p_ref: ref, p_item: v.item, p_amount: v.amount, p_need_by: v.needBy || null, p_reason: v.reason.trim() || null, p_project_code: v.project || null,
     });
     if (error) { toast("Couldn't update request", error.message); return; }
     setPettyOpen(false); setPettyEdit(null);
