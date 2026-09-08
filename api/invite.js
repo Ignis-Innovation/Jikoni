@@ -33,6 +33,13 @@ export default async function handler(req, res) {
     .maybeSingle();
   if (!perm || perm.level < 2) return res.status(403).json({ error: "You can't invite members" });
 
+  // rate limit per admin — even a legitimate user-manager shouldn't fire hundreds
+  // of invite emails in a burst (20 / hour). Fail open on limiter error.
+  try {
+    const { data: ok } = await admin.rpc("rl_hit", { p_key: `invite:${who.user.email}`, p_max: 20, p_window: 3600 });
+    if (ok === false) return res.status(429).json({ error: "Too many invites sent. Please wait before sending more." });
+  } catch { /* limiter unavailable → fail open */ }
+
   // 2) validate input
   const { name, email } = req.body || {};
   if (!email) return res.status(400).json({ error: "An email is required" });

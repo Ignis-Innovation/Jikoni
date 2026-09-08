@@ -58,6 +58,13 @@ export default async function handler(req, res) {
     .from("user_permissions").select("level").eq("email", who.user.email).eq("module", "hr").maybeSingle();
   if (!perm || perm.level < 1) return res.status(403).json({ error: "You don't have HR access" });
 
+  // rate limit per HR user — CV scans read a private bucket + parse files, so cap
+  // bursts (40 / 10 min). Fail open on limiter error.
+  try {
+    const { data: ok } = await admin.rpc("rl_hit", { p_key: `cv:${who.user.email}`, p_max: 40, p_window: 600 });
+    if (ok === false) return res.status(429).json({ error: "Too many CV scans. Please wait a few minutes." });
+  } catch { /* limiter unavailable → fail open */ }
+
   // 2) load the candidate + the posting's criteria
   const { candidateId } = req.body || {};
   if (!candidateId) return res.status(400).json({ error: "candidateId is required" });

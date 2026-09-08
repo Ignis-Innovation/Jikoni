@@ -26,6 +26,13 @@ export default async function handler(req, res) {
   const { to, subject, text, html } = req.body || {};
   if (!to || !subject) return res.status(400).json({ error: "A recipient and subject are required" });
 
+  // rate limit per caller — a signed-in user can email teammates, but not spam
+  // through the company SMTP relay (40 sends / 10 min). Fail open on limiter error.
+  try {
+    const { data: ok } = await caller.rpc("rl_hit", { p_key: `notify:${who.user.email}`, p_max: 40, p_window: 600 });
+    if (ok === false) return res.status(429).json({ error: "Too many notifications sent. Please wait a few minutes." });
+  } catch { /* limiter unavailable → fail open */ }
+
   // 3) email it via SMTP (Office 365)
   if (!process.env.SMTP_HOST) return res.status(500).json({ error: "SMTP not configured" });
   const transport = nodemailer.createTransport({

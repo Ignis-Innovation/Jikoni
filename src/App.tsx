@@ -268,86 +268,6 @@ function NotFound() {
   );
 }
 
-// Auto-logout after inactivity. After IDLE_BEFORE_COUNTDOWN seconds of no
-// interaction, a COUNTDOWN-second countdown overlay appears; at zero it signs
-// out. During the idle phase any activity resets it silently; once the overlay
-// is up only a deliberate action (button / key / click) resets it, so passive
-// mouse drift doesn't flicker the dialog.
-const IDLE_BEFORE_COUNTDOWN = 600; // seconds of no interaction before the countdown starts (10 min)
-const COUNTDOWN = 50;             // countdown length; sign-out at zero
-const DANGER_AT = 10;             // ring turns red inside this many seconds
-const RING = 54;                  // ring radius (px)
-const CIRC = 2 * Math.PI * RING;
-
-function IdleLogout() {
-  const { signOut } = useApp();
-  const signOutRef = useRef(signOut);
-  signOutRef.current = signOut;
-  const lastActivity = useRef(Date.now());
-  const activeRef = useRef(false); // countdown overlay currently visible
-  const firedRef = useRef(false);
-  // remaining: null = idle phase (no overlay); number = seconds left in countdown
-  const [remaining, setRemaining] = useState<number | null>(null);
-
-  const reset = () => {
-    lastActivity.current = Date.now();
-    firedRef.current = false;
-    if (activeRef.current) { activeRef.current = false; setRemaining(null); }
-  };
-
-  useEffect(() => {
-    // Deliberate actions always reset; passive motion resets only while idle
-    // (not once the countdown is showing).
-    const onDeliberate = () => reset();
-    const onPassive = () => { if (!activeRef.current) reset(); };
-    const deliberate = ["mousedown", "keydown", "touchstart", "click"];
-    const passive = ["mousemove", "scroll", "wheel"];
-    deliberate.forEach((e) => window.addEventListener(e, onDeliberate, { passive: true }));
-    passive.forEach((e) => window.addEventListener(e, onPassive, { passive: true }));
-    const iv = setInterval(() => {
-      const idleFor = (Date.now() - lastActivity.current) / 1000;
-      const left = Math.ceil(IDLE_BEFORE_COUNTDOWN + COUNTDOWN - idleFor);
-      if (idleFor < IDLE_BEFORE_COUNTDOWN) {
-        if (activeRef.current) { activeRef.current = false; setRemaining(null); }
-        return;
-      }
-      activeRef.current = true;
-      const clamped = Math.max(0, Math.min(COUNTDOWN, left));
-      setRemaining((prev) => (prev === clamped ? prev : clamped));
-      if (clamped <= 0 && !firedRef.current) { firedRef.current = true; signOutRef.current(); }
-    }, 500);
-    return () => {
-      deliberate.forEach((e) => window.removeEventListener(e, onDeliberate));
-      passive.forEach((e) => window.removeEventListener(e, onPassive));
-      clearInterval(iv);
-    };
-  }, []);
-
-  if (remaining == null) return null;
-  const danger = remaining <= DANGER_AT;
-  const offset = CIRC * (1 - remaining / COUNTDOWN);
-  return (
-    <div className="idle-bg show" role="alertdialog" aria-label="Session about to expire">
-      <div className="idle-card">
-        <div className={`idle-ring${danger ? " danger" : ""}`}>
-          <div className="idle-halo" />
-          <svg viewBox="0 0 132 132" aria-hidden="true">
-            <circle className="trk" cx="66" cy="66" r={RING} />
-            <circle className="arc" cx="66" cy="66" r={RING} strokeDasharray={CIRC} strokeDashoffset={offset} />
-          </svg>
-          <div className="num"><b>{remaining}</b><span>seconds</span></div>
-        </div>
-        <h3>Still there?</h3>
-        <p>You've been idle for a few minutes. We'll sign you out to keep your account secure.</p>
-        <div className="idle-actions">
-          <button className="btn stay" onClick={reset}>I'm still here</button>
-          <button className="btn leave" onClick={() => { firedRef.current = true; signOutRef.current(); }}>Sign out now</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Shell() {
   const { view, mainRef, me, perms } = useApp();
   // Block direct access (typed URL / stale nav) to any gated module the user has no
@@ -396,7 +316,6 @@ function Shell() {
       <PoAmendModal />
       <BankChangeModal />
       <Toasts />
-      <IdleLogout />
     </>
   );
 }

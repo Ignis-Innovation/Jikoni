@@ -27,6 +27,18 @@ export default async function handler(req, res) {
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
 
+  // Rate limit: cap reset requests per source IP and per email to curb email
+  // flooding and timing probes. IP-based, so a 429 never reveals whether the
+  // email is registered. Fail open if the limiter itself errors.
+  const ip = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
+  try {
+    const [{ data: ipOk }, { data: emOk }] = await Promise.all([
+      admin.rpc("rl_hit", { p_key: `forgot:ip:${ip}`, p_max: 8, p_window: 900 }),
+      admin.rpc("rl_hit", { p_key: `forgot:em:${email}`, p_max: 4, p_window: 900 }),
+    ]);
+    if (ipOk === false || emOk === false) return res.status(429).json({ error: "Too many requests. Please wait a few minutes and try again." });
+  } catch { /* limiter unavailable → fail open */ }
+
   // 1) Only send to a real, still-active Jikoni user. We look up app_users rather
   // than letting generateLink(type:invite) create an account for any address.
   const { data: user } = await admin
