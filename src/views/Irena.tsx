@@ -213,7 +213,7 @@ function MembersTab({ members, canManage, onSet }: {
             <tr key={m.email}>
               <td>
                 <div className="who">
-                  <div className="av-sm" style={{ background: "#D8D2C7" }}>{m.name[0]}</div>
+                  <div className="av-sm" style={{ background: "#D8D2C7" }}>{m.name?.[0] ?? "?"}</div>
                   <div><div className="nm">{m.name}</div><div className="em">{m.email}</div></div>
                 </div>
               </td>

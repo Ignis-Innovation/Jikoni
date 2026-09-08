@@ -438,7 +438,7 @@ export function ProjectDrawer() {
                   ? <select className="field" style={smallField} value={m.s} onChange={(e) => setMilestoneStatus(m.id!, e.target.value)}>
                       {MS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
-                  : <span className={`pill ${ms[m.s][0]}`}>{ms[m.s][1]}</span>}
+                  : (() => { const cell = ms[m.s] ?? ["week", m.s]; return <span className={`pill ${cell[0]}`}>{cell[1]}</span>; })()}
               </div>
             ))}
             {p.id && canEdit && (
