@@ -1309,6 +1309,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setMobileNavOpen(false);
     mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
+  // A reopened tab (browser back-forward cache / session restore) hands the page back with the
+  // last view still in memory, so the app never re-initialises to Home. Force Home on such a
+  // restore, so closing and reopening the tab always returns to the default screen.
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted) go("home"); };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function cycleEntity() {
     const order: Entity[] = ["Kenya", "Uganda", "Consolidated"];
