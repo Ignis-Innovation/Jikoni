@@ -12,7 +12,8 @@ import { createClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
 
 const APP_LINK = process.env.INVITE_REDIRECT_URL || "https://app.ignis-innovation.com/";
-const CHASE_DAYS = Number(process.env.ADVANCE_CHASE_DAYS) || 7;
+// default 7 days; ADVANCE_CHASE_DAYS=0 is honoured (useful for testing — chases any issued advance)
+const CHASE_DAYS = (() => { const n = Number(process.env.ADVANCE_CHASE_DAYS); return Number.isFinite(n) && n >= 0 ? n : 7; })();
 const kes = (n) => "KES " + Math.round(Number(n) || 0).toLocaleString();
 const daysAgo = (iso) => Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 
