@@ -78,7 +78,7 @@ function NavModule({ v, icon, badge, badgeCls, collapsed, setCollapsed }: {
 }
 
 function Sidebar() {
-  const { view, me, perms, notifications, signOut, go, setSettingsTab, mobileNavOpen, setMobileNavOpen } = useApp();
+  const { view, me, perms, notifications, markNotificationsSeen, signOut, go, setSettingsTab, mobileNavOpen, setMobileNavOpen } = useApp();
   const initial = (me?.name || "?").trim()[0]?.toUpperCase() || "?";
   const openProfile = () => { setSettingsTab("s-profile"); go("settings"); };
   const canUsers = canManageUsers(perms, me?.email);
@@ -86,14 +86,22 @@ function Sidebar() {
   // Level 0 (None) hides it here and blocks direct access in Shell below.
   const can = (m: string) => moduleLevel(perms, me?.email, m) >= 1;
   const canHr = can("hr");
-  // CRM badge counts only unseen CRM notifications — it appears only when there's
-  // something new the user hasn't opened yet.
-  const crmUnseen = notifications.filter((n) => !n.seen && n.linkView === "crm").length;
+  // Per-module badge = unseen notifications routed to that module (link_view === module id;
+  // the Home item carries 'home', where task assignments land). Shows the approver/assignee
+  // there's something new to check, and clears when they open the module (below).
+  const badge = (lv: string) => { const n = notifications.filter((x) => !x.seen && x.linkView === lv).length; return n ? String(n) : undefined; };
   // per-module "collapsed" override so an active module can be folded shut
   const [collapsedFor, setCollapsedFor] = useState<string | null>(null);
   const collapsed = (v: string) => collapsedFor === v;
   const setCollapsed = (v: string) => (b: boolean) => setCollapsedFor(b ? v : null);
   useEffect(() => { setCollapsedFor(null); }, [view]);
+  // Opening a module counts as "checked" — clear that module's unseen notifications so the
+  // nav badge (and the matching bell items) drop. The pending item itself stays in its tab.
+  useEffect(() => {
+    const ids = notifications.filter((n) => !n.seen && n.linkView === view).map((n) => n.id);
+    if (ids.length) markNotificationsSeen(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   return (
     <>
@@ -119,26 +127,26 @@ function Sidebar() {
 
       <nav className="nav">
         <div className="nav-group">Overview</div>
-        <NavItem v="home" icon={<HomeI />} label="Home" />
+        <NavItem v="home" icon={<HomeI />} label="Home" badge={badge("home")} />
 
         {(can("finance") || can("procurement") || can("inventory")) && <div className="nav-group">Finance &amp; Operations</div>}
-        {can("finance") && <NavModule v="finance" icon={<FinanceI />} collapsed={collapsed("finance")} setCollapsed={setCollapsed("finance")} />}
-        {can("procurement") && <NavModule v="procurement" icon={<ProcureI />} collapsed={collapsed("procurement")} setCollapsed={setCollapsed("procurement")} />}
-        {can("inventory") && <NavModule v="inventory" icon={<BoxI />} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />}
+        {can("finance") && <NavModule v="finance" icon={<FinanceI />} badge={badge("finance")} collapsed={collapsed("finance")} setCollapsed={setCollapsed("finance")} />}
+        {can("procurement") && <NavModule v="procurement" icon={<ProcureI />} badge={badge("procurement")} collapsed={collapsed("procurement")} setCollapsed={setCollapsed("procurement")} />}
+        {can("inventory") && <NavModule v="inventory" icon={<BoxI />} badge={badge("inventory")} collapsed={collapsed("inventory")} setCollapsed={setCollapsed("inventory")} />}
 
         <div className="nav-group">People</div>
-        {canHr && <NavModule v="hr" icon={<HrI />} collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />}
-        <NavModule v="staffportal" icon={<PortalI />} collapsed={collapsed("staffportal")} setCollapsed={setCollapsed("staffportal")} />
+        {canHr && <NavModule v="hr" icon={<HrI />} badge={badge("hr")} collapsed={collapsed("hr")} setCollapsed={setCollapsed("hr")} />}
+        <NavModule v="staffportal" icon={<PortalI />} badge={badge("staffportal")} collapsed={collapsed("staffportal")} setCollapsed={setCollapsed("staffportal")} />
 
         {(can("deploy") || can("projects")) && <div className="nav-group">Deployment</div>}
         {can("deploy") && <NavItem v="deploy" icon={<FlameI />} label="Deployment & Carbon" />}
-        {can("projects") && <NavModule v="projects" icon={<ProjectsI />} collapsed={collapsed("projects")} setCollapsed={setCollapsed("projects")} />}
+        {can("projects") && <NavModule v="projects" icon={<ProjectsI />} badge={badge("projects")} collapsed={collapsed("projects")} setCollapsed={setCollapsed("projects")} />}
 
         {can("crm") && <><div className="nav-group">Growth</div>
-        <NavModule v="crm" icon={<CrmI />} badge={crmUnseen ? String(crmUnseen) : undefined} collapsed={collapsed("crm")} setCollapsed={setCollapsed("crm")} /></>}
+        <NavModule v="crm" icon={<CrmI />} badge={badge("crm")} collapsed={collapsed("crm")} setCollapsed={setCollapsed("crm")} /></>}
 
         {can("compliance") && <><div className="nav-group">Governance</div>
-        <NavModule v="compliance" icon={<ComplianceI />} collapsed={collapsed("compliance")} setCollapsed={setCollapsed("compliance")} /></>}
+        <NavModule v="compliance" icon={<ComplianceI />} badge={badge("compliance")} collapsed={collapsed("compliance")} setCollapsed={setCollapsed("compliance")} /></>}
 
         <div className="nav-group">Administration</div>
         {canUsers && <NavItem v="users" icon={<UsersI />} label="User Management" />}
