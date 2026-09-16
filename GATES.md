@@ -171,3 +171,125 @@ Shell: /usr/bin/zsh · wd: /home/brian/Desktop/jikoni
       h-bills + f-bills wired in nav + Hr.tsx + Finance.tsx).
 
 Measured: 5 met / 0 unmet / 0 abandoned.
+
+---
+
+# GATES.md — SPEC VERIFICATION: E1 Reimbursement claim + E2 Travel advance (2026-09-16)
+
+Verifying the built Expense Claims + Travel Advances against the workflow spec. Each gate
+is one spec clause. Runnable gates use rolled-back DB flow tests + code inspection. Known
+deliberate deviations (chosen with the user earlier) are recorded as DEVIATION, not silent.
+
+## E1 — Reimbursement claim
+- [ ] E1-G1: file claim (lines + per-diem days×rate) → amount computed, stored
+      CHECK: node scripts/test-claims.mjs
+      EXPECT: CLAIM_TESTS_PASS
+- [ ] E1-G2: claimant cannot approve their own claim (control)
+      CHECK: node scripts/test-claims.mjs
+      EXPECT: CLAIM_TESTS_PASS
+- [ ] E1-G3: on approval the claim posts to the project's actuals (project_expenses)
+      CHECK: node scripts/test-claims.mjs
+      EXPECT: CLAIM_TESTS_PASS
+- [ ] E1-G4: reimburse (mark paid) is a separate Finance step; does not re-post
+      CHECK: node scripts/test-claims.mjs
+      EXPECT: CLAIM_TESTS_PASS
+- [ ] E1-G5: per-diem amount is computed (days × rate), never trusted from client amount
+      CHECK: node scripts/test-claims.mjs
+      EXPECT: CLAIM_TESTS_PASS
+- [ ] E1-G6: a receipt-less expense line is FLAGGED in the UI (spec: "flagged")
+      CHECK: node -e "const s=require('fs').readFileSync('src/views/StaffPortal.tsx','utf8')+require('fs').readFileSync('src/views/Finance.tsx','utf8');process.exit(/receipt needed|receipts? missing|missing/i.test(s)?0:1)"
+      EXPECT: exit 0
+
+## E2 — Travel advance & reconciliation
+- [ ] E2-G1: issued advance is a receivable, NOT project cost (control)
+      CHECK: node scripts/test-advances.mjs
+      EXPECT: ADV_TESTS_PASS
+- [ ] E2-G2: reconcile computes spent-vs-advanced; balance = amount − spent
+      CHECK: node scripts/test-advances.mjs
+      EXPECT: ADV_TESTS_PASS
+- [ ] E2-G3: ONLY the reconciled (spent) amount posts to the project, not the advance
+      CHECK: node scripts/test-advances.mjs
+      EXPECT: ADV_TESTS_PASS
+- [ ] E2-G4: settle closes the advance; project actual moved on reconcile, not issue
+      CHECK: node scripts/test-advances.mjs
+      EXPECT: ADV_TESTS_PASS
+
+## Deviations from spec (deliberate, chosen earlier) + genuine gaps — assessed honestly in report
+- [ ] E1-DEV1: approver is HR/Super-Admin routing, NOT manager/project-owner (design choice)
+- [ ] E1-DEV2: claim posts to project ACTUALS only, no GL ledger journal (design choice)
+- [ ] E1-DEV3: claim posts on APPROVAL, not on payment (design choice)
+- [ ] E1-DEV4: per-diem RATE is typeable (defaults to config), not fixed config-only (user change)
+- [ ] E1-DEV5: receipt-less line does NOT block approval — flagged only (user change 0079)
+- [ ] E2-GAP1: unreconciled-advance aging/chase control is NOT built (spec CONTROL #2)
+
+## Results — SPEC VERIFICATION (E1 + E2)
+
+Shell: /usr/bin/zsh · wd: /home/brian/Desktop/jikoni
+
+RUNNABLE GATES — 10 met / 0 unmet:
+- [x] E1-G1  MET — test-claims.mjs exit 0, "claim total computed = 3500 (1500 + 2×1000)"
+- [x] E1-G2  MET — same run, "claimant cannot approve own claim" (server raised)
+- [x] E1-G3  MET — "approval posts the total to project actuals (3500) :: rows=1 amt=3500.00"
+- [x] E1-G4  MET — "mark-paid does NOT re-post :: rows=1" (unchanged after reimburse)
+- [x] E1-G5  MET — "per-diem amount computed = days × rate = 2000"
+- [x] E1-G6  MET — flag check exit 0 (UI shows "receipt needed" / "receipts missing")
+- [x] E2-G1  MET — test-advances.mjs exit 0, "ISSUED advance is a receivable, NOT project cost :: rows=0"
+- [x] E2-G2  MET — "balance = amount - spent = 2000"
+- [x] E2-G3  MET — "ONLY the spent amount posts (3000, not the 5000 advance)"
+- [x] E2-G4  MET — "settle → settled"; project moved on reconcile (rows=1 only after reconcile)
+
+DELIBERATE DEVIATIONS from spec (chosen with the user; working as decided) — evidence:
+- [x] E1-DEV1  CONFIRMED — approver is HR/Super routing (decide uses can_petty_super/can_petty_hr),
+      NOT manager/project-owner. Spec says "manager / project owner".
+- [x] E1-DEV2  CONFIRMED — no GL ledger journal (test: journalRows=0). Spec says "posts to the ledger".
+      Project actuals side IS done.
+- [x] E1-DEV3  CONFIRMED — posts on APPROVAL (rows=1 after approve, before mark-paid). Spec posts on payment.
+- [x] E1-DEV4  CONFIRMED — per-diem RATE is typeable (test used 1000 → 2000, not the 5000 config).
+      Amount is still computed, not typed. Spec says "days × the configured rate".
+- [x] E1-DEV5  CONFIRMED — receipt-less line does NOT block approval, only flagged (test: approved).
+      Spec says "flagged"; user later chose not to block (mig 0079).
+
+GENUINE GAP — 1 unmet:
+- [ ] E2-GAP1  UNMET — no unreconciled-advance aging/chase. Negative check clean against a positive
+      control (bill-reminder.js found; crons = digest/weekly/bill only; no advance reminder).
+      Spec CONTROL: "An advance unreconciled past a set period is chased." Buildable (mirror
+      bill-reminder.js: a cron that emails Finance + the holder about advances issued > N days ago
+      still in state 'issued').
+
+Measured: 10 runnable met / 0 runnable unmet · 5 deliberate deviations · 1 genuine gap (E2-GAP1).
+
+---
+
+# GATES.md — E2-GAP1: chase unreconciled advances (additive, no tampering) (2026-09-16)
+
+- [ ] AG-G1: the chase selects ONLY advances stuck in 'issued' past the threshold
+      (not recently-issued, not reconciled/settled) — core "who to chase" logic
+      CHECK: node scripts/test-advance-reminder.mjs
+      EXPECT: ADVREM_TESTS_PASS
+- [ ] AG-G2: the reminder is READ-ONLY — it never updates/inserts travel_advances (no tampering)
+      CHECK: node -e "const s=require('fs').readFileSync('api/advance-reminder.js','utf8');const bad=/from\(\s*[\"']travel_advances[\"']\s*\)\s*\.(update|insert|delete|upsert)/.test(s);process.exit(bad?1:0)"
+      EXPECT: exit 0
+- [ ] AG-G3: the monthly/weekly cron is registered in vercel.json
+      CHECK: node -e "const v=require('./vercel.json');process.exit(v.crons.some(c=>c.path==='/api/advance-reminder')?0:1)"
+      EXPECT: exit 0
+- [ ] AG-G4: typecheck + build still clean
+      CHECK: npx tsc --noEmit && npm run build
+      EXPECT: built in
+- [ ] AG-REG: NO REGRESSION — every existing suite still passes after the change
+      CHECK: node scripts/test-claims.mjs && node scripts/test-advances.mjs && node scripts/test-bills.mjs && node scripts/test-claim-advance-link.mjs && node scripts/test-hr-advance-route.mjs
+      EXPECT: CLAIM_TESTS_PASS ADV_TESTS_PASS BILL_TESTS_PASS LINK_TESTS_PASS HR_ROUTE_PASS
+
+## Results — E2-GAP1 advance chase (all met, zero regression)
+
+Shell: /usr/bin/zsh · wd: /home/brian/Desktop/jikoni
+
+- [x] AG-G1  MET — test-advance-reminder.mjs exit 0, "ADVREM_TESTS_PASS": chases 'issued'>7d
+      (ADV-CHASE-OLD), skips recent (<7d) + reconciled; exactly 1 selected (positive control).
+- [x] AG-G2  MET — read-only check exit 0 (no update/insert/delete/upsert on travel_advances).
+- [x] AG-G3  MET — cron check exit 0 (/api/advance-reminder registered, "0 7 * * 1" Mon 7am).
+- [x] AG-G4  MET — `npx tsc --noEmit` exit 0; `npm run build` → "✓ built in 23.04s".
+- [x] AG-REG MET — full regression, all prior suites still pass:
+      CLAIM_TESTS_PASS · ADV_TESTS_PASS · BILL_TESTS_PASS · LINK_TESTS_PASS · HR_ROUTE_PASS.
+      → the additive change tampered with nothing.
+
+Measured: 5 met / 0 unmet. E2-GAP1 closed; deliberate deviations DEV1–DEV4 left untouched by choice.
