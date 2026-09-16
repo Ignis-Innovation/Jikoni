@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useApp } from "../store";
+import { useApp, type ClaimLineInput } from "../store";
 import { Note } from "../components/ui";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
@@ -47,6 +47,22 @@ const statePill: Record<string, { cls: string; txt: string }> = {
   approved: { cls: "done", txt: "Approved" },
   rejected: { cls: "over", txt: "Rejected" },
   cancelled: { cls: "done", txt: "Cancelled" },
+};
+const claimPill: Record<string, { cls: string; txt: string }> = {
+  pending: { cls: "today", txt: "Awaiting approval" },
+  approved: { cls: "week", txt: "Approved" },
+  rejected: { cls: "over", txt: "Rejected" },
+  paid: { cls: "done", txt: "Reimbursed" },
+  cancelled: { cls: "done", txt: "Cancelled" },
+};
+const advancePill: Record<string, { cls: string; txt: string }> = {
+  pending: { cls: "today", txt: "Awaiting approval" },
+  approved: { cls: "week", txt: "Approved — awaiting cash" },
+  issued: { cls: "today", txt: "Issued — reconcile on return" },
+  reconciled: { cls: "week", txt: "Reconciled" },
+  settled: { cls: "done", txt: "Settled" },
+  rejected: { cls: "over", txt: "Rejected" },
+  cancelled: { cls: "done", txt: "Withdrawn" },
 };
 const fbPill: Record<string, { cls: string; l: string }> = {
   open: { cls: "week", l: "Delivered" }, in_review: { cls: "today", l: "In review" },
@@ -152,6 +168,347 @@ function PettyCashModal() {
         <button className="btn" onClick={closePetty}>Cancel</button>
         <button className="btn primary" onClick={save}>{pettyEdit ? "Save changes" : "Submit request"}</button>
       </div>
+    </ModalShell>
+  );
+}
+
+// The fixed expense categories — kept in sync with the DB check constraint (mig 0078),
+// so spend-by-category reporting stays clean. Per-diem is a separate, computed line.
+export const CLAIM_CATEGORIES = [
+  { v: "transport", l: "Transport" },
+  { v: "accommodation", l: "Accommodation" },
+  { v: "meals", l: "Meals" },
+  { v: "airtime", l: "Airtime" },
+  { v: "supplies", l: "Supplies" },
+  { v: "other", l: "Other" },
+];
+export const claimCatLabel = (c: string) => c === "per_diem" ? "Per diem" : CLAIM_CATEGORIES.find((x) => x.v === c)?.l ?? cap(c);
+
+type EditLine = { category: string; detail: string; amount: string; receiptPath: string | null; uploading?: boolean };
+
+// Raise or edit an expense claim from the portal — lines (receipted expenses) plus an
+// optional computed per-diem line. Routes to Finance/HR for approval, then reimbursement.
+function ExpenseClaimModal() {
+  const { claimOpen, claimEdit, closeClaim, submitClaim, updateClaim, projectDetails, perDiemRate, uploadFile, uploadedFileUrl, advances, meEmail, toast } = useApp();
+  const [purpose, setPurpose] = useState("");
+  const [project, setProject] = useState("");
+  const [advanceCode, setAdvanceCode] = useState("");
+  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const [perDiemDays, setPerDiemDays] = useState("");
+  const [perDiemRateInput, setPerDiemRateInput] = useState("");
+  const projects = Object.keys(projectDetails);
+  // my own travel advances that could have run short (issued onward), newest first
+  const myAdvances = advances.filter((a) => a.holderEmail.toLowerCase() === (meEmail ?? "").toLowerCase() && ["issued", "reconciled", "settled"].includes(a.state));
+
+  useEffect(() => {
+    if (!claimOpen) return;
+    setPurpose(claimEdit?.purpose ?? "");
+    setProject(claimEdit?.project ?? "");
+    setAdvanceCode(claimEdit?.advance ?? "");
+    if (claimEdit) {
+      const rec = claimEdit.lines.filter((l) => !l.isPerDiem)
+        .map((l) => ({ category: l.category, detail: l.detail ?? "", amount: String(l.amount), receiptPath: l.receiptPath }));
+      setLines(rec.length ? rec : [{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+      const pd = claimEdit.lines.find((l) => l.isPerDiem);
+      setPerDiemDays(pd?.perDiemDays ? String(pd.perDiemDays) : "");
+      setPerDiemRateInput(pd?.perDiemRate ? String(pd.perDiemRate) : "");
+    } else {
+      setLines([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+      setPerDiemDays("");
+      setPerDiemRateInput("");
+    }
+  }, [claimOpen, claimEdit, perDiemRate]);
+
+  const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
+  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
+  async function pickReceipt(i: number, file: File) {
+    setLine(i, { uploading: true });
+    const path = await uploadFile("claims", file);
+    setLine(i, { receiptPath: path ?? null, uploading: false });
+  }
+
+  const days = Number(perDiemDays) || 0;
+  const pdRate = Number(perDiemRateInput) || 0;
+  const perDiemAmt = days > 0 ? days * pdRate : 0;
+  const linesTotal = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const total = linesTotal + perDiemAmt;
+
+  function save() {
+    if (!purpose.trim()) { toast("What's this claim for?", "Add a short purpose, e.g. Makueni field visit"); return; }
+    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPath);
+    for (const l of filled) {
+      if (!(Number(l.amount) > 0)) { toast("Each line needs an amount", "Enter the amount (KES) for every expense line"); return; }
+    }
+    if (!filled.length && days <= 0) { toast("Add at least one line", "Add an expense line, or per-diem days"); return; }
+    if (days > 0 && !(pdRate > 0)) { toast("Enter a per-diem rate", "Type the amount paid per day (KES) — it's multiplied by the days"); return; }
+    const payload: ClaimLineInput[] = filled.map((l) => ({
+      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPath: l.receiptPath,
+    }));
+    if (days > 0) payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: days, perDiemRate: pdRate });
+    const v = { purpose: purpose.trim(), project, lines: payload, advanceCode };
+    if (claimEdit) updateClaim(claimEdit.id, v); else submitClaim(v);
+  }
+
+  return (
+    <ModalShell open={claimOpen} onClose={closeClaim} width={620}>
+      <div className="mh">
+        <h3>{claimEdit ? `Edit claim ${claimEdit.id}` : "File an expense claim"}</h3>
+        <p>{claimEdit ? "You can change it while it's pending or after a rejection — editing a rejected claim sends it back for approval." : "For money you spent yourself and are owed back. Add a line per expense, plus per-diem days if any. It routes to Finance / HR to approve, then reimburse."}</p>
+      </div>
+      <div className="mb">
+        <div><label>Purpose</label><input className="field" placeholder="e.g. Makueni site visit — 3 days" value={purpose} onChange={(e) => setPurpose(e.target.value)} /></div>
+        <div>
+          <label>Project <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional but recommended — this is what codes the cost to the project</span></label>
+          <select className="field" style={{ width: "100%" }} value={project} onChange={(e) => setProject(e.target.value)}>
+            <option value="">Not tied to a project</option>
+            {projects.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        {myAdvances.length > 0 && (
+          <div>
+            <label>Link to a travel advance <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+            <select className="field" style={{ width: "100%" }} value={advanceCode} onChange={(e) => setAdvanceCode(e.target.value)}>
+              <option value="">Not linked to an advance</option>
+              {myAdvances.map((a) => <option key={a.id} value={a.id}>{a.id} — {a.purpose}</option>)}
+            </select>
+            {advanceCode && <Note>Linking says <em>“this out-of-pocket money was for that trip.”</em> Use it when the advance wasn't enough and you covered the extra yourself — reconcile the advance for what its cash paid, and claim only the extra here so nothing is counted twice.</Note>}
+          </div>
+        )}
+
+        <label style={{ marginTop: 4 }}>Expense lines</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {lines.map((l, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.9fr auto", gap: 8, alignItems: "center" }}>
+              <select className="field" value={l.category} onChange={(e) => setLine(i, { category: e.target.value })}>
+                {CLAIM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+              </select>
+              <input className="field" placeholder="Detail (optional)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
+              <input className="field" type="number" min="0" placeholder="Amount" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <label className="btn" style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {l.uploading ? "…" : l.receiptPath ? "✓ Receipt" : "Receipt"}
+                  <input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickReceipt(i, f); }} />
+                </label>
+                {l.receiptPath && <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(l.receiptPath!), "_blank", "noopener"); }} style={{ fontSize: 11, color: "var(--flame)" }}>view</a>}
+                <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <a href="#" onClick={(e) => { e.preventDefault(); addLine(); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>+ Add another line</a>
+
+        <label style={{ marginTop: 4 }}>Per diem <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional — days × rate per day</span></label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+          <div>
+            <label>Days</label>
+            <input className="field" type="number" min="0" placeholder="e.g. 2" value={perDiemDays} onChange={(e) => setPerDiemDays(e.target.value)} />
+          </div>
+          <div>
+            <label>Rate / day (KES)</label>
+            <input className="field" type="number" min="0" placeholder="e.g. 1000" value={perDiemRateInput} onChange={(e) => setPerDiemRateInput(e.target.value)} />
+          </div>
+          <div>
+            <label>Amount</label>
+            <input className="field" value={days > 0 && pdRate > 0 ? kes(perDiemAmt) : "—"} readOnly style={{ background: "var(--wash, #F7F4EE)" }} />
+          </div>
+        </div>
+        <Note>Receipts aren't required to file — attach them here or later from your Claims tab, but every expense line needs a receipt before it can be <strong>approved</strong>. Per diem = rate per day × days{perDiemRate > 0 ? ` (company default ${kes(perDiemRate)}/day — you can change it)` : ""}. <strong>Total: {kes(total)}</strong></Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeClaim}>Cancel</button>
+        <button className="btn primary" onClick={save}>{claimEdit ? "Save changes" : "Submit claim"}</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// Request or edit a travel advance — cash given BEFORE the trip. Just purpose, project
+// and amount; the receipts come later, at reconciliation.
+function AdvanceRequestModal() {
+  const { advanceOpen, advanceEdit, closeAdvance, submitAdvance, updateAdvance, projectDetails, perDiemRate, toast } = useApp();
+  const [purpose, setPurpose] = useState("");
+  const [project, setProject] = useState("");
+  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const [perDiemDays, setPerDiemDays] = useState("");
+  const [perDiemRateInput, setPerDiemRateInput] = useState("");
+  const projects = Object.keys(projectDetails);
+
+  useEffect(() => {
+    if (!advanceOpen) return;
+    setPurpose(advanceEdit?.purpose ?? "");
+    setProject(advanceEdit?.project ?? "");
+    if (advanceEdit) {
+      const rec = advanceEdit.plannedLines.filter((l) => !l.isPerDiem)
+        .map((l) => ({ category: l.category, detail: l.detail ?? "", amount: String(l.amount), receiptPath: l.receiptPath }));
+      setLines(rec.length ? rec : [{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+      const pd = advanceEdit.plannedLines.find((l) => l.isPerDiem);
+      setPerDiemDays(pd?.perDiemDays ? String(pd.perDiemDays) : "");
+      setPerDiemRateInput(pd?.perDiemRate ? String(pd.perDiemRate) : "");
+    } else {
+      setLines([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+      setPerDiemDays("");
+      setPerDiemRateInput("");
+    }
+  }, [advanceOpen, advanceEdit, perDiemRate]);
+
+  const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
+  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
+
+  const days = Number(perDiemDays) || 0;
+  const pdRate = Number(perDiemRateInput) || 0;
+  const perDiemAmt = days > 0 ? days * pdRate : 0;
+  const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0) + perDiemAmt;
+
+  function save() {
+    if (!purpose.trim()) { toast("What's the advance for?", "e.g. Kitui field deployment — 3 days"); return; }
+    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim());
+    for (const l of filled) if (!(Number(l.amount) > 0)) { toast("Each line needs an amount", "Enter the estimated amount (KES) for every line"); return; }
+    if (!filled.length && days <= 0) { toast("Add at least one line", "Break the advance down into what it's for"); return; }
+    if (days > 0 && !(pdRate > 0)) { toast("Enter a per-diem rate", "Type the amount per day (KES)"); return; }
+    const payload: ClaimLineInput[] = filled.map((l) => ({ category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false }));
+    if (days > 0) payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: days, perDiemRate: pdRate });
+    const v = { purpose: purpose.trim(), project, lines: payload };
+    if (advanceEdit) updateAdvance(advanceEdit.id, v); else submitAdvance(v);
+  }
+
+  return (
+    <ModalShell open={advanceOpen} onClose={closeAdvance} width={600}>
+      <div className="mh">
+        <h3>{advanceEdit ? `Edit advance ${advanceEdit.id}` : "Request a travel advance"}</h3>
+        <p>{advanceEdit ? "You can change it while pending or after a rejection — editing a rejected advance re-sends it." : "Cash up front for a field trip. Break down what you need it for — the total is your advance amount."}</p>
+      </div>
+      <div className="mb">
+        <div><label>Purpose</label><input className="field" placeholder="e.g. Kitui field deployment — 3 days" value={purpose} onChange={(e) => setPurpose(e.target.value)} /></div>
+        <div>
+          <label>Project <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional but recommended</span></label>
+          <select className="field" style={{ width: "100%" }} value={project} onChange={(e) => setProject(e.target.value)}>
+            <option value="">Not tied to a project</option>
+            {projects.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+
+        <label style={{ marginTop: 4 }}>What the advance is for <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· estimated amounts — the total is what you're asking for</span></label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {lines.map((l, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.6fr 0.9fr auto", gap: 8, alignItems: "center" }}>
+              <select className="field" value={l.category} onChange={(e) => setLine(i, { category: e.target.value })}>
+                {CLAIM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+              </select>
+              <input className="field" placeholder="Detail (optional)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
+              <input className="field" type="number" min="0" placeholder="Amount" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
+              <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+            </div>
+          ))}
+        </div>
+        <a href="#" onClick={(e) => { e.preventDefault(); addLine(); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>+ Add another line</a>
+
+        <label style={{ marginTop: 4 }}>Per diem <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional — days × rate per day</span></label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+          <div><label>Days</label><input className="field" type="number" min="0" placeholder="e.g. 3" value={perDiemDays} onChange={(e) => setPerDiemDays(e.target.value)} /></div>
+          <div><label>Rate / day (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 1000" value={perDiemRateInput} onChange={(e) => setPerDiemRateInput(e.target.value)} /></div>
+          <div><label>Amount</label><input className="field" value={days > 0 && pdRate > 0 ? kes(perDiemAmt) : "—"} readOnly style={{ background: "var(--wash, #F7F4EE)" }} /></div>
+        </div>
+        <Note>The lines add up to the advance — <strong>Total: {kes(total)}</strong>. This is your estimate; on return you reconcile with real receipts, and only what you actually spent is charged to the project.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeAdvance}>Cancel</button>
+        <button className="btn primary" onClick={save}>{advanceEdit ? "Save changes" : "Submit request"}</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// Reconcile an issued advance — enter what was actually spent (receipted lines + per-diem).
+// The system computes spent-vs-advanced; only the spent amount posts to the project.
+function AdvanceReconcileModal() {
+  const { reconcileTarget, closeReconcile, reconcileAdvance, perDiemRate, uploadFile, uploadedFileUrl, toast } = useApp();
+  const open = !!reconcileTarget;
+  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const [perDiemDays, setPerDiemDays] = useState("");
+  const [perDiemRateInput, setPerDiemRateInput] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setLines([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+    setPerDiemDays("");
+    setPerDiemRateInput("");
+  }, [open, perDiemRate]);
+
+  const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
+  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
+  async function pickReceipt(i: number, file: File) {
+    setLine(i, { uploading: true });
+    const path = await uploadFile("advances", file);
+    setLine(i, { receiptPath: path ?? null, uploading: false });
+  }
+
+  const days = Number(perDiemDays) || 0;
+  const pdRate = Number(perDiemRateInput) || 0;
+  const perDiemAmt = days > 0 ? days * pdRate : 0;
+  const spent = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0) + perDiemAmt;
+  const advAmt = reconcileTarget?.amount ?? 0;
+  const balance = advAmt - spent;
+
+  function save() {
+    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPath);
+    for (const l of filled) if (!(Number(l.amount) > 0)) { toast("Each line needs an amount", "Enter the amount (KES) for every spent line"); return; }
+    if (!filled.length && days <= 0) { toast("Add at least one line", "Add what you spent, or per-diem days"); return; }
+    if (days > 0 && !(pdRate > 0)) { toast("Enter a per-diem rate", "Type the amount paid per day (KES)"); return; }
+    const payload: ClaimLineInput[] = filled.map((l) => ({
+      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPath: l.receiptPath,
+    }));
+    if (days > 0) payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: days, perDiemRate: pdRate });
+    reconcileAdvance(reconcileTarget!.id, payload);
+  }
+
+  return (
+    <ModalShell open={open} onClose={closeReconcile} width={620}>
+      {reconcileTarget && (
+        <>
+          <div className="mh">
+            <h3>Reconcile advance {reconcileTarget.id}</h3>
+            <p>{reconcileTarget.purpose} · advanced <strong>{kes(advAmt)}</strong>{reconcileTarget.project ? ` · ${reconcileTarget.project}` : ""}. Enter what you actually spent.</p>
+          </div>
+          <div className="mb">
+            <label>What you spent</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {lines.map((l, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.9fr auto", gap: 8, alignItems: "center" }}>
+                  <select className="field" value={l.category} onChange={(e) => setLine(i, { category: e.target.value })}>
+                    {CLAIM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+                  </select>
+                  <input className="field" placeholder="Detail (optional)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
+                  <input className="field" type="number" min="0" placeholder="Amount" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <label className="btn" style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
+                      {l.uploading ? "…" : l.receiptPath ? "✓ Receipt" : "Receipt"}
+                      <input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickReceipt(i, f); }} />
+                    </label>
+                    {l.receiptPath && <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(l.receiptPath!), "_blank", "noopener"); }} style={{ fontSize: 11, color: "var(--flame)" }}>view</a>}
+                    <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <a href="#" onClick={(e) => { e.preventDefault(); addLine(); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>+ Add another line</a>
+
+            <label style={{ marginTop: 4 }}>Per diem <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional — days × rate per day</span></label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <div><label>Days</label><input className="field" type="number" min="0" placeholder="e.g. 2" value={perDiemDays} onChange={(e) => setPerDiemDays(e.target.value)} /></div>
+              <div><label>Rate / day (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 1000" value={perDiemRateInput} onChange={(e) => setPerDiemRateInput(e.target.value)} /></div>
+              <div><label>Amount</label><input className="field" value={days > 0 && pdRate > 0 ? kes(perDiemAmt) : "—"} readOnly style={{ background: "var(--wash, #F7F4EE)" }} /></div>
+            </div>
+            <Note>Spent <strong>{kes(spent)}</strong> of {kes(advAmt)} advanced · balance <strong>{kes(Math.abs(balance))}</strong> {balance > 0 ? "to return" : balance < 0 ? "to be topped up" : "— exact"}. Only the {kes(spent)} spent is charged to the project.</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={closeReconcile}>Cancel</button>
+            <button className="btn primary" onClick={save}>Submit reconciliation</button>
+          </div>
+        </>
+      )}
     </ModalShell>
   );
 }
@@ -271,6 +628,8 @@ function WeeklyReportModal() {
 export default function StaffPortalView() {
   const { tabs, goTab, toast, openLeave, openLeaveEdit, deleteLeave, hrMe, addStaffDocument, deleteStaffDocument, staffDocUrl, hrData, meEmail, myWeek, openHrModal, selfAssessKpi, submitSelfAssessment, signMyExitStep, refreshHr,
     pettyRequests, openPetty, openPettyEdit, deletePettyRequest, attachPettyInvoice, removePettyInvoice, uploadedFileUrl,
+    claims, openClaim, openClaimEdit, deleteClaim,
+    advances, openAdvance, openAdvanceEdit, deleteAdvance, openReconcile,
     weeklyReports, openReport, openReportEdit } = useApp();
   const tab = tabs.staffportal;
   // HR may have opened a cycle, signed off a review or cleared an exit area
@@ -314,6 +673,12 @@ export default function StaffPortalView() {
   // my own petty-cash requests (the queue lives in Finance → Petty Cash)
   const myPetty = pettyRequests.filter((r) => r.requesterEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
   const pendingPetty = myPetty.filter((r) => r.state === "pending");
+  // my own expense claims (the queue lives in Finance → Claims)
+  const myClaims = claims.filter((r) => r.requesterEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
+  const pendingClaims = myClaims.filter((r) => r.state === "pending");
+  // my own travel advances (the queue lives in Finance → Advances)
+  const myAdvances = advances.filter((r) => r.holderEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
+  const openAdvances = myAdvances.filter((r) => r.state === "issued");
   // my weekly reports (HR sees the queue in HR → Weekly Reports)
   const thisMonday = mondayOf();
   const myReports = weeklyReports.filter((r) => r.authorEmail.toLowerCase() === (meEmail ?? "").toLowerCase());
@@ -362,6 +727,8 @@ export default function StaffPortalView() {
           {tab === "sp-reports" && thisWeekReport && <button className="btn" onClick={() => openReportEdit(thisWeekReport)}>Edit this week's report</button>}
           {tab === "sp-leave" && <button className="btn primary" onClick={openLeave}><PlusI />Apply for leave</button>}
           {tab === "sp-petty" && <button className="btn primary" onClick={openPetty}><PlusI />Request petty cash</button>}
+          {tab === "sp-claims" && <button className="btn primary" onClick={openClaim}><PlusI />File expense claim</button>}
+          {tab === "sp-advances" && <button className="btn primary" onClick={openAdvance}><PlusI />Request travel advance</button>}
           {tab === "sp-perf" && selfOpen && <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>}
           {tab === "sp-files" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
           {tab === "sp-fb" && <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />New feedback</button>}
@@ -390,6 +757,12 @@ export default function StaffPortalView() {
               )}
               {pendingPetty.length > 0 && (
                 <div className="task" onClick={() => goTab("staffportal", "sp-petty")}><span className="id" style={{ color: "var(--ember)" }}>PCR</span><span className="txt">{pendingPetty.length} petty-cash request{pendingPetty.length > 1 ? "s" : ""} awaiting approval<small>you can edit or withdraw while pending</small></span><span className="pill week">Pending</span></div>
+              )}
+              {pendingClaims.length > 0 && (
+                <div className="task" onClick={() => goTab("staffportal", "sp-claims")}><span className="id" style={{ color: "var(--ember)" }}>CLM</span><span className="txt">{pendingClaims.length} expense claim{pendingClaims.length > 1 ? "s" : ""} awaiting approval<small>you can edit or withdraw while pending</small></span><span className="pill week">Pending</span></div>
+              )}
+              {openAdvances.length > 0 && (
+                <div className="task" onClick={() => goTab("staffportal", "sp-advances")}><span className="id" style={{ color: "var(--ember)" }}>ADV</span><span className="txt">{openAdvances.length} travel advance{openAdvances.length > 1 ? "s" : ""} to reconcile<small>account for it with receipts on your return</small></span><span className="pill today">Reconcile</span></div>
               )}
               {myExit && myExit.state === "in_progress" && (
                 <div className="task" onClick={() => goTab("staffportal", "sp-exit")}><span className="id" style={{ color: "var(--ember)" }}>EXT</span><span className="txt">Exit clearance in progress<small>{exitDone} of {myExit.clearance.length} areas cleared</small></span><span className="pill today">Continue</span></div>
@@ -569,6 +942,94 @@ export default function StaffPortalView() {
             <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once <strong>Approved</strong>, attach the invoice/receipt (any file or image) — a Sub Admin can also attach it in Finance{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
           </div>
           <input ref={invoiceRef} type="file" style={{ display: "none" }} onChange={onInvoicePick} />
+        </div>
+      )}
+
+      {tab === "sp-claims" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>My expense claims</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openClaim(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ File expense claim</a></span></div>
+            {myClaims.length ? (
+              <table className="tbl">
+                <thead><tr><th>Purpose</th><th>Project</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {myClaims.map((r) => {
+                    const needsReceipt = r.state === "pending" && r.lines.some((l) => !l.isPerDiem && !l.receiptPath);
+                    return (
+                      <tr key={r.id}>
+                        <td>{r.purpose}{r.advance ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ advance {r.advance}</small> : null}</td>
+                        <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{r.project || "—"}</td>
+                        <td className="mono">{kes(r.total)}</td>
+                        <td>
+                          <span className={`pill ${claimPill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state !== "pending" && r.decidedBy ? `${r.decidedBy}${r.note ? " · " + r.note : ""}` : ""}>
+                            {claimPill[r.state]?.txt || r.state}
+                          </span>
+                          {needsReceipt && <span className="pill over" style={{ textTransform: "none", marginLeft: 6 }}>receipt needed</span>}
+                        </td>
+                        <td>
+                          {(r.state === "pending" || r.state === "rejected") ? (
+                            <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                              <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openClaimEdit(r)}>Edit</button>
+                              <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteClaim(r.id)}>Withdraw</button>
+                            </span>
+                          ) : (
+                            <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "paid" ? (r.paymentRef ? `Paid · ${r.paymentRef}` : "Reimbursed") : "locked"}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No expense claims yet — use “File expense claim”. Add a line per expense with its receipt, plus per-diem days; it routes to Finance / HR for approval, then reimbursement. Every line is coded to the project you choose.</Note>
+            )}
+            <Note>Edit or withdraw a claim while it is <strong>Awaiting approval</strong>, or after a <strong>Rejection</strong> — editing a rejected claim re-sends it for approval. Every expense line needs a receipt attached before it can be approved{pendingClaims.length ? ` · ${pendingClaims.length} pending now` : ""}.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-advances" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>My travel advances</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openAdvance(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ Request travel advance</a></span></div>
+            {myAdvances.length ? (
+              <table className="tbl">
+                <thead><tr><th>Purpose</th><th>Project</th><th>Advanced</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {myAdvances.map((r) => (
+                    <tr key={r.id}>
+                      <td>{r.purpose}</td>
+                      <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{r.project || "—"}</td>
+                      <td className="mono">{kes(r.amount)}{r.state === "reconciled" || r.state === "settled" ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>spent {kes(r.spent ?? 0)}{typeof r.balance === "number" && r.balance !== 0 ? ` · ${kes(Math.abs(r.balance))} ${r.balance > 0 ? "to return" : "top-up"}` : ""}</small> : null}</td>
+                      <td>
+                        <span className={`pill ${advancePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state === "rejected" && r.note ? r.note : ""}>
+                          {advancePill[r.state]?.txt || r.state}
+                        </span>
+                      </td>
+                      <td>
+                        {(r.state === "pending" || r.state === "rejected") ? (
+                          <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openAdvanceEdit(r)}>Edit</button>
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteAdvance(r.id)}>Withdraw</button>
+                          </span>
+                        ) : r.state === "issued" ? (
+                          <span style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openReconcile(r)}>Reconcile</button>
+                          </span>
+                        ) : (
+                          <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "settled" ? "Closed" : r.state === "reconciled" ? "With Finance" : "—"}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No travel advances yet — use “Request travel advance” for cash up front before a field trip. It's approved, issued by Finance, then you reconcile it with receipts on your return.</Note>
+            )}
+            <Note>An <strong>Issued</strong> advance is money you owe until you reconcile it. Reconcile with what you actually spent — only that amount is charged to the project, and you return any balance{openAdvances.length ? ` · ${openAdvances.length} to reconcile now` : ""}.</Note>
+          </div>
         </div>
       )}
 
@@ -792,6 +1253,9 @@ export default function StaffPortalView() {
 
       <MyCertModal />
       <PettyCashModal />
+      <ExpenseClaimModal />
+      <AdvanceRequestModal />
+      <AdvanceReconcileModal />
       <WeeklyReportModal />
       <FeedbackModal />
     </>

@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { useApp, type PettyRequest } from "../store";
+import { useApp, type PettyRequest, type ExpenseClaim, type TravelAdvance, type RecurringBill } from "../store";
 import { Pulse, Note, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { PlusI } from "../components/icons";
@@ -77,6 +77,220 @@ function PettyDecideModal({ decision, onClose, onConfirm }: {
   );
 }
 
+const claimCat = (c: string) => c === "per_diem" ? "Per diem"
+  : ({ transport: "Transport", accommodation: "Accommodation", meals: "Meals", airtime: "Airtime", supplies: "Supplies", other: "Other" } as Record<string, string>)[c] ?? c;
+
+// Approve or reject an expense claim — shows the line breakdown and blocks approval
+// while any expense line is missing a receipt (the server enforces this too).
+function ClaimDecideModal({ decision, onClose, onConfirm, receiptUrl }: {
+  decision: { claim: ExpenseClaim; approve: boolean } | null;
+  onClose: () => void;
+  onConfirm: (ref: string, approve: boolean, note: string) => void;
+  receiptUrl: (path: string) => string;
+}) {
+  const [note, setNote] = useState("");
+  const open = !!decision;
+  const approve = decision?.approve ?? false;
+  const c = decision?.claim;
+  const missing = c ? c.lines.filter((l) => !l.isPerDiem && !l.receiptPath).length : 0;
+  return (
+    <ModalShell open={open} onClose={onClose} width={560}>
+      {c && (
+        <>
+          <div className="mh">
+            <h3>{approve ? "Approve expense claim" : "Reject expense claim"}</h3>
+            <p>{c.requester} · {c.purpose} · <strong>{kes(c.total)}</strong>{c.project ? ` · ${c.project}` : ""}{c.advance ? <> · <span style={{ color: "var(--flame)" }}>out-of-pocket for advance {c.advance}</span></> : null}</p>
+          </div>
+          <div className="mb">
+            <table className="tbl" style={{ marginBottom: 4 }}>
+              <thead><tr><th>Category</th><th>Detail</th><th>Amount</th><th>Receipt</th></tr></thead>
+              <tbody>
+                {c.lines.map((l, i) => (
+                  <tr key={i}>
+                    <td>{claimCat(l.category)}</td>
+                    <td style={{ fontSize: 12 }}>{l.isPerDiem ? `${l.perDiemDays} day${l.perDiemDays === 1 ? "" : "s"} × ${kes(l.perDiemRate || 0)}` : (l.detail || "—")}</td>
+                    <td className="mono">{kes(l.amount)}</td>
+                    <td style={{ fontSize: 12 }}>
+                      {l.isPerDiem ? <span style={{ color: "var(--ink-soft)" }}>n/a</span>
+                        : l.receiptPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(receiptUrl(l.receiptPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>View</a>
+                        : <span style={{ color: "var(--red)" }}>missing</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {approve && missing > 0 && <Note>{missing} expense line{missing > 1 ? "s have" : " has"} no receipt yet — you can still approve; the claimant can attach {missing > 1 ? "them" : "it"} later from their Claims tab.</Note>}
+            <div>
+              <label>{approve ? "Note" : "Reason for rejecting"} <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+              <textarea className="field" rows={2} autoFocus placeholder={approve ? "e.g. Approved — reimbursed with July payroll" : "e.g. Split the per-diem days out and re-file"} value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+            <Note>The claimant is notified. On approval the amount is coded to {c.project ? <strong>{c.project}</strong> : "its project"}'s actuals, then Finance marks it paid once reimbursed.</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className={`btn ${approve ? "primary" : ""}`}
+              style={approve ? undefined : { color: "var(--red)" }}
+              onClick={() => { onConfirm(c.id, approve, note); }}>
+              {approve ? "Approve claim" : "Reject claim"}
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+// Record an approved claim as reimbursed (Finance). Does not touch project actuals —
+// the cost was coded on approval; this only closes the money-owed-to-staff loop.
+function ClaimPayModal({ claim, onClose, onConfirm }: {
+  claim: ExpenseClaim | null; onClose: () => void; onConfirm: (ref: string, paymentRef: string) => void;
+}) {
+  const [ref, setRef] = useState("");
+  return (
+    <ModalShell open={!!claim} onClose={onClose} width={440}>
+      {claim && (
+        <>
+          <div className="mh"><h3>Mark reimbursement paid</h3><p>{claim.requester} · {claim.purpose} · <strong>{kes(claim.total)}</strong></p></div>
+          <div className="mb">
+            <div><label>Payment reference <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+              <input className="field" autoFocus placeholder="e.g. M-Pesa code / bank transfer ref" value={ref} onChange={(e) => setRef(e.target.value)} /></div>
+            <Note>Records the claim as <strong>reimbursed</strong> and notifies the claimant. It does not change the project actuals — the cost was coded when the claim was approved.</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className="btn primary" onClick={() => onConfirm(claim.id, ref)}>Mark paid</button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+// Approve or reject a travel-advance request (authorises the cash; Finance issues after).
+function AdvanceDecideModal({ decision, onClose, onConfirm }: {
+  decision: { adv: TravelAdvance; approve: boolean } | null;
+  onClose: () => void; onConfirm: (ref: string, approve: boolean, note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const open = !!decision; const approve = decision?.approve ?? false; const a = decision?.adv;
+  return (
+    <ModalShell open={open} onClose={onClose} width={520}>
+      {a && (
+        <>
+          <div className="mh"><h3>{approve ? "Approve travel advance" : "Reject travel advance"}</h3>
+            <p>{a.holder} · {a.purpose} · <strong>{kes(a.amount)}</strong>{a.project ? ` · ${a.project}` : ""}</p></div>
+          <div className="mb">
+            {a.plannedLines.length > 0 && (
+              <table className="tbl" style={{ marginBottom: 4 }}>
+                <thead><tr><th>What it's for</th><th>Detail</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
+                <tbody>
+                  {a.plannedLines.map((l, i) => (
+                    <tr key={i}>
+                      <td>{claimCat(l.category)}</td>
+                      <td style={{ fontSize: 12 }}>{l.isPerDiem ? `${l.perDiemDays} day${l.perDiemDays === 1 ? "" : "s"} × ${kes(l.perDiemRate || 0)}` : (l.detail || "—")}</td>
+                      <td className="mono" style={{ textAlign: "right" }}>{kes(l.amount)}</td>
+                    </tr>
+                  ))}
+                  <tr><td colSpan={2} style={{ textAlign: "right", fontWeight: 600 }}>Total requested</td><td className="mono" style={{ textAlign: "right", fontWeight: 600 }}>{kes(a.amount)}</td></tr>
+                </tbody>
+              </table>
+            )}
+            <div><label>{approve ? "Note" : "Reason for rejecting"} <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+              <textarea className="field" rows={2} autoFocus value={note} onChange={(e) => setNote(e.target.value)}
+                placeholder={approve ? "e.g. Approved — collect from the float before you travel" : "e.g. Use a company card for the hotel instead"} /></div>
+            <Note>This is the planned breakdown that builds up the amount. Approving authorises the advance — Finance then issues the cash, and it stays owed by the holder until reconciled on return.</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className={`btn ${approve ? "primary" : ""}`} style={approve ? undefined : { color: "var(--red)" }} onClick={() => onConfirm(a.id, approve, note)}>{approve ? "Approve advance" : "Reject advance"}</button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+// Issue the cash for an approved advance — becomes an open receivable, not project cost.
+function AdvanceIssueModal({ adv, onClose, onConfirm }: {
+  adv: TravelAdvance | null; onClose: () => void; onConfirm: (ref: string, issueRef: string) => void;
+}) {
+  const [ref, setRef] = useState("");
+  return (
+    <ModalShell open={!!adv} onClose={onClose} width={440}>
+      {adv && (
+        <>
+          <div className="mh"><h3>Issue travel advance</h3><p>{adv.holder} · {adv.purpose} · <strong>{kes(adv.amount)}</strong></p></div>
+          <div className="mb">
+            <div><label>Payment reference <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+              <input className="field" autoFocus placeholder="e.g. M-Pesa code / bank ref" value={ref} onChange={(e) => setRef(e.target.value)} /></div>
+            <Note>Records the cash as issued to the holder. It becomes an <strong>open advance</strong> — a receivable owed by them — until they reconcile it. It is <strong>not</strong> a project cost yet.</Note>
+          </div>
+          <div className="mf"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={() => onConfirm(adv.id, ref)}>Issue advance</button></div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+// Settle a reconciled advance — confirm the balance was returned / topped up.
+function AdvanceSettleModal({ adv, onClose, onConfirm }: {
+  adv: TravelAdvance | null; onClose: () => void; onConfirm: (ref: string, note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const bal = adv?.balance ?? 0;
+  return (
+    <ModalShell open={!!adv} onClose={onClose} width={460}>
+      {adv && (
+        <>
+          <div className="mh"><h3>Settle travel advance</h3><p>{adv.holder} · {adv.purpose} · spent {kes(adv.spent ?? 0)} of {kes(adv.amount)}</p></div>
+          <div className="mb">
+            <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}>
+              <div className="rl">Balance</div>
+              <strong>{kes(Math.abs(bal))}</strong> {bal > 0 ? "to be returned by the holder" : bal < 0 ? "to be topped up to the holder" : "— exact, nothing to move"}
+            </div>
+            <div><label>Note <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+              <input className="field" placeholder={bal > 0 ? "e.g. KES returned to float" : bal < 0 ? "e.g. top-up paid with July payroll" : "e.g. settled, nothing owed"} value={note} onChange={(e) => setNote(e.target.value)} /></div>
+            <Note>Confirms the balance was moved. The spent amount is already on the project — settling does not change project cost.</Note>
+          </div>
+          <div className="mf"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={() => onConfirm(adv.id, note)}>Mark settled</button></div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+// Super Admin pays or rejects a recurring-bill payment request.
+function BillDecideModal({ decision, onClose, onConfirm }: {
+  decision: { bill: RecurringBill; approve: boolean } | null;
+  onClose: () => void; onConfirm: (ref: string, approve: boolean, paymentRef: string, note: string) => void;
+}) {
+  const [ref, setRef] = useState("");
+  const [note, setNote] = useState("");
+  const open = !!decision; const approve = decision?.approve ?? false; const b = decision?.bill;
+  return (
+    <ModalShell open={open} onClose={onClose} width={460}>
+      {b && (
+        <>
+          <div className="mh"><h3>{approve ? "Pay bill" : "Reject bill payment"}</h3>
+            <p>{b.item}{b.vendor ? ` · ${b.vendor}` : ""} · <strong>{kes(b.amount)}</strong>{b.requestedBy ? ` · requested by ${b.requestedBy}` : ""}</p></div>
+          <div className="mb">
+            {approve
+              ? <div><label>Payment reference <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+                  <input className="field" autoFocus placeholder="e.g. M-Pesa code / bank ref" value={ref} onChange={(e) => setRef(e.target.value)} /></div>
+              : <div><label>Reason for rejecting <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
+                  <textarea className="field" rows={2} autoFocus placeholder="e.g. Query the amount with the vendor first" value={note} onChange={(e) => setNote(e.target.value)} /></div>}
+            <Note>HR is notified of the outcome. {approve ? "This records the bill as paid — HR can request it again next month." : ""}</Note>
+          </div>
+          <div className="mf">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className={`btn ${approve ? "primary" : ""}`} style={approve ? undefined : { color: "var(--red)" }} onClick={() => onConfirm(b.id, approve, ref, note)}>{approve ? "Mark paid" : "Reject"}</button>
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
 const apPill: Record<string, { cls: string; txt: string }> = {
   captured: { cls: "today", txt: "Captured" },
   matched: { cls: "done", txt: "Matched" },
@@ -88,6 +302,9 @@ const apPill: Record<string, { cls: string; txt: string }> = {
 export default function FinanceView() {
   const { tabs, toast, accounts, journals, apInvoices, approveInvoice, payInvoice, openCaptureInvoice, poRows, markInvoicePaid,
     pettyRequests, decidePettyRequest, canDecidePetty, attachPettyInvoice, removePettyInvoice, uploadedFileUrl,
+    claims, decideClaim, markClaimPaid, canDecideClaims, perDiemRate, setAppConfig,
+    advances, decideAdvance, issueAdvance, settleAdvance, canDecideAdvances,
+    recurringBills, decideBill, canApproveBills,
     openInvoice, createCostCentre, me, perms, level } = useApp();
   const tab = tabs.finance;
   const [costOpen, setCostOpen] = useState(false);
@@ -116,6 +333,54 @@ export default function FinanceView() {
 
   const pettyPending = pettyRequests.filter((r) => r.state === "pending");
   const pettyPendingTotal = pettyPending.reduce((s, r) => s + r.amount, 0);
+
+  // Expense claims — same routing model as petty cash (approver_role on the claim).
+  const canApproveClaim = (r: ExpenseClaim) =>
+    r.requesterEmail !== me?.email &&
+    (r.approverRole === "super" ? iAmSuper : r.approverRole === "hr" ? iAmHr : (iAmSuper || iAmHr));
+  const claimRouteLabel = (r: ExpenseClaim) => (r.approverRole === "super" ? "Super Admin" : "HR");
+  const claimsPending = claims.filter((r) => r.state === "pending");
+  const claimsPendingTotal = claimsPending.reduce((s, r) => s + r.total, 0);
+  const claimsToPay = claims.filter((r) => r.state === "approved");
+  const [claimDecide, setClaimDecide] = useState<{ claim: ExpenseClaim; approve: boolean } | null>(null);
+  const [claimPay, setClaimPay] = useState<ExpenseClaim | null>(null);
+  // Recurring bills — a Super Admin (users:3) pays or rejects HR's payment requests.
+  const billsPending = recurringBills.filter((b) => b.state === "pending");
+  const [billDecide, setBillDecide] = useState<{ bill: RecurringBill; approve: boolean } | null>(null);
+  const billStatePill: Record<string, { cls: string; txt: string }> = {
+    active: { cls: "week", txt: "On the list" }, pending: { cls: "today", txt: "Awaiting payment" },
+    paid: { cls: "done", txt: "Paid" }, rejected: { cls: "over", txt: "Rejected" },
+  };
+  const billCat = (c: string | null) => c ? ({ rent: "Rent", utilities: "Utilities", internet: "Internet / phone", subscription: "Subscription", insurance: "Insurance", other: "Other" } as Record<string, string>)[c] ?? c : "—";
+  const [rateDraft, setRateDraft] = useState<string | null>(null);  // per-diem rate inline editor (null = not editing)
+  function saveRate() {
+    const n = Number(rateDraft);
+    if (!(n >= 0)) { toast("Enter a valid rate", "The per-diem daily rate must be a number (KES)"); return; }
+    setAppConfig("per_diem_daily_rate", n);
+    setRateDraft(null);
+  }
+  const claimStatePill: Record<string, { cls: string; txt: string }> = {
+    pending: { cls: "today", txt: "Pending" }, approved: { cls: "week", txt: "Approved" },
+    rejected: { cls: "over", txt: "Rejected" }, paid: { cls: "done", txt: "Reimbursed" }, cancelled: { cls: "week", txt: "Withdrawn" },
+  };
+
+  // Travel advances — same routing as claims; the flow adds issue → reconcile → settle.
+  const canApproveAdvance = (r: TravelAdvance) =>
+    r.holderEmail !== me?.email &&
+    (r.approverRole === "super" ? iAmSuper : r.approverRole === "hr" ? iAmHr : (iAmSuper || iAmHr));
+  const advanceRouteLabel = (r: TravelAdvance) => (r.approverRole === "super" ? "Super Admin" : "HR");
+  const advancesPending = advances.filter((r) => r.state === "pending");
+  const advancesToIssue = advances.filter((r) => r.state === "approved");
+  const advancesOpen = advances.filter((r) => r.state === "issued");          // issued receivables, awaiting reconcile
+  const advancesToSettle = advances.filter((r) => r.state === "reconciled");
+  const [advanceDecide, setAdvanceDecide] = useState<{ adv: TravelAdvance; approve: boolean } | null>(null);
+  const [advanceIssue, setAdvanceIssue] = useState<TravelAdvance | null>(null);
+  const [advanceSettle, setAdvanceSettle] = useState<TravelAdvance | null>(null);
+  const advanceStatePill: Record<string, { cls: string; txt: string }> = {
+    pending: { cls: "today", txt: "Pending" }, approved: { cls: "week", txt: "Approved" },
+    issued: { cls: "today", txt: "Issued (open)" }, reconciled: { cls: "week", txt: "Reconciled" },
+    settled: { cls: "done", txt: "Settled" }, rejected: { cls: "over", txt: "Rejected" }, cancelled: { cls: "week", txt: "Withdrawn" },
+  };
   const fmtDate = (iso: string | null) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
   // which petty-cash request is being approved/rejected — drives the popup (no browser prompts)
   const [pettyDecide, setPettyDecide] = useState<{ req: PettyRequest; approve: boolean } | null>(null);
@@ -422,6 +687,263 @@ export default function FinanceView() {
         </div>
       )}
 
+      {tab === "f-claims" && (
+        <div className="fin-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h">
+                <h3>Expense claims</h3>
+                <span className="meta">{claimsPending.length} awaiting approval{canDecideClaims ? "" : " · view only"}</span>
+              </div>
+              <table className="tbl">
+                <thead><tr><th>Claimant</th><th>Purpose</th><th>Amount</th><th>Route to</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {claimsPending.length === 0 ? (
+                    <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No claims awaiting approval. Staff file these in the Staff Portal → Expense Claims.</td></tr>
+                  ) : claimsPending.map((r) => {
+                    const missing = r.lines.filter((l) => !l.isPerDiem && !l.receiptPath).length;
+                    return (
+                      <tr key={r.id}>
+                        <td>{r.requester}{r.project ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ {r.project}</small> : null}</td>
+                        <td>{r.purpose}{missing > 0 ? <small style={{ display: "block", color: "var(--red)", fontSize: 11 }}>{missing} receipt{missing > 1 ? "s" : ""} missing</small> : null}</td>
+                        <td className="mono">{kes(r.total)}</td>
+                        <td style={{ fontSize: 11 }}><span className="pill today">→ {claimRouteLabel(r)}</span></td>
+                        <td style={{ textAlign: "right" }}>
+                          {canDecideClaims ? (
+                            <span className="row-actions" style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                              {canApproveClaim(r)
+                                ? <button className="btn primary sm" onClick={() => setClaimDecide({ claim: r, approve: true })}>Review</button>
+                                : <span className="pill today" title={`This claim is awaiting ${claimRouteLabel(r)} approval`}>Awaiting {claimRouteLabel(r)}</span>}
+                              {canApproveClaim(r) && <button className="btn sm" style={{ color: "var(--red)" }} onClick={() => setClaimDecide({ claim: r, approve: false })}>Reject</button>}
+                            </span>
+                          ) : <span className="pill today">Pending</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <Note>Claims come from the Staff Portal and route by who raised them — a staff member's to <strong>HR</strong>, HR's own to a <strong>Super Admin</strong>. You can't decide your own claim, and a claim can't be approved until every expense line has a receipt.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>
+              <div className="pad">
+                <div className="recon"><span>Awaiting approval</span><span className="mono">{claimsPending.length}</span></div>
+                <div className="recon"><span>Value pending</span><span className="mono">{kes(claimsPendingTotal)}</span></div>
+                <div className="recon"><span>Approved — awaiting payment</span><span className="mono">{kes(claimsToPay.reduce((s, r) => s + r.total, 0))}</span></div>
+                <div className="recon"><span>Reimbursed to date</span><span className="mono">{kes(claims.filter((r) => r.state === "paid").reduce((s, r) => s + r.total, 0))}</span></div>
+                <div className="recon" style={{ borderTop: "1px solid var(--hairline)", marginTop: 6, paddingTop: 10 }}>
+                  <span>Per-diem rate / day</span>
+                  {rateDraft === null ? (
+                    <span className="mono" style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                      {kes(perDiemRate)}
+                      {canEdit && <a href="#" onClick={(e) => { e.preventDefault(); setRateDraft(String(perDiemRate)); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 11.5 }}>Edit</a>}
+                    </span>
+                  ) : (
+                    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                      <input className="field" type="number" min="0" value={rateDraft} onChange={(e) => setRateDraft(e.target.value)} style={{ width: 110, padding: "3px 8px" }} autoFocus />
+                      <button className="btn primary sm" onClick={saveRate}>Save</button>
+                      <button className="btn sm" onClick={() => setRateDraft(null)}>Cancel</button>
+                    </span>
+                  )}
+                </div>
+                <Note>The per-diem rate is configuration — changing it here applies to new claims; existing claims keep the rate they were filed at.</Note>
+              </div>
+            </div>
+          </div>
+
+          {/* Full history — approved claims can be marked paid here */}
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>Claims history</h3><span className="meta">{claims.length} claim{claims.length === 1 ? "" : "s"} · all statuses</span></div>
+            {claims.length === 0 ? <EmptyBody>No expense claims yet.</EmptyBody> : (
+              <table className="tbl">
+                <thead><tr><th>Claimant</th><th>Purpose</th><th>Project</th><th>Amount</th><th>Status</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {claims.map((r) => (
+                    <tr key={r.id}>
+                      <td>{r.requester}</td>
+                      <td>{r.purpose}{r.advance ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ advance {r.advance}</small> : null}</td>
+                      <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{r.project || "—"}</td>
+                      <td className="mono">{kes(r.total)}</td>
+                      <td><span className={`pill ${claimStatePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state === "paid" && r.paymentRef ? `Ref ${r.paymentRef}` : r.decidedBy ? `${r.decidedBy}${r.note ? " · " + r.note : ""}` : ""}>{claimStatePill[r.state]?.txt || r.state}</span></td>
+                      <td style={{ textAlign: "right" }}>
+                        {r.state === "approved" && canEdit
+                          ? <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setClaimPay(r)}>Mark paid</button>
+                          : r.state === "paid"
+                            ? <span className="meta">{r.paidBy ? `Paid · ${r.paidBy}` : "Reimbursed"}</span>
+                            : <span className="meta">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <Note>An approved claim is already coded to its project's actuals; <strong>Mark paid</strong> records the reimbursement to the claimant and does not change the project cost.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "f-advances" && (
+        <div className="fin-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h">
+                <h3>Travel advances</h3>
+                <span className="meta">{advancesPending.length} to approve · {advancesToIssue.length} to issue · {advancesToSettle.length} to settle{canDecideAdvances ? "" : " · view only"}</span>
+              </div>
+              <table className="tbl">
+                <thead><tr><th>Holder</th><th>Purpose</th><th>Amount</th><th>Stage</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {advancesPending.length + advancesToIssue.length + advancesToSettle.length === 0 ? (
+                    <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>Nothing needs action. Staff request advances in the Staff Portal → Travel Advances.</td></tr>
+                  ) : (
+                    <>
+                      {advancesPending.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.holder}{r.project ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ {r.project}</small> : null}</td>
+                          <td>{r.purpose}</td>
+                          <td className="mono">{kes(r.amount)}</td>
+                          <td style={{ fontSize: 11 }}><span className="pill today">→ approve · {advanceRouteLabel(r)}</span></td>
+                          <td style={{ textAlign: "right" }}>
+                            {canDecideAdvances ? (
+                              <span className="row-actions" style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                {canApproveAdvance(r)
+                                  ? <><button className="btn primary sm" onClick={() => setAdvanceDecide({ adv: r, approve: true })}>Approve</button>
+                                     <button className="btn sm" style={{ color: "var(--red)" }} onClick={() => setAdvanceDecide({ adv: r, approve: false })}>Reject</button></>
+                                  : <span className="pill today">Awaiting {advanceRouteLabel(r)}</span>}
+                              </span>
+                            ) : <span className="pill today">Pending</span>}
+                          </td>
+                        </tr>
+                      ))}
+                      {advancesToIssue.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.holder}</td>
+                          <td>{r.purpose}</td>
+                          <td className="mono">{kes(r.amount)}</td>
+                          <td style={{ fontSize: 11 }}><span className="pill week">→ issue cash</span></td>
+                          <td style={{ textAlign: "right" }}>{canEdit ? <button className="btn primary sm" onClick={() => setAdvanceIssue(r)}>Issue</button> : <span className="pill week">approved</span>}</td>
+                        </tr>
+                      ))}
+                      {advancesToSettle.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.holder}</td>
+                          <td>{r.purpose}<small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>spent {kes(r.spent ?? 0)} · balance {kes(Math.abs(r.balance ?? 0))} {(r.balance ?? 0) > 0 ? "to return" : (r.balance ?? 0) < 0 ? "top-up" : ""}</small></td>
+                          <td className="mono">{kes(r.amount)}</td>
+                          <td style={{ fontSize: 11 }}><span className="pill week">→ settle balance</span></td>
+                          <td style={{ textAlign: "right" }}>{canEdit ? <button className="btn primary sm" onClick={() => setAdvanceSettle(r)}>Settle</button> : <span className="pill week">reconciled</span>}</td>
+                        </tr>
+                      ))}
+                    </>
+                  )}
+                </tbody>
+              </table>
+              <Note>The flow is <strong>approve → issue → (holder reconciles) → settle</strong>. An issued advance is a receivable owed by the holder — it only becomes project cost when the holder reconciles it, and only for what they actually spent.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>
+              <div className="pad">
+                <div className="recon"><span>To approve</span><span className="mono">{advancesPending.length}</span></div>
+                <div className="recon"><span>Approved — to issue</span><span className="mono">{kes(advancesToIssue.reduce((s, r) => s + r.amount, 0))}</span></div>
+                <div className="recon"><span>Open advances (receivable)</span><span className="mono">{kes(advancesOpen.reduce((s, r) => s + r.amount, 0))}</span></div>
+                <div className="recon"><span>Awaiting settlement</span><span className="mono">{advancesToSettle.length}</span></div>
+                <div className="recon"><span>Settled to date</span><span className="mono">{kes(advances.filter((r) => r.state === "settled").reduce((s, r) => s + (r.spent ?? 0), 0))}</span></div>
+              </div>
+            </div>
+          </div>
+
+          {/* Full history */}
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>Advance history</h3><span className="meta">{advances.length} advance{advances.length === 1 ? "" : "s"} · all stages</span></div>
+            {advances.length === 0 ? <EmptyBody>No travel advances yet.</EmptyBody> : (
+              <table className="tbl">
+                <thead><tr><th>Holder</th><th>Purpose</th><th>Project</th><th>Amount</th><th>Spent</th><th>Balance</th><th>Stage</th></tr></thead>
+                <tbody>
+                  {advances.map((r) => (
+                    <tr key={r.id}>
+                      <td>{r.holder}</td>
+                      <td>{r.purpose}</td>
+                      <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{r.project || "—"}</td>
+                      <td className="mono">{kes(r.amount)}</td>
+                      <td className="mono">{r.spent != null ? kes(r.spent) : "—"}</td>
+                      <td className="mono">{r.balance != null ? kes(r.balance) : "—"}</td>
+                      <td><span className={`pill ${advanceStatePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state === "rejected" && r.note ? r.note : r.issueRef ? `Issue ref ${r.issueRef}` : ""}>{advanceStatePill[r.state]?.txt || r.state}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <Note>Open advances sit as a receivable from the holder until reconciled — the discipline that stops an unspent advance ever overstating a project's cost.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "f-bills" && (
+        <div className="fin-panel active">
+          <div className="grid g-2">
+            <div className="panel">
+              <div className="panel-h">
+                <h3>Bill payments to make</h3>
+                <span className="meta">{billsPending.length} awaiting payment{canApproveBills ? "" : " · Super Admin only"}</span>
+              </div>
+              <table className="tbl">
+                <thead><tr><th>Item</th><th>Category</th><th>Requested by</th><th>Amount</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {billsPending.length === 0 ? (
+                    <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No bills awaiting payment. HR raises these in HR → Recurring Bills.</td></tr>
+                  ) : billsPending.map((b) => (
+                    <tr key={b.id}>
+                      <td>{b.item}{b.vendor ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{b.vendor}</small> : null}</td>
+                      <td style={{ fontSize: 12 }}>{billCat(b.category)}</td>
+                      <td style={{ fontSize: 12 }}>{b.requestedBy || "—"}</td>
+                      <td className="mono">{kes(b.amount)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {canApproveBills ? (
+                          <span className="row-actions" style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                            <button className="btn primary sm" onClick={() => setBillDecide({ bill: b, approve: true })}>Pay</button>
+                            <button className="btn sm" style={{ color: "var(--red)" }} onClick={() => setBillDecide({ bill: b, approve: false })}>Reject</button>
+                          </span>
+                        ) : <span className="pill today">Pending</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Note>HR keeps the recurring bills and requests payment when each is due. As a Super Admin you pay or reject here; HR is notified either way and can request a paid bill again next month.</Note>
+            </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>
+              <div className="pad">
+                <div className="recon"><span>Awaiting payment</span><span className="mono">{billsPending.length}</span></div>
+                <div className="recon"><span>Value pending</span><span className="mono">{kes(billsPending.reduce((s, b) => s + b.amount, 0))}</span></div>
+                <div className="recon"><span>Bills on the list</span><span className="mono">{recurringBills.length}</span></div>
+                <div className="recon"><span>Paid to date</span><span className="mono">{kes(recurringBills.filter((b) => b.state === "paid").reduce((s, b) => s + b.amount, 0))}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="panel" style={{ marginTop: 18 }}>
+            <div className="panel-h"><h3>All recurring bills</h3><span className="meta">{recurringBills.length} bill{recurringBills.length === 1 ? "" : "s"}</span></div>
+            {recurringBills.length === 0 ? <EmptyBody>No recurring bills yet.</EmptyBody> : (
+              <table className="tbl">
+                <thead><tr><th>Item</th><th>Category</th><th>Due</th><th>Amount</th><th>Status</th></tr></thead>
+                <tbody>
+                  {recurringBills.map((b) => (
+                    <tr key={b.id}>
+                      <td>{b.item}</td>
+                      <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{billCat(b.category)}</td>
+                      <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{b.dueDay ? `Day ${b.dueDay}` : "—"}</td>
+                      <td className="mono">{kes(b.amount)}</td>
+                      <td><span className={`pill ${billStatePill[b.state]?.cls || "week"}`} style={{ textTransform: "none" }} title={b.state === "paid" && b.paymentRef ? `Ref ${b.paymentRef}` : b.state === "rejected" && b.decisionNote ? b.decisionNote : ""}>{billStatePill[b.state]?.txt || b.state}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
       {tab === "f-budget" && (
         <div className="fin-panel active">
           <div className="panel">
@@ -484,6 +1006,47 @@ export default function FinanceView() {
         decision={pettyDecide}
         onClose={() => setPettyDecide(null)}
         onConfirm={(ref, approve, note) => { decidePettyRequest(ref, approve, note); setPettyDecide(null); }}
+      />
+
+      <ClaimDecideModal
+        key={claimDecide ? claimDecide.claim.id + (claimDecide.approve ? "-a" : "-r") : "claim-none"}
+        decision={claimDecide}
+        onClose={() => setClaimDecide(null)}
+        receiptUrl={uploadedFileUrl}
+        onConfirm={(ref, approve, note) => { decideClaim(ref, approve, note); setClaimDecide(null); }}
+      />
+
+      <ClaimPayModal
+        key={claimPay ? claimPay.id : "pay-none"}
+        claim={claimPay}
+        onClose={() => setClaimPay(null)}
+        onConfirm={(ref, paymentRef) => { markClaimPaid(ref, paymentRef); setClaimPay(null); }}
+      />
+
+      <AdvanceDecideModal
+        key={advanceDecide ? advanceDecide.adv.id + (advanceDecide.approve ? "-a" : "-r") : "adv-none"}
+        decision={advanceDecide}
+        onClose={() => setAdvanceDecide(null)}
+        onConfirm={(ref, approve, note) => { decideAdvance(ref, approve, note); setAdvanceDecide(null); }}
+      />
+      <AdvanceIssueModal
+        key={advanceIssue ? advanceIssue.id : "issue-none"}
+        adv={advanceIssue}
+        onClose={() => setAdvanceIssue(null)}
+        onConfirm={(ref, issueRef) => { issueAdvance(ref, issueRef); setAdvanceIssue(null); }}
+      />
+      <AdvanceSettleModal
+        key={advanceSettle ? advanceSettle.id : "settle-none"}
+        adv={advanceSettle}
+        onClose={() => setAdvanceSettle(null)}
+        onConfirm={(ref, note) => { settleAdvance(ref, note); setAdvanceSettle(null); }}
+      />
+
+      <BillDecideModal
+        key={billDecide ? billDecide.bill.id + (billDecide.approve ? "-p" : "-r") : "bill-none"}
+        decision={billDecide}
+        onClose={() => setBillDecide(null)}
+        onConfirm={(ref, approve, paymentRef, note) => { decideBill(ref, approve, paymentRef, note); setBillDecide(null); }}
       />
 
       <CostCentreModal

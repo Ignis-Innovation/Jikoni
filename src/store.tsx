@@ -75,6 +75,54 @@ export interface PettyRequest {
   invoicePath: string | null;
 }
 
+// Expense claim (reimbursement) raised from the Staff Portal, decided in Finance → Claims.
+// A claim carries LINES: receipted expenses and one computed per-diem line (days × rate).
+export interface ClaimLine {
+  id?: string; category: string; detail: string | null; amount: number;
+  receiptPath: string | null; isPerDiem: boolean; perDiemDays: number | null; perDiemRate: number | null;
+}
+export interface ExpenseClaim {
+  id: string; purpose: string; project: string | null; total: number;
+  state: "pending" | "approved" | "rejected" | "paid" | "cancelled"; approverRole: string | null;
+  requester: string; requesterEmail: string;
+  decidedBy: string | null; decidedAt: string | null; note: string | null;
+  paidBy: string | null; paidAt: string | null; paymentRef: string | null;
+  advance: string | null;            // optional linked travel-advance ref (ADV-xxx)
+  createdAt: string; lines: ClaimLine[];
+}
+// What the Staff Portal modal sends up. Per-diem amounts are computed server-side.
+export interface ClaimLineInput {
+  category: string; detail?: string; amount?: number;
+  isPerDiem?: boolean; perDiemDays?: number; perDiemRate?: number; receiptPath?: string | null;
+}
+export interface ClaimInput { purpose: string; project?: string; lines: ClaimLineInput[]; advanceCode?: string }
+
+// Travel advance — cash given BEFORE a trip. Open receivable from the holder until it's
+// reconciled with receipts on return; only the reconciled amount posts to the project.
+export interface TravelAdvance {
+  id: string; purpose: string; project: string | null; amount: number;
+  state: "pending" | "approved" | "issued" | "reconciled" | "settled" | "rejected" | "cancelled";
+  approverRole: string | null;
+  holder: string; holderEmail: string;
+  decidedBy: string | null; decidedAt: string | null; note: string | null;
+  issuedBy: string | null; issuedAt: string | null; issueRef: string | null;
+  spent: number | null; balance: number | null; reconciledAt: string | null;
+  settledBy: string | null; settledAt: string | null; settleNote: string | null;
+  createdAt: string; plannedLines: ClaimLine[]; lines: ClaimLine[];
+}
+export interface AdvanceInput { purpose: string; project?: string; lines: ClaimLineInput[] }
+
+// Recurring/monthly bill HR keeps and sends to a Super Admin to pay (rent, internet …).
+export interface RecurringBill {
+  id: string; item: string; vendor: string | null; category: string | null; amount: number;
+  dueDay: number | null; note: string | null;
+  state: "active" | "pending" | "paid" | "rejected";
+  createdBy: string | null; requestedBy: string | null; requestedByEmail: string | null; requestedAt: string | null;
+  decidedBy: string | null; decidedAt: string | null; decisionNote: string | null; paymentRef: string | null;
+  createdAt: string;
+}
+export interface BillInput { item: string; vendor?: string; category?: string; amount: number; dueDay?: number | null; note?: string }
+
 export interface WeeklyReport {
   id: string; ref: string; author: string; authorEmail: string; weekStart: string;
   did: string; blockers: string | null; nextWeek: string | null;
@@ -410,6 +458,56 @@ interface AppApi {
   attachPettyInvoice: (ref: string, file: File) => void;
   removePettyInvoice: (ref: string, path: string) => void;
 
+  // Expense claims (Staff Portal ↔ Finance Claims)
+  claims: ExpenseClaim[];
+  perDiemRate: number;
+  claimOpen: boolean;
+  claimEdit: ExpenseClaim | null;
+  canDecideClaims: boolean;
+  openClaim: () => void;
+  openClaimEdit: (c: ExpenseClaim) => void;
+  closeClaim: () => void;
+  submitClaim: (v: ClaimInput) => void;
+  updateClaim: (ref: string, v: ClaimInput) => void;
+  deleteClaim: (ref: string) => void;
+  decideClaim: (ref: string, approve: boolean, note?: string) => void;
+  markClaimPaid: (ref: string, paymentRef?: string) => void;
+  attachClaimReceipt: (lineId: string, file: File) => void;
+
+  // Travel advances (Staff Portal ↔ Finance Advances)
+  advances: TravelAdvance[];
+  advanceOpen: boolean;
+  advanceEdit: TravelAdvance | null;
+  reconcileTarget: TravelAdvance | null;
+  canDecideAdvances: boolean;
+  openAdvance: () => void;
+  openAdvanceEdit: (a: TravelAdvance) => void;
+  closeAdvance: () => void;
+  openReconcile: (a: TravelAdvance) => void;
+  closeReconcile: () => void;
+  submitAdvance: (v: AdvanceInput) => void;
+  updateAdvance: (ref: string, v: AdvanceInput) => void;
+  deleteAdvance: (ref: string) => void;
+  decideAdvance: (ref: string, approve: boolean, note?: string) => void;
+  issueAdvance: (ref: string, issueRef?: string) => void;
+  reconcileAdvance: (ref: string, lines: ClaimLineInput[]) => void;
+  settleAdvance: (ref: string, note?: string) => void;
+
+  // Recurring bills (HR ↔ Super Admin to pay)
+  recurringBills: RecurringBill[];
+  billOpen: boolean;
+  billEdit: RecurringBill | null;
+  canManageBills: boolean;
+  canApproveBills: boolean;
+  openBill: () => void;
+  openBillEdit: (b: RecurringBill) => void;
+  closeBill: () => void;
+  addBill: (v: BillInput) => void;
+  updateBill: (ref: string, v: BillInput) => void;
+  deleteBill: (ref: string) => void;
+  requestBillPayment: (ref: string) => void;
+  decideBill: (ref: string, approve: boolean, paymentRef?: string, note?: string) => void;
+
   // Weekly reports (Staff Portal ↔ HR Weekly Reports)
   weeklyReports: WeeklyReport[];
   reportOpen: boolean;
@@ -541,6 +639,18 @@ export const useApp = () => useContext(Ctx);
 let toastSeq = 0;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+// Turn a raw Postgres / PostgREST error into something a user can read. Our RPCs raise
+// friendly messages already; this only rewrites the low-level ones (missing function,
+// permission, network) so people never see "schema cache" style noise.
+function niceError(msg?: string | null): string {
+  const m = (msg ?? "").trim();
+  if (!m) return "Something went wrong — please try again.";
+  if (/schema cache|Could not find the function|PGRST202/i.test(m)) return "This feature isn't live yet on the server — refresh the page and try again.";
+  if (/permission denied|not authorized|view-only|Access denied/i.test(m)) return "You don't have permission to do that.";
+  if (/Failed to fetch|NetworkError|network/i.test(m)) return "Couldn't reach the server — check your connection and try again.";
+  return m;
+}
+
 // Shown after sign-in while the first bootstrap loads, so the sidebar never
 // renders on seed permissions before the real ones arrive.
 function BootSplash() {
@@ -646,6 +756,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [pettyRequests, setPettyRequests] = useState<PettyRequest[]>([]);
   const [pettyOpen, setPettyOpen] = useState(false);
   const [pettyEdit, setPettyEdit] = useState<PettyRequest | null>(null);
+  const [claims, setClaims] = useState<ExpenseClaim[]>([]);
+  const [claimOpen, setClaimOpen] = useState(false);
+  const [claimEdit, setClaimEdit] = useState<ExpenseClaim | null>(null);
+  const [advances, setAdvances] = useState<TravelAdvance[]>([]);
+  const [advanceOpen, setAdvanceOpen] = useState(false);
+  const [advanceEdit, setAdvanceEdit] = useState<TravelAdvance | null>(null);
+  const [reconcileTarget, setReconcileTarget] = useState<TravelAdvance | null>(null);
+  const [recurringBills, setRecurringBills] = useState<RecurringBill[]>([]);
+  const [billOpen, setBillOpen] = useState(false);
+  const [billEdit, setBillEdit] = useState<RecurringBill | null>(null);
   const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([]);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportEdit, setReportEdit] = useState<WeeklyReport | null>(null);
@@ -802,6 +922,85 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
         invoicePath: r.invoice_path ?? null,
       } as PettyRequest;
+    }));
+    // Expense claims — Staff Portal shows the caller's own, Finance → Claims shows the queue.
+    // Lines embed from the child table (RLS returns all rows for authenticated).
+    const { data: cl } = await supabase
+      .from("expense_claims")
+      .select("ref, purpose, project_code, advance_code, total_amount, state, approver_role, decided_at, decision_note, paid_at, payment_ref, created_at, requester:app_users!expense_claims_requester_id_fkey(name, email), decider:app_users!expense_claims_decided_by_fkey(name), payer:app_users!expense_claims_paid_by_fkey(name), lines:expense_claim_lines(id, category, detail, amount, receipt_path, is_per_diem, per_diem_days, per_diem_rate_used, created_at)")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    setClaims(((cl ?? []) as any[]).map((r) => {
+      const rq = Array.isArray(r.requester) ? r.requester[0] : r.requester;
+      const dc = Array.isArray(r.decider) ? r.decider[0] : r.decider;
+      const pb = Array.isArray(r.payer) ? r.payer[0] : r.payer;
+      const lines = ((r.lines ?? []) as any[])
+        .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+        .map((l) => ({
+          id: l.id, category: l.category, detail: l.detail, amount: Number(l.amount),
+          receiptPath: l.receipt_path ?? null, isPerDiem: !!l.is_per_diem,
+          perDiemDays: l.per_diem_days != null ? Number(l.per_diem_days) : null,
+          perDiemRate: l.per_diem_rate_used != null ? Number(l.per_diem_rate_used) : null,
+        }) as ClaimLine);
+      return {
+        id: r.ref, purpose: r.purpose, project: r.project_code ?? null, total: Number(r.total_amount),
+        state: r.state, approverRole: r.approver_role ?? null,
+        requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "",
+        decidedBy: dc?.name ?? null, decidedAt: r.decided_at, note: r.decision_note,
+        paidBy: pb?.name ?? null, paidAt: r.paid_at, paymentRef: r.payment_ref ?? null,
+        advance: r.advance_code ?? null,
+        createdAt: r.created_at, lines,
+      } as ExpenseClaim;
+    }));
+    // Travel advances — Staff Portal shows the holder's own, Finance → Advances the queue.
+    const { data: adv } = await supabase
+      .from("travel_advances")
+      .select("ref, purpose, project_code, amount, state, approver_role, decided_at, decision_note, issued_at, issue_ref, spent_amount, balance, reconciled_at, settled_at, settle_note, created_at, holder:app_users!travel_advances_holder_id_fkey(name, email), decider:app_users!travel_advances_decided_by_fkey(name), issuer:app_users!travel_advances_issued_by_fkey(name), settler:app_users!travel_advances_settled_by_fkey(name), lines:travel_advance_lines(id, category, detail, amount, receipt_path, is_per_diem, per_diem_days, per_diem_rate_used, is_estimate, created_at)")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    setAdvances(((adv ?? []) as any[]).map((r) => {
+      const h = Array.isArray(r.holder) ? r.holder[0] : r.holder;
+      const dc = Array.isArray(r.decider) ? r.decider[0] : r.decider;
+      const ib = Array.isArray(r.issuer) ? r.issuer[0] : r.issuer;
+      const sb = Array.isArray(r.settler) ? r.settler[0] : r.settler;
+      const toLine = (l: any) => ({
+        id: l.id, category: l.category, detail: l.detail, amount: Number(l.amount),
+        receiptPath: l.receipt_path ?? null, isPerDiem: !!l.is_per_diem,
+        perDiemDays: l.per_diem_days != null ? Number(l.per_diem_days) : null,
+        perDiemRate: l.per_diem_rate_used != null ? Number(l.per_diem_rate_used) : null,
+      }) as ClaimLine;
+      const allLines = ((r.lines ?? []) as any[]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+      const plannedLines = allLines.filter((l) => l.is_estimate).map(toLine);   // the request breakdown
+      const lines = allLines.filter((l) => !l.is_estimate).map(toLine);          // the reconciliation actuals
+      return {
+        id: r.ref, purpose: r.purpose, project: r.project_code ?? null, amount: Number(r.amount),
+        state: r.state, approverRole: r.approver_role ?? null,
+        holder: h?.name ?? "—", holderEmail: h?.email ?? "",
+        decidedBy: dc?.name ?? null, decidedAt: r.decided_at, note: r.decision_note,
+        issuedBy: ib?.name ?? null, issuedAt: r.issued_at, issueRef: r.issue_ref ?? null,
+        spent: r.spent_amount != null ? Number(r.spent_amount) : null,
+        balance: r.balance != null ? Number(r.balance) : null, reconciledAt: r.reconciled_at,
+        settledBy: sb?.name ?? null, settledAt: r.settled_at, settleNote: r.settle_note ?? null,
+        createdAt: r.created_at, plannedLines, lines,
+      } as TravelAdvance;
+    }));
+    // Recurring bills — HR manages; a Super Admin pays. RLS returns all for authenticated.
+    const { data: bills } = await supabase
+      .from("recurring_bills")
+      .select("ref, item, vendor, category, amount, due_day, note, state, requested_at, decided_at, decision_note, payment_ref, created_at, creator:app_users!recurring_bills_created_by_fkey(name), requester:app_users!recurring_bills_requested_by_fkey(name, email), decider:app_users!recurring_bills_decided_by_fkey(name)")
+      .order("created_at", { ascending: false })
+      .limit(300);
+    setRecurringBills(((bills ?? []) as any[]).map((r) => {
+      const cb = Array.isArray(r.creator) ? r.creator[0] : r.creator;
+      const rq = Array.isArray(r.requester) ? r.requester[0] : r.requester;
+      const dc = Array.isArray(r.decider) ? r.decider[0] : r.decider;
+      return {
+        id: r.ref, item: r.item, vendor: r.vendor ?? null, category: r.category ?? null, amount: Number(r.amount),
+        dueDay: r.due_day != null ? Number(r.due_day) : null, note: r.note ?? null, state: r.state,
+        createdBy: cb?.name ?? null, requestedBy: rq?.name ?? null, requestedByEmail: rq?.email ?? null, requestedAt: r.requested_at,
+        decidedBy: dc?.name ?? null, decidedAt: r.decided_at, decisionNote: r.decision_note ?? null, paymentRef: r.payment_ref ?? null,
+        createdAt: r.created_at,
+      } as RecurringBill;
     }));
     // Weekly reports — the Staff Portal shows the caller's own; HR / Super Admin see all
     // (RLS scopes the rows).
@@ -1824,6 +2023,234 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       approve ? "The requester is emailed and can see it approved in their portal" : "The requester is emailed and notified");
   }
 
+  /* ---------- expense claims (Staff Portal → Finance Claims) ---------- */
+  // Email the routed approver(s) that a claim is waiting. Shared by submit + reopen-on-edit.
+  async function emailClaimApprovers(ref: string, purpose: string, total: number, approvers: string[]) {
+    const amt = `KES ${Number(total).toLocaleString()}`;
+    await Promise.all(approvers.map((to) => emailNotify(
+      to, `New expense claim — ${ref}`,
+      `${me?.name ?? "A teammate"} filed an expense claim: ${purpose} (${amt}).\n\nOpen Jikoni Tool → Finance → Claims to approve or reject it.`,
+      `<p><strong>${me?.name ?? "A teammate"}</strong> filed an expense claim: <strong>${purpose}</strong> (${amt}).</p><p>Open <strong>Jikoni Tool → Finance → Claims</strong> to approve or reject it.</p>`,
+    )));
+  }
+  async function submitClaim(v: ClaimInput) {
+    const { data, error } = await supabase.rpc("submit_expense_claim", {
+      p_purpose: v.purpose, p_project_code: v.project || null, p_lines: v.lines, p_advance_code: v.advanceCode || null,
+    });
+    if (error) { toast("Claim not submitted", niceError(error.message)); return; }
+    setClaimOpen(false); setClaimEdit(null);
+    const d = data as any; const ref = d?.id ?? "Claim";
+    const approvers: string[] = Array.isArray(d?.approverEmails) ? d.approverEmails : [];
+    await emailClaimApprovers(ref, v.purpose, Number(d?.total ?? 0), approvers);
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    if (d?.autoApproved) toast(`${ref} approved`, "Auto-approved — Super Admin claims don't need a second approver");
+    else toast(`${ref} submitted`, d?.approverRole === "super" ? "Sent to a Super Admin to approve — you'll see the decision here" : "Sent to HR to approve — you'll see the decision here");
+  }
+  async function updateClaim(ref: string, v: ClaimInput) {
+    const { data, error } = await supabase.rpc("edit_expense_claim", {
+      p_ref: ref, p_purpose: v.purpose, p_project_code: v.project || null, p_lines: v.lines, p_advance_code: v.advanceCode || null,
+    });
+    if (error) { toast("Couldn't update claim", niceError(error.message)); return; }
+    setClaimOpen(false); setClaimEdit(null);
+    const d = data as any;
+    // editing a rejected claim reopens it → re-notify the approver
+    if (d?.reopened) await emailClaimApprovers(ref, v.purpose, Number(d?.total ?? 0), Array.isArray(d?.approverEmails) ? d.approverEmails : []);
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} updated`, d?.reopened ? "Re-sent to the approver — it's pending again" : "Still pending — the approver sees the new details");
+  }
+  async function deleteClaim(ref: string) {
+    const { error } = await supabase.rpc("delete_expense_claim", { p_ref: ref });
+    if (error) { toast("Couldn't withdraw claim", niceError(error.message)); return; }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} withdrawn`, "Removed from the approval queue");
+  }
+  // Attach a receipt to a specific claim line (requester, while pending/rejected).
+  async function attachClaimReceipt(lineId: string, file: File) {
+    const path = await uploadFile("claims", file);
+    if (!path) return;
+    const { error } = await supabase.rpc("attach_claim_receipt", { p_line_id: lineId, p_path: path });
+    if (error) { toast("Couldn't attach receipt", niceError(error.message)); return; }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast("Receipt attached", `${file.name} is now on the line`);
+  }
+  async function decideClaim(ref: string, approve: boolean, note?: string) {
+    const { data, error } = await supabase.rpc("decide_expense_claim", { p_ref: ref, p_approve: approve, p_note: note || null });
+    if (error) { toast(approve ? "Approval failed" : "Rejection failed", niceError(error.message)); return; }
+    const d = data as any;
+    if (d?.requesterEmail) {
+      const amt = `KES ${Number(d.total).toLocaleString()}`;
+      const word = approve ? "approved" : "rejected";
+      await emailNotify(
+        d.requesterEmail, `Expense claim ${word} — ${ref}`,
+        `Hi ${d.requester ?? ""},\n\nYour expense claim for ${d.purpose} (${amt}) has been ${word}${note ? ` — ${note}` : ""}.\n\nOpen Jikoni Tool → Staff Portal to see the details.`,
+        `<p>Hi ${d.requester ?? ""},</p><p>Your expense claim for <strong>${d.purpose}</strong> (${amt}) has been <strong>${word}</strong>${note ? ` — ${note}` : ""}.</p><p>Open <strong>Jikoni Tool → Staff Portal</strong> to see the details.</p>`,
+      );
+    }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} ${approve ? "approved" : "rejected"}`,
+      approve ? "The requester is emailed; the amount is coded to the project" : "The requester is emailed and notified");
+  }
+  async function markClaimPaid(ref: string, paymentRef?: string) {
+    const { data, error } = await supabase.rpc("mark_claim_paid", { p_ref: ref, p_payment_ref: paymentRef || null });
+    if (error) { toast("Couldn't mark paid", niceError(error.message)); return; }
+    const d = data as any;
+    if (d?.requesterEmail) {
+      const amt = `KES ${Number(d.total).toLocaleString()}`;
+      await emailNotify(
+        d.requesterEmail, `Reimbursement paid — ${ref}`,
+        `Hi ${d.requester ?? ""},\n\nYour expense claim for ${d.purpose} (${amt}) has been reimbursed.\n\nOpen Jikoni Tool → Staff Portal to see the details.`,
+        `<p>Hi ${d.requester ?? ""},</p><p>Your expense claim for <strong>${d.purpose}</strong> (${amt}) has been <strong>reimbursed</strong>.</p>`,
+      );
+    }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} marked paid`, "The claimant is emailed — reimbursement recorded");
+  }
+
+  /* ---------- travel advances (Staff Portal → Finance Advances) ---------- */
+  async function emailAdvanceApprovers(ref: string, purpose: string, amount: number, approvers: string[]) {
+    const amt = `KES ${Number(amount).toLocaleString()}`;
+    await Promise.all(approvers.map((to) => emailNotify(
+      to, `New travel advance — ${ref}`,
+      `${me?.name ?? "A teammate"} requested a travel advance: ${purpose} (${amt}).\n\nOpen Jikoni Tool → Finance → Advances to approve or reject it.`,
+      `<p><strong>${me?.name ?? "A teammate"}</strong> requested a travel advance: <strong>${purpose}</strong> (${amt}).</p><p>Open <strong>Jikoni Tool → Finance → Advances</strong> to approve or reject it.</p>`,
+    )));
+  }
+  async function submitAdvance(v: AdvanceInput) {
+    const { data, error } = await supabase.rpc("submit_travel_advance", { p_purpose: v.purpose, p_project_code: v.project || null, p_lines: v.lines });
+    if (error) { toast("Advance not submitted", niceError(error.message)); return; }
+    setAdvanceOpen(false); setAdvanceEdit(null);
+    const d = data as any; const ref = d?.id ?? "Advance";
+    await emailAdvanceApprovers(ref, v.purpose, Number(d?.amount ?? 0), Array.isArray(d?.approverEmails) ? d.approverEmails : []);
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    if (d?.autoApproved) toast(`${ref} approved`, "Auto-approved — Finance will issue the cash");
+    else toast(`${ref} submitted`, d?.approverRole === "super" ? "Sent to a Super Admin to approve" : "Sent to HR to approve — you'll see the decision here");
+  }
+  async function updateAdvance(ref: string, v: AdvanceInput) {
+    const { data, error } = await supabase.rpc("edit_travel_advance", { p_ref: ref, p_purpose: v.purpose, p_project_code: v.project || null, p_lines: v.lines });
+    if (error) { toast("Couldn't update advance", niceError(error.message)); return; }
+    setAdvanceOpen(false); setAdvanceEdit(null);
+    const d = data as any;
+    if (d?.reopened) await emailAdvanceApprovers(ref, v.purpose, Number(d?.amount ?? 0), Array.isArray(d?.approverEmails) ? d.approverEmails : []);
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} updated`, d?.reopened ? "Re-sent to the approver — it's pending again" : "Still pending — the approver sees the new details");
+  }
+  async function deleteAdvance(ref: string) {
+    const { error } = await supabase.rpc("delete_travel_advance", { p_ref: ref });
+    if (error) { toast("Couldn't withdraw advance", niceError(error.message)); return; }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} withdrawn`, "Removed from the approval queue");
+  }
+  async function decideAdvance(ref: string, approve: boolean, note?: string) {
+    const { data, error } = await supabase.rpc("decide_travel_advance", { p_ref: ref, p_approve: approve, p_note: note || null });
+    if (error) { toast(approve ? "Approval failed" : "Rejection failed", niceError(error.message)); return; }
+    const d = data as any;
+    if (d?.holderEmail) {
+      const amt = `KES ${Number(d.amount).toLocaleString()}`;
+      const word = approve ? "approved" : "rejected";
+      await emailNotify(
+        d.holderEmail, `Travel advance ${word} — ${ref}`,
+        `Hi ${d.holder ?? ""},\n\nYour travel advance for ${d.purpose} (${amt}) has been ${word}${note ? ` — ${note}` : ""}.\n\nOpen Jikoni Tool → Staff Portal to see the details.`,
+        `<p>Hi ${d.holder ?? ""},</p><p>Your travel advance for <strong>${d.purpose}</strong> (${amt}) has been <strong>${word}</strong>${note ? ` — ${note}` : ""}.</p>`,
+      );
+    }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} ${approve ? "approved" : "rejected"}`, approve ? "Finance can now issue the cash" : "The holder is emailed and notified");
+  }
+  async function issueAdvance(ref: string, issueRef?: string) {
+    const { data, error } = await supabase.rpc("issue_travel_advance", { p_ref: ref, p_issue_ref: issueRef || null });
+    if (error) { toast("Couldn't issue advance", niceError(error.message)); return; }
+    const d = data as any;
+    if (d?.holderEmail) {
+      const amt = `KES ${Number(d.amount).toLocaleString()}`;
+      await emailNotify(
+        d.holderEmail, `Travel advance issued — ${ref}`,
+        `Hi ${d.holder ?? ""},\n\nYour travel advance for ${d.purpose} (${amt}) has been issued. Keep your receipts and reconcile it from the Staff Portal on your return.`,
+        `<p>Hi ${d.holder ?? ""},</p><p>Your travel advance for <strong>${d.purpose}</strong> (${amt}) has been <strong>issued</strong>. Reconcile it from the Staff Portal on your return.</p>`,
+      );
+    }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} issued`, "The holder is emailed — it's now an open advance to reconcile");
+  }
+  async function reconcileAdvance(ref: string, lines: ClaimLineInput[]) {
+    const { data, error } = await supabase.rpc("reconcile_travel_advance", { p_ref: ref, p_lines: lines });
+    if (error) { toast("Couldn't reconcile advance", niceError(error.message)); return; }
+    setReconcileTarget(null);
+    const d = data as any;
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    const bal = Number(d?.balance ?? 0);
+    toast(`${ref} reconciled`, bal > 0 ? `Return the KES ${bal.toLocaleString()} balance to Finance` : bal < 0 ? `Finance will top up KES ${Math.abs(bal).toLocaleString()}` : "Spent matched the advance exactly");
+  }
+  async function settleAdvance(ref: string, note?: string) {
+    const { data, error } = await supabase.rpc("settle_travel_advance", { p_ref: ref, p_note: note || null });
+    if (error) { toast("Couldn't settle advance", niceError(error.message)); return; }
+    const d = data as any;
+    if (d?.holderEmail) {
+      await emailNotify(
+        d.holderEmail, `Travel advance settled — ${ref}`,
+        `Hi ${d.holder ?? ""},\n\nYour travel advance for ${d.purpose} has been settled.\n\nOpen Jikoni Tool → Staff Portal to see the details.`,
+        `<p>Hi ${d.holder ?? ""},</p><p>Your travel advance for <strong>${d.purpose}</strong> has been <strong>settled</strong>.</p>`,
+      );
+    }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} settled`, "The holder is emailed — the advance is closed");
+  }
+
+  /* ---------- recurring bills (HR → Super Admin to pay) ---------- */
+  async function addBill(v: BillInput) {
+    const { error } = await supabase.rpc("add_recurring_bill", {
+      p_item: v.item, p_vendor: v.vendor || null, p_category: v.category || null, p_amount: v.amount, p_due_day: v.dueDay ?? null, p_note: v.note || null,
+    });
+    if (error) { toast("Bill not added", niceError(error.message)); return; }
+    setBillOpen(false); setBillEdit(null);
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast("Bill added", "It's on the recurring bills list — request payment when it's due");
+  }
+  async function updateBill(ref: string, v: BillInput) {
+    const { error } = await supabase.rpc("edit_recurring_bill", {
+      p_ref: ref, p_item: v.item, p_vendor: v.vendor || null, p_category: v.category || null, p_amount: v.amount, p_due_day: v.dueDay ?? null, p_note: v.note || null,
+    });
+    if (error) { toast("Couldn't update bill", niceError(error.message)); return; }
+    setBillOpen(false); setBillEdit(null);
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} updated`, "The bill details are saved");
+  }
+  async function deleteBill(ref: string) {
+    const { error } = await supabase.rpc("delete_recurring_bill", { p_ref: ref });
+    if (error) { toast("Couldn't remove bill", niceError(error.message)); return; }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} removed`, "Taken off the recurring bills list");
+  }
+  async function requestBillPayment(ref: string) {
+    const { data, error } = await supabase.rpc("request_bill_payment", { p_ref: ref });
+    if (error) { toast("Couldn't request payment", niceError(error.message)); return; }
+    const d = data as any;
+    const approvers: string[] = Array.isArray(d?.approverEmails) ? d.approverEmails : [];
+    const amt = `KES ${Number(d?.amount ?? 0).toLocaleString()}`;
+    await Promise.all(approvers.map((to) => emailNotify(
+      to, `Bill payment requested — ${ref}`,
+      `${me?.name ?? "HR"} requested payment of a recurring bill: ${d?.item} (${amt}).\n\nOpen Jikoni Tool → Finance → Recurring Bills to pay or reject it.`,
+      `<p><strong>${me?.name ?? "HR"}</strong> requested payment of a recurring bill: <strong>${d?.item}</strong> (${amt}).</p><p>Open <strong>Jikoni Tool → Finance → Recurring Bills</strong> to pay or reject it.</p>`,
+    )));
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} sent for payment`, "A Super Admin is emailed to pay it");
+  }
+  async function decideBill(ref: string, approve: boolean, paymentRef?: string, note?: string) {
+    const { data, error } = await supabase.rpc("decide_bill_payment", { p_ref: ref, p_approve: approve, p_payment_ref: paymentRef || null, p_note: note || null });
+    if (error) { toast(approve ? "Payment failed" : "Rejection failed", niceError(error.message)); return; }
+    const d = data as any;
+    if (d?.requestedByEmail) {
+      const amt = `KES ${Number(d.amount).toLocaleString()}`;
+      const word = approve ? "paid" : "rejected";
+      await emailNotify(
+        d.requestedByEmail, `Bill ${word} — ${ref}`,
+        `Hi ${d.requestedBy ?? ""},\n\nThe recurring bill ${d.item} (${amt}) has been ${word}${note ? ` — ${note}` : ""}.\n\nOpen Jikoni Tool → HR → Recurring Bills to see it.`,
+        `<p>Hi ${d.requestedBy ?? ""},</p><p>The recurring bill <strong>${d.item}</strong> (${amt}) has been <strong>${word}</strong>${note ? ` — ${note}` : ""}.</p>`,
+      );
+    }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(`${ref} ${approve ? "paid" : "rejected"}`, approve ? "HR is emailed — recorded as paid" : "HR is emailed and notified");
+  }
+
   /* ---------- weekly reports (Staff Portal → HR Weekly Reports) ---------- */
   async function submitWeeklyReport(v: { did?: string; blockers?: string; nextWeek?: string; attachment?: string | null; track?: string; answers?: { q: string; a: string }[] }) {
     const { data, error } = await supabase.rpc("submit_weekly_report", {
@@ -2528,6 +2955,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     closePetty: () => { setPettyOpen(false); setPettyEdit(null); },
     submitPettyRequest, updatePettyRequest, deletePettyRequest, decidePettyRequest,
     attachPettyInvoice, removePettyInvoice, uploadFile, uploadedFileUrl,
+    claims, perDiemRate: Number(appConfig["per_diem_daily_rate"] ?? 0),
+    claimOpen, claimEdit,
+    canDecideClaims: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
+    openClaim: () => { setClaimEdit(null); setClaimOpen(true); },
+    openClaimEdit: (c) => { setClaimEdit(c); setClaimOpen(true); },
+    closeClaim: () => { setClaimOpen(false); setClaimEdit(null); },
+    submitClaim, updateClaim, deleteClaim, decideClaim, markClaimPaid, attachClaimReceipt,
+    advances, advanceOpen, advanceEdit, reconcileTarget,
+    canDecideAdvances: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
+    openAdvance: () => { setAdvanceEdit(null); setAdvanceOpen(true); },
+    openAdvanceEdit: (a) => { setAdvanceEdit(a); setAdvanceOpen(true); },
+    closeAdvance: () => { setAdvanceOpen(false); setAdvanceEdit(null); },
+    openReconcile: (a) => { setReconcileTarget(a); },
+    closeReconcile: () => { setReconcileTarget(null); },
+    submitAdvance, updateAdvance, deleteAdvance, decideAdvance, issueAdvance, reconcileAdvance, settleAdvance,
+    recurringBills, billOpen, billEdit,
+    canManageBills: (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
+    canApproveBills: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3,
+    openBill: () => { setBillEdit(null); setBillOpen(true); },
+    openBillEdit: (b) => { setBillEdit(b); setBillOpen(true); },
+    closeBill: () => { setBillOpen(false); setBillEdit(null); },
+    addBill, updateBill, deleteBill, requestBillPayment, decideBill,
     weeklyReports, reportOpen, reportEdit,
     canViewReports: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 1,
     openReport: () => { setReportEdit(null); setReportOpen(true); },

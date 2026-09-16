@@ -865,9 +865,81 @@ function StaffProfileModal() {
   );
 }
 
+// Recurring bill categories — a small fixed set for clean spend reporting.
+const BILL_CATEGORIES = [
+  { v: "rent", l: "Rent" },
+  { v: "utilities", l: "Utilities" },
+  { v: "internet", l: "Internet / phone" },
+  { v: "subscription", l: "Subscription" },
+  { v: "insurance", l: "Insurance" },
+  { v: "other", l: "Other" },
+];
+export const billCatLabel = (c: string | null) => c ? (BILL_CATEGORIES.find((x) => x.v === c)?.l ?? cap(c)) : "—";
+export const billPill: Record<string, { cls: string; txt: string }> = {
+  active: { cls: "week", txt: "On the list" },
+  pending: { cls: "today", txt: "Awaiting payment" },
+  paid: { cls: "done", txt: "Paid" },
+  rejected: { cls: "over", txt: "Rejected" },
+};
+
+// Add or edit a recurring bill (HR). Item + amount required; vendor / category / due-day optional.
+function RecurringBillModal() {
+  const { billOpen, billEdit, closeBill, addBill, updateBill, toast } = useApp();
+  const [f, setF] = useState({ item: "", vendor: "", category: "rent", amount: "", dueDay: "", note: "" });
+  useEffect(() => {
+    if (!billOpen) return;
+    setF({
+      item: billEdit?.item ?? "", vendor: billEdit?.vendor ?? "", category: billEdit?.category ?? "rent",
+      amount: billEdit ? String(billEdit.amount) : "", dueDay: billEdit?.dueDay ? String(billEdit.dueDay) : "", note: billEdit?.note ?? "",
+    });
+  }, [billOpen, billEdit]);
+  const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
+
+  function save() {
+    const amt = Number(f.amount);
+    if (!f.item.trim()) { toast("What's the bill for?", "e.g. Office rent"); return; }
+    if (!amt || amt <= 0) { toast("Enter an amount", "How much is the monthly bill? (KES)"); return; }
+    const day = f.dueDay ? Number(f.dueDay) : null;
+    if (day != null && (day < 1 || day > 31)) { toast("Check the due day", "Use a day of the month, 1–31"); return; }
+    const v = { item: f.item.trim(), vendor: f.vendor.trim(), category: f.category, amount: amt, dueDay: day, note: f.note.trim() };
+    if (billEdit) updateBill(billEdit.id, v); else addBill(v);
+  }
+
+  return (
+    <ModalShell open={billOpen} onClose={closeBill} width={480}>
+      <div className="mh">
+        <h3>{billEdit ? `Edit bill ${billEdit.id}` : "Add a recurring bill"}</h3>
+        <p>{billEdit ? "Update the bill's details." : "A monthly bill you'll send to a Super Admin to pay — rent, internet, utilities, a subscription."}</p>
+      </div>
+      <div className="mb">
+        <div><label>Item</label><input className="field" placeholder="e.g. Office rent" value={f.item} onChange={(e) => set("item", e.target.value)} /></div>
+        <div className="mrow c2">
+          <div><label>Vendor <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" placeholder="e.g. Landlord Ltd" value={f.vendor} onChange={(e) => set("vendor", e.target.value)} /></div>
+          <div><label>Category</label>
+            <select className="field" value={f.category} onChange={(e) => set("category", e.target.value)}>
+              {BILL_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="mrow c2">
+          <div><label>Amount / month (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 50000" value={f.amount} onChange={(e) => set("amount", e.target.value)} /></div>
+          <div><label>Due day <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" type="number" min="1" max="31" placeholder="e.g. 5" value={f.dueDay} onChange={(e) => set("dueDay", e.target.value)} /></div>
+        </div>
+        <div><label>Note <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><textarea className="field" rows={2} placeholder="Anything the payer should know" value={f.note} onChange={(e) => set("note", e.target.value)} /></div>
+        <Note>Added bills sit on the list. When one is due, click <strong>Request payment</strong> — a Super Admin is emailed to pay it. Paid bills can be requested again next month.</Note>
+      </div>
+      <div className="mf">
+        <button className="btn" onClick={closeBill}>Cancel</button>
+        <button className="btn primary" onClick={save}>{billEdit ? "Save changes" : "Add bill"}</button>
+      </div>
+    </ModalShell>
+  );
+}
+
 /* ============================ view ============================ */
 export default function HrView() {
-  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, uploadedFileUrl, level, members, perms } = useApp();
+  const { tabs, toast, goTab, openHrModal, publishPosting, hrLeaveQueue, hrBalances, decideLeave, hrData, preparePayroll, approvePayroll, postPayroll, setFieldAssignmentState, startAppraisalCycle, verifyCertification, setFeedbackState, refreshHr, staffDocUrl, weeklyReports, acknowledgeWeeklyReport, canViewReports, uploadedFileUrl, level, members, perms,
+    recurringBills, canManageBills, openBill, openBillEdit, deleteBill, requestBillPayment } = useApp();
   const tab = tabs.hr;
   // HR access: View (1) is read-only; Edit (2) can add/edit staff, upload docs,
   // record leave, prepare payroll, review weekly reports; Full (3) can approve —
@@ -1066,6 +1138,9 @@ export default function HrView() {
           )}
           {tab === "h-feedback" && canEdit && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />Send feedback</button>
+          )}
+          {tab === "h-bills" && canManageBills && (
+            <button className="btn primary" onClick={openBill}><PlusI />Add bill</button>
           )}
           {tab === "h-exit" && canFull && (
             <button className="btn primary" onClick={() => openHrModal({ kind: "exitStart" })}><PlusI />Start an exit</button>
@@ -1694,6 +1769,47 @@ export default function HrView() {
         </div>
       )}
 
+      {tab === "h-bills" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h">
+              <h3>Recurring bills</h3>
+              <span className="meta">{recurringBills.filter((b) => b.state === "pending").length} awaiting payment · {recurringBills.length} on the list</span>
+            </div>
+            {recurringBills.length === 0 ? (
+              <Note noBorder>No recurring bills yet. Use <strong>Add bill</strong> for monthly costs like rent, internet or a subscription — then request payment when each is due and a Super Admin is emailed to pay it.</Note>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Item</th><th>Category</th><th>Due</th><th>Amount</th><th>Status</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <tbody>
+                  {recurringBills.map((b) => (
+                    <tr key={b.id}>
+                      <td>{b.item}{b.vendor ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{b.vendor}</small> : null}</td>
+                      <td style={{ fontSize: 12.5 }}>{billCatLabel(b.category)}</td>
+                      <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{b.dueDay ? `Day ${b.dueDay}` : "—"}</td>
+                      <td className="mono">{kes(b.amount)}</td>
+                      <td><span className={`pill ${billPill[b.state]?.cls || "week"}`} style={{ textTransform: "none" }} title={b.state === "paid" && b.paymentRef ? `Ref ${b.paymentRef}` : b.state === "rejected" && b.decisionNote ? b.decisionNote : ""}>{billPill[b.state]?.txt || b.state}</span></td>
+                      <td style={{ textAlign: "right" }}>
+                        {canManageBills ? (
+                          b.state === "pending"
+                            ? <span className="meta">with a Super Admin</span>
+                            : <span style={{ display: "inline-flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => requestBillPayment(b.id)}>{b.state === "paid" ? "Request again" : "Request payment"}</button>
+                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openBillEdit(b)}>Edit</button>
+                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteBill(b.id)}>Remove</button>
+                              </span>
+                        ) : <span className="meta">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <Note>Click <strong>Request payment</strong> when a bill is due — it's emailed to a Super Admin to pay. Once <strong>Paid</strong>, use <strong>Request again</strong> next month. You can't edit or remove a bill while it's awaiting payment.</Note>
+          </div>
+        </div>
+      )}
+
       {tab === "h-recruit" && (
         <div className="hr-panel active">
           <div className="pad" style={{ padding: "0 0 14px" }}>
@@ -1869,6 +1985,7 @@ export default function HrView() {
         </div>
       )}
 
+      <RecurringBillModal />
       <EmployeeModal />
       <StaffDetailModal />
       <StaffProfileModal />
