@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { useApp, type PettyRequest, type ExpenseClaim, type TravelAdvance, type RecurringBill } from "../store";
 import { Pulse, Note, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
+import { ReceiptList, LineReceiptsModal } from "../components/Receipts";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 import { budgetLines } from "../data";
@@ -82,17 +83,24 @@ const claimCat = (c: string) => c === "per_diem" ? "Per diem"
 
 // Approve or reject an expense claim — shows the line breakdown and blocks approval
 // while any expense line is missing a receipt (the server enforces this too).
-function ClaimDecideModal({ decision, onClose, onConfirm, receiptUrl }: {
+function ClaimDecideModal({ decision, onClose, onConfirm }: {
   decision: { claim: ExpenseClaim; approve: boolean } | null;
   onClose: () => void;
   onConfirm: (ref: string, approve: boolean, note: string) => void;
-  receiptUrl: (path: string) => string;
 }) {
+  const { claims, attachClaimReceipts, removeClaimReceipt } = useApp();
   const [note, setNote] = useState("");
+  const [busyLine, setBusyLine] = useState<string | null>(null);
   const open = !!decision;
   const approve = decision?.approve ?? false;
-  const c = decision?.claim;
-  const missing = c ? c.lines.filter((l) => !l.isPerDiem && !l.receiptPath).length : 0;
+  // read the live claim so receipts HR adds/removes here show straight away
+  const c = decision ? (claims.find((x) => x.id === decision.claim.id) ?? decision.claim) : undefined;
+  const missing = c ? c.lines.filter((l) => !l.isPerDiem && !l.receiptPaths.length).length : 0;
+  async function addReceipts(lineId: string, files: File[]) {
+    setBusyLine(lineId);
+    await attachClaimReceipts(lineId, files);
+    setBusyLine(null);
+  }
   return (
     <ModalShell open={open} onClose={onClose} width={560}>
       {c && (
@@ -103,7 +111,7 @@ function ClaimDecideModal({ decision, onClose, onConfirm, receiptUrl }: {
           </div>
           <div className="mb">
             <table className="tbl" style={{ marginBottom: 4 }}>
-              <thead><tr><th>Category</th><th>Detail</th><th>Amount</th><th>Receipt</th></tr></thead>
+              <thead><tr><th>Category</th><th>Detail</th><th>Amount</th><th>Receipts</th></tr></thead>
               <tbody>
                 {c.lines.map((l, i) => (
                   <tr key={i}>
@@ -111,15 +119,15 @@ function ClaimDecideModal({ decision, onClose, onConfirm, receiptUrl }: {
                     <td style={{ fontSize: 12 }}>{l.isPerDiem ? `${l.perDiemDays} day${l.perDiemDays === 1 ? "" : "s"} × ${kes(l.perDiemRate || 0)}` : (l.detail || "—")}</td>
                     <td className="mono">{kes(l.amount)}</td>
                     <td style={{ fontSize: 12 }}>
-                      {l.isPerDiem ? <span style={{ color: "var(--ink-soft)" }}>n/a</span>
-                        : l.receiptPath ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(receiptUrl(l.receiptPath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>View</a>
-                        : <span style={{ color: "var(--red)" }}>missing</span>}
+                      {l.isPerDiem || !l.id ? <span style={{ color: "var(--ink-soft)" }}>n/a</span>
+                        : <ReceiptList paths={l.receiptPaths} busy={busyLine === l.id} addLabel="Add"
+                            onAdd={(fs) => addReceipts(l.id!, fs)} onRemove={(p) => removeClaimReceipt(l.id!, p)} />}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {approve && missing > 0 && <Note>{missing} expense line{missing > 1 ? "s have" : " has"} no receipt yet — you can still approve; the claimant can attach {missing > 1 ? "them" : "it"} later from their Claims tab.</Note>}
+            {approve && missing > 0 && <Note>{missing} expense line{missing > 1 ? "s have" : " has"} no receipt yet — you can still approve, attach {missing > 1 ? "them" : "it"} here, or the claimant can add {missing > 1 ? "them" : "it"} later from their Claims tab.</Note>}
             <div>
               <label>{approve ? "Note" : "Reason for rejecting"} <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label>
               <textarea className="field" rows={2} autoFocus placeholder={approve ? "e.g. Approved — reimbursed with July payroll" : "e.g. Split the per-diem days out and re-file"} value={note} onChange={(e) => setNote(e.target.value)} />
@@ -384,15 +392,8 @@ export default function FinanceView() {
   const fmtDate = (iso: string | null) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
   // which petty-cash request is being approved/rejected — drives the popup (no browser prompts)
   const [pettyDecide, setPettyDecide] = useState<{ req: PettyRequest; approve: boolean } | null>(null);
-  // attaching an invoice to an approved petty-cash request (one hidden input, target ref tracked)
-  const invoiceInput = useRef<HTMLInputElement>(null);
-  const [attachTarget, setAttachTarget] = useState<string | null>(null);
-  const pickInvoice = (ref: string) => { setAttachTarget(ref); invoiceInput.current?.click(); };
-  const onInvoicePick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]; e.target.value = "";
-    if (f && attachTarget) attachPettyInvoice(attachTarget, f);
-    setAttachTarget(null);
-  };
+  // receipts on a filed claim / reconciled advance (line-by-line receipts modal)
+  const [receiptsFor, setReceiptsFor] = useState<{ kind: "claim" | "advance"; id: string } | null>(null);
   const pettyStatePill: Record<string, { cls: string; txt: string }> = {
     pending: { cls: "today", txt: "Pending" }, approved: { cls: "done", txt: "Approved" },
     rejected: { cls: "over", txt: "Rejected" }, cancelled: { cls: "week", txt: "Withdrawn" },
@@ -646,7 +647,7 @@ export default function FinanceView() {
                 <div className="recon"><span>Awaiting approval</span><span className="mono">{pettyPending.length}</span></div>
                 <div className="recon"><span>Value pending</span><span className="mono">{kes(pettyPendingTotal)}</span></div>
                 <div className="recon"><span>Approved to date</span><span className="mono">{kes(pettyRequests.filter((r) => r.state === "approved").reduce((s, r) => s + r.amount, 0))}</span></div>
-                <div className="recon"><span>Invoices attached</span><span className="mono">{pettyRequests.filter((r) => r.invoicePath).length}</span></div>
+                <div className="recon"><span>Invoices attached</span><span className="mono">{pettyRequests.filter((r) => r.invoicePaths.length).length}</span></div>
               </div>
             </div>
           </div>
@@ -656,7 +657,7 @@ export default function FinanceView() {
             <div className="panel-h"><h3>Petty-cash history</h3><span className="meta">{pettyRequests.length} request{pettyRequests.length === 1 ? "" : "s"} · all statuses</span></div>
             {pettyRequests.length === 0 ? <EmptyBody>No petty-cash requests yet.</EmptyBody> : (
               <table className="tbl">
-                <thead><tr><th>Requester</th><th>Item</th><th>Amount</th><th>Status</th><th>Invoice</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+                <thead><tr><th>Requester</th><th>Item</th><th>Amount</th><th>Status</th><th>Invoices / receipts</th></tr></thead>
                 <tbody>
                   {pettyRequests.map((r) => (
                     <tr key={r.id}>
@@ -665,25 +666,19 @@ export default function FinanceView() {
                       <td className="mono">{kes(r.amount)}</td>
                       <td><span className={`pill ${pettyStatePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.decidedBy ? `${r.decidedBy}${r.note ? " · " + r.note : ""}` : ""}>{pettyStatePill[r.state]?.txt || r.state}</span></td>
                       <td>
-                        {r.invoicePath
-                          ? <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(r.invoicePath!), "_blank", "noopener"); }} style={{ color: "var(--flame)", textDecoration: "none" }}>Invoice attached · View</a>
+                        {r.state === "approved" && canDecidePetty
+                          ? <ReceiptList paths={r.invoicePaths} addLabel={r.invoicePaths.length ? "Attach more" : "Attach invoices"}
+                              onAdd={(fs) => attachPettyInvoice(r.id, fs)} onRemove={(p) => removePettyInvoice(r.id, p)} />
+                          : r.invoicePaths.length ? <ReceiptList paths={r.invoicePaths} readOnly />
                           : <span style={{ color: "var(--ink-soft)" }}>—</span>}
-                      </td>
-                      <td style={{ textAlign: "right" }}>
-                        {r.state === "approved" && canDecidePetty ? (
-                          r.invoicePath
-                            ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => removePettyInvoice(r.id, r.invoicePath!)}>Delete invoice</button>
-                            : <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => pickInvoice(r.id)}>Attach invoice</button>
-                        ) : <span className="meta">—</span>}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-            <Note>Once a request is <strong>Approved</strong>, the requester or a Sub Admin can attach the invoice/receipt (any file or image). Floats and vouchers build on this queue in a later increment.</Note>
+            <Note>Once a request is <strong>Approved</strong>, the requester or a Sub Admin can attach one or more invoices/receipts (any file or image). Floats and vouchers build on this queue in a later increment.</Note>
           </div>
-          <input ref={invoiceInput} type="file" style={{ display: "none" }} onChange={onInvoicePick} />
         </div>
       )}
 
@@ -701,7 +696,7 @@ export default function FinanceView() {
                   {claimsPending.length === 0 ? (
                     <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No claims awaiting approval. Staff file these in the Staff Portal → Expense Claims.</td></tr>
                   ) : claimsPending.map((r) => {
-                    const missing = r.lines.filter((l) => !l.isPerDiem && !l.receiptPath).length;
+                    const missing = r.lines.filter((l) => !l.isPerDiem && !l.receiptPaths.length).length;
                     return (
                       <tr key={r.id}>
                         <td>{r.requester}{r.project ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ {r.project}</small> : null}</td>
@@ -723,7 +718,7 @@ export default function FinanceView() {
                   })}
                 </tbody>
               </table>
-              <Note>Claims come from the Staff Portal and route by who raised them — a staff member's to <strong>HR</strong>, HR's own to a <strong>Super Admin</strong>. You can't decide your own claim, and a claim can't be approved until every expense line has a receipt.</Note>
+              <Note>Claims come from the Staff Portal and route by who raised them — a staff member's to <strong>HR</strong>, HR's own to a <strong>Super Admin</strong>. You can't decide your own claim. Receipts don't block approval — each line can carry several, added by the claimant or HR at any time.</Note>
             </div>
             <div className="panel">
               <div className="panel-h"><h3>Summary</h3><span className="meta">KES</span></div>
@@ -767,11 +762,17 @@ export default function FinanceView() {
                       <td className="mono">{kes(r.total)}</td>
                       <td><span className={`pill ${claimStatePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state === "paid" && r.paymentRef ? `Ref ${r.paymentRef}` : r.decidedBy ? `${r.decidedBy}${r.note ? " · " + r.note : ""}` : ""}>{claimStatePill[r.state]?.txt || r.state}</span></td>
                       <td style={{ textAlign: "right" }}>
-                        {r.state === "approved" && canEdit
-                          ? <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setClaimPay(r)}>Mark paid</button>
-                          : r.state === "paid"
-                            ? <span className="meta">{r.paidBy ? `Paid · ${r.paidBy}` : "Reimbursed"}</span>
-                            : <span className="meta">—</span>}
+                        <span style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                          {canDecideClaims && r.state !== "cancelled" && (
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReceiptsFor({ kind: "claim", id: r.id })}
+                              title="Attach or view receipts">Receipts{(() => { const n = r.lines.reduce((s, l) => s + l.receiptPaths.length, 0); return n ? ` (${n})` : ""; })()}</button>
+                          )}
+                          {r.state === "approved" && canEdit
+                            ? <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setClaimPay(r)}>Mark paid</button>
+                            : r.state === "paid"
+                              ? <span className="meta">{r.paidBy ? `Paid · ${r.paidBy}` : "Reimbursed"}</span>
+                              : null}
+                        </span>
                       </td>
                     </tr>
                   ))}
@@ -857,7 +858,7 @@ export default function FinanceView() {
             <div className="panel-h"><h3>Advance history</h3><span className="meta">{advances.length} advance{advances.length === 1 ? "" : "s"} · all stages</span></div>
             {advances.length === 0 ? <EmptyBody>No travel advances yet.</EmptyBody> : (
               <table className="tbl">
-                <thead><tr><th>Holder</th><th>Purpose</th><th>Project</th><th>Amount</th><th>Spent</th><th>Balance</th><th>Stage</th></tr></thead>
+                <thead><tr><th>Holder</th><th>Purpose</th><th>Project</th><th>Amount</th><th>Spent</th><th>Balance</th><th>Stage</th><th style={{ textAlign: "right" }}>Receipts</th></tr></thead>
                 <tbody>
                   {advances.map((r) => (
                     <tr key={r.id}>
@@ -868,6 +869,13 @@ export default function FinanceView() {
                       <td className="mono">{r.spent != null ? kes(r.spent) : "—"}</td>
                       <td className="mono">{r.balance != null ? kes(r.balance) : "—"}</td>
                       <td><span className={`pill ${advanceStatePill[r.state]?.cls || "today"}`} style={{ textTransform: "none" }} title={r.state === "rejected" && r.note ? r.note : r.issueRef ? `Issue ref ${r.issueRef}` : ""}>{advanceStatePill[r.state]?.txt || r.state}</span></td>
+                      <td style={{ textAlign: "right" }}>
+                        {r.lines.length > 0 && (canDecideAdvances || canEdit)
+                          ? <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReceiptsFor({ kind: "advance", id: r.id })}>
+                              {(() => { const n = r.lines.reduce((s, l) => s + l.receiptPaths.length, 0); return n ? `View (${n})` : "Attach"; })()}
+                            </button>
+                          : <span className="meta">—</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1012,7 +1020,6 @@ export default function FinanceView() {
         key={claimDecide ? claimDecide.claim.id + (claimDecide.approve ? "-a" : "-r") : "claim-none"}
         decision={claimDecide}
         onClose={() => setClaimDecide(null)}
-        receiptUrl={uploadedFileUrl}
         onConfirm={(ref, approve, note) => { decideClaim(ref, approve, note); setClaimDecide(null); }}
       />
 
@@ -1041,6 +1048,7 @@ export default function FinanceView() {
         onClose={() => setAdvanceSettle(null)}
         onConfirm={(ref, note) => { settleAdvance(ref, note); setAdvanceSettle(null); }}
       />
+      <LineReceiptsModal kind={receiptsFor?.kind ?? "claim"} id={receiptsFor?.id ?? null} onClose={() => setReceiptsFor(null)} />
 
       <BillDecideModal
         key={billDecide ? billDecide.bill.id + (billDecide.approve ? "-p" : "-r") : "bill-none"}

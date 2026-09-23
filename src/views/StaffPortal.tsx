@@ -3,6 +3,7 @@ import { useApp, type ClaimLineInput } from "../store";
 import { Note } from "../components/ui";
 import { PlusI, CheckBoldI } from "../components/icons";
 import { ModalShell } from "../components/modals";
+import { ReceiptList, LineReceiptsModal } from "../components/Receipts";
 import { kes, contractTypes, REPORT_TRACKS, type ReportTrack, type WeekTask } from "../data";
 import { Crumb } from "../nav";
 import { FeedbackModal, ExitSteps } from "./Hr";
@@ -184,16 +185,16 @@ export const CLAIM_CATEGORIES = [
 ];
 export const claimCatLabel = (c: string) => c === "per_diem" ? "Per diem" : CLAIM_CATEGORIES.find((x) => x.v === c)?.l ?? cap(c);
 
-type EditLine = { category: string; detail: string; amount: string; receiptPath: string | null; uploading?: boolean };
+type EditLine = { category: string; detail: string; amount: string; receiptPaths: string[]; uploading?: boolean };
 
 // Raise or edit an expense claim from the portal — lines (receipted expenses) plus an
 // optional computed per-diem line. Routes to Finance/HR for approval, then reimbursement.
 function ExpenseClaimModal() {
-  const { claimOpen, claimEdit, closeClaim, submitClaim, updateClaim, projectDetails, perDiemRate, uploadFile, uploadedFileUrl, advances, meEmail, toast } = useApp();
+  const { claimOpen, claimEdit, closeClaim, submitClaim, updateClaim, projectDetails, perDiemRate, uploadFiles, advances, meEmail, toast } = useApp();
   const [purpose, setPurpose] = useState("");
   const [project, setProject] = useState("");
   const [advanceCode, setAdvanceCode] = useState("");
-  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
   const [perDiemDays, setPerDiemDays] = useState("");
   const [perDiemRateInput, setPerDiemRateInput] = useState("");
   const projects = Object.keys(projectDetails);
@@ -207,26 +208,28 @@ function ExpenseClaimModal() {
     setAdvanceCode(claimEdit?.advance ?? "");
     if (claimEdit) {
       const rec = claimEdit.lines.filter((l) => !l.isPerDiem)
-        .map((l) => ({ category: l.category, detail: l.detail ?? "", amount: String(l.amount), receiptPath: l.receiptPath }));
-      setLines(rec.length ? rec : [{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+        .map((l) => ({ category: l.category, detail: l.detail ?? "", amount: String(l.amount), receiptPaths: l.receiptPaths }));
+      setLines(rec.length ? rec : [{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
       const pd = claimEdit.lines.find((l) => l.isPerDiem);
       setPerDiemDays(pd?.perDiemDays ? String(pd.perDiemDays) : "");
       setPerDiemRateInput(pd?.perDiemRate ? String(pd.perDiemRate) : "");
     } else {
-      setLines([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+      setLines([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
       setPerDiemDays("");
       setPerDiemRateInput("");
     }
   }, [claimOpen, claimEdit, perDiemRate]);
 
   const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
-  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPaths: [] }]);
   const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
-  async function pickReceipt(i: number, file: File) {
+  // upload several receipts for a line at once and append them
+  async function pickReceipts(i: number, files: File[]) {
     setLine(i, { uploading: true });
-    const path = await uploadFile("claims", file);
-    setLine(i, { receiptPath: path ?? null, uploading: false });
+    const paths = await uploadFiles("claims", files);
+    setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, receiptPaths: [...l.receiptPaths, ...paths], uploading: false } : l));
   }
+  const dropReceipt = (i: number, path: string) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, receiptPaths: l.receiptPaths.filter((p) => p !== path) } : l));
 
   const days = Number(perDiemDays) || 0;
   const pdRate = Number(perDiemRateInput) || 0;
@@ -236,14 +239,14 @@ function ExpenseClaimModal() {
 
   function save() {
     if (!purpose.trim()) { toast("What's this claim for?", "Add a short purpose, e.g. Makueni field visit"); return; }
-    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPath);
+    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPaths.length);
     for (const l of filled) {
       if (!(Number(l.amount) > 0)) { toast("Each line needs an amount", "Enter the amount (KES) for every expense line"); return; }
     }
     if (!filled.length && days <= 0) { toast("Add at least one line", "Add an expense line, or per-diem days"); return; }
     if (days > 0 && !(pdRate > 0)) { toast("Enter a per-diem rate", "Type the amount paid per day (KES) — it's multiplied by the days"); return; }
     const payload: ClaimLineInput[] = filled.map((l) => ({
-      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPath: l.receiptPath,
+      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPaths: l.receiptPaths,
     }));
     if (days > 0) payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: days, perDiemRate: pdRate });
     const v = { purpose: purpose.trim(), project, lines: payload, advanceCode };
@@ -285,13 +288,9 @@ function ExpenseClaimModal() {
               </select>
               <input className="field" placeholder="Detail (optional)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
               <input className="field" type="number" min="0" placeholder="Amount" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <label className="btn" style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  {l.uploading ? "…" : l.receiptPath ? "✓ Receipt" : "Receipt"}
-                  <input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickReceipt(i, f); }} />
-                </label>
-                {l.receiptPath && <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(l.receiptPath!), "_blank", "noopener"); }} style={{ fontSize: 11, color: "var(--flame)" }}>view</a>}
-                <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+              <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <ReceiptList paths={l.receiptPaths} busy={l.uploading} onAdd={(fs) => pickReceipts(i, fs)} onRemove={(p) => dropReceipt(i, p)} />
               </div>
             </div>
           ))}
@@ -313,7 +312,7 @@ function ExpenseClaimModal() {
             <input className="field" value={days > 0 && pdRate > 0 ? kes(perDiemAmt) : "—"} readOnly style={{ background: "var(--wash, #F7F4EE)" }} />
           </div>
         </div>
-        <Note>Receipts aren't required to file — attach them here or later from your Claims tab, but every expense line needs a receipt before it can be <strong>approved</strong>. Per diem = rate per day × days{perDiemRate > 0 ? ` (company default ${kes(perDiemRate)}/day — you can change it)` : ""}. <strong>Total: {kes(total)}</strong></Note>
+        <Note>Receipts aren't required to file — attach one or more per line here, or any time later from your Claims tab. Per diem = rate per day × days{perDiemRate > 0 ? ` (company default ${kes(perDiemRate)}/day — you can change it)` : ""}. <strong>Total: {kes(total)}</strong></Note>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeClaim}>Cancel</button>
@@ -329,7 +328,7 @@ function AdvanceRequestModal() {
   const { advanceOpen, advanceEdit, closeAdvance, submitAdvance, updateAdvance, projectDetails, perDiemRate, toast } = useApp();
   const [purpose, setPurpose] = useState("");
   const [project, setProject] = useState("");
-  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
   const [perDiemDays, setPerDiemDays] = useState("");
   const [perDiemRateInput, setPerDiemRateInput] = useState("");
   const projects = Object.keys(projectDetails);
@@ -340,20 +339,20 @@ function AdvanceRequestModal() {
     setProject(advanceEdit?.project ?? "");
     if (advanceEdit) {
       const rec = advanceEdit.plannedLines.filter((l) => !l.isPerDiem)
-        .map((l) => ({ category: l.category, detail: l.detail ?? "", amount: String(l.amount), receiptPath: l.receiptPath }));
-      setLines(rec.length ? rec : [{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+        .map((l) => ({ category: l.category, detail: l.detail ?? "", amount: String(l.amount), receiptPaths: l.receiptPaths }));
+      setLines(rec.length ? rec : [{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
       const pd = advanceEdit.plannedLines.find((l) => l.isPerDiem);
       setPerDiemDays(pd?.perDiemDays ? String(pd.perDiemDays) : "");
       setPerDiemRateInput(pd?.perDiemRate ? String(pd.perDiemRate) : "");
     } else {
-      setLines([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+      setLines([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
       setPerDiemDays("");
       setPerDiemRateInput("");
     }
   }, [advanceOpen, advanceEdit, perDiemRate]);
 
   const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
-  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPaths: [] }]);
   const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
 
   const days = Number(perDiemDays) || 0;
@@ -423,27 +422,29 @@ function AdvanceRequestModal() {
 // Reconcile an issued advance — enter what was actually spent (receipted lines + per-diem).
 // The system computes spent-vs-advanced; only the spent amount posts to the project.
 function AdvanceReconcileModal() {
-  const { reconcileTarget, closeReconcile, reconcileAdvance, perDiemRate, uploadFile, uploadedFileUrl, toast } = useApp();
+  const { reconcileTarget, closeReconcile, reconcileAdvance, perDiemRate, uploadFiles, toast } = useApp();
   const open = !!reconcileTarget;
-  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
   const [perDiemDays, setPerDiemDays] = useState("");
   const [perDiemRateInput, setPerDiemRateInput] = useState("");
 
   useEffect(() => {
     if (!open) return;
-    setLines([{ category: "transport", detail: "", amount: "", receiptPath: null }]);
+    setLines([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
     setPerDiemDays("");
     setPerDiemRateInput("");
   }, [open, perDiemRate]);
 
   const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
-  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPath: null }]);
+  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPaths: [] }]);
   const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
-  async function pickReceipt(i: number, file: File) {
+  // upload several receipts for a line at once and append them
+  async function pickReceipts(i: number, files: File[]) {
     setLine(i, { uploading: true });
-    const path = await uploadFile("advances", file);
-    setLine(i, { receiptPath: path ?? null, uploading: false });
+    const paths = await uploadFiles("advances", files);
+    setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, receiptPaths: [...l.receiptPaths, ...paths], uploading: false } : l));
   }
+  const dropReceipt = (i: number, path: string) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, receiptPaths: l.receiptPaths.filter((p) => p !== path) } : l));
 
   const days = Number(perDiemDays) || 0;
   const pdRate = Number(perDiemRateInput) || 0;
@@ -453,12 +454,12 @@ function AdvanceReconcileModal() {
   const balance = advAmt - spent;
 
   function save() {
-    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPath);
+    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPaths.length);
     for (const l of filled) if (!(Number(l.amount) > 0)) { toast("Each line needs an amount", "Enter the amount (KES) for every spent line"); return; }
     if (!filled.length && days <= 0) { toast("Add at least one line", "Add what you spent, or per-diem days"); return; }
     if (days > 0 && !(pdRate > 0)) { toast("Enter a per-diem rate", "Type the amount paid per day (KES)"); return; }
     const payload: ClaimLineInput[] = filled.map((l) => ({
-      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPath: l.receiptPath,
+      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPaths: l.receiptPaths,
     }));
     if (days > 0) payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: days, perDiemRate: pdRate });
     reconcileAdvance(reconcileTarget!.id, payload);
@@ -482,13 +483,9 @@ function AdvanceReconcileModal() {
                   </select>
                   <input className="field" placeholder="Detail (optional)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
                   <input className="field" type="number" min="0" placeholder="Amount" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <label className="btn" style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
-                      {l.uploading ? "…" : l.receiptPath ? "✓ Receipt" : "Receipt"}
-                      <input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickReceipt(i, f); }} />
-                    </label>
-                    {l.receiptPath && <a href="#" onClick={(e) => { e.preventDefault(); window.open(uploadedFileUrl(l.receiptPath!), "_blank", "noopener"); }} style={{ fontSize: 11, color: "var(--flame)" }}>view</a>}
-                    <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+                  <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <ReceiptList paths={l.receiptPaths} busy={l.uploading} onAdd={(fs) => pickReceipts(i, fs)} onRemove={(p) => dropReceipt(i, p)} />
                   </div>
                 </div>
               ))}
@@ -652,15 +649,8 @@ export default function StaffPortalView() {
     await addStaffDocument(f, f.name, docCat);
     setBusy(false);
   }
-  // attach an invoice/receipt to one of my approved petty-cash requests
-  const invoiceRef = useRef<HTMLInputElement>(null);
-  const [invoiceTarget, setInvoiceTarget] = useState<string | null>(null);
-  const pickInvoice = (ref: string) => { setInvoiceTarget(ref); invoiceRef.current?.click(); };
-  function onInvoicePick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; e.target.value = "";
-    if (f && invoiceTarget) attachPettyInvoice(invoiceTarget, f);
-    setInvoiceTarget(null);
-  }
+  // receipts on an already-filed claim / advance (opens the line-by-line receipts modal)
+  const [receiptsFor, setReceiptsFor] = useState<{ kind: "claim" | "advance"; id: string } | null>(null);
 
   const balances = hrMe?.leave ?? [];
   const apps = hrMe?.applications ?? [];
@@ -918,15 +908,9 @@ export default function StaffPortalView() {
                             <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deletePettyRequest(r.id)}>Withdraw</button>
                           </span>
                         ) : r.state === "approved" ? (
-                          <span style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                            {r.invoicePath ? (
-                              <>
-                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => window.open(uploadedFileUrl(r.invoicePath!), "_blank", "noopener")}>View invoice</button>
-                                <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => removePettyInvoice(r.id, r.invoicePath!)}>Delete invoice</button>
-                              </>
-                            ) : (
-                              <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => pickInvoice(r.id)}>Attach invoice</button>
-                            )}
+                          <span style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <ReceiptList paths={r.invoicePaths} addLabel={r.invoicePaths.length ? "Attach more" : "Attach invoices"}
+                              onAdd={(fs) => attachPettyInvoice(r.id, fs)} onRemove={(p) => removePettyInvoice(r.id, p)} />
                           </span>
                         ) : (
                           <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "rejected" && r.note ? r.note : "locked"}</span>
@@ -939,9 +923,8 @@ export default function StaffPortalView() {
             ) : (
               <Note noBorder>No petty-cash requests yet — use “Request petty cash”. Give the item, amount, the date you need it and a reason; it routes to Finance / HR for approval.</Note>
             )}
-            <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once <strong>Approved</strong>, attach the invoice/receipt (any file or image) — a Sub Admin can also attach it in Finance{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
+            <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once <strong>Approved</strong>, attach the invoice/receipts (one or more files or images) — a Sub Admin can also attach it in Finance{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
           </div>
-          <input ref={invoiceRef} type="file" style={{ display: "none" }} onChange={onInvoicePick} />
         </div>
       )}
 
@@ -954,7 +937,7 @@ export default function StaffPortalView() {
                 <thead><tr><th>Purpose</th><th>Project</th><th>Amount</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {myClaims.map((r) => {
-                    const needsReceipt = r.state === "pending" && r.lines.some((l) => !l.isPerDiem && !l.receiptPath);
+                    const needsReceipt = r.state === "pending" && r.lines.some((l) => !l.isPerDiem && !l.receiptPaths.length);
                     return (
                       <tr key={r.id}>
                         <td>{r.purpose}{r.advance ? <small style={{ display: "block", color: "var(--flame)", fontSize: 11 }}>→ advance {r.advance}</small> : null}</td>
@@ -969,11 +952,15 @@ export default function StaffPortalView() {
                         <td>
                           {(r.state === "pending" || r.state === "rejected") ? (
                             <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                              <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReceiptsFor({ kind: "claim", id: r.id })}>Receipts</button>
                               <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openClaimEdit(r)}>Edit</button>
                               <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => deleteClaim(r.id)}>Withdraw</button>
                             </span>
                           ) : (
-                            <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "paid" ? (r.paymentRef ? `Paid · ${r.paymentRef}` : "Reimbursed") : "locked"}</span>
+                            <span style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+                              {r.state !== "cancelled" && <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReceiptsFor({ kind: "claim", id: r.id })}>Receipts</button>}
+                              <span className="meta">{r.state === "paid" ? (r.paymentRef ? `Paid · ${r.paymentRef}` : "Reimbursed") : "locked"}</span>
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -982,9 +969,9 @@ export default function StaffPortalView() {
                 </tbody>
               </table>
             ) : (
-              <Note noBorder>No expense claims yet — use “File expense claim”. Add a line per expense with its receipt, plus per-diem days; it routes to Finance / HR for approval, then reimbursement. Every line is coded to the project you choose.</Note>
+              <Note noBorder>No expense claims yet — use “File expense claim”. Add a line per expense with its receipts, plus per-diem days; it routes to Finance / HR for approval, then reimbursement. Every line is coded to the project you choose.</Note>
             )}
-            <Note>Edit or withdraw a claim while it is <strong>Awaiting approval</strong>, or after a <strong>Rejection</strong> — editing a rejected claim re-sends it for approval. Every expense line needs a receipt attached before it can be approved{pendingClaims.length ? ` · ${pendingClaims.length} pending now` : ""}.</Note>
+            <Note>Edit or withdraw a claim while it is <strong>Awaiting approval</strong>, or after a <strong>Rejection</strong> — editing a rejected claim re-sends it for approval. Attach one or more receipts per line any time with <strong>Receipts</strong>{pendingClaims.length ? ` · ${pendingClaims.length} pending now` : ""}.</Note>
           </div>
         </div>
       )}
@@ -1017,8 +1004,13 @@ export default function StaffPortalView() {
                           <span style={{ display: "flex", justifyContent: "flex-end" }}>
                             <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openReconcile(r)}>Reconcile</button>
                           </span>
+                        ) : (r.state === "reconciled" || r.state === "settled") ? (
+                          <span style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setReceiptsFor({ kind: "advance", id: r.id })}>Receipts</button>
+                            <span className="meta">{r.state === "settled" ? "Closed" : "With Finance"}</span>
+                          </span>
                         ) : (
-                          <span className="meta" style={{ display: "block", textAlign: "right" }}>{r.state === "settled" ? "Closed" : r.state === "reconciled" ? "With Finance" : "—"}</span>
+                          <span className="meta" style={{ display: "block", textAlign: "right" }}>—</span>
                         )}
                       </td>
                     </tr>
@@ -1256,6 +1248,7 @@ export default function StaffPortalView() {
       <ExpenseClaimModal />
       <AdvanceRequestModal />
       <AdvanceReconcileModal />
+      <LineReceiptsModal kind={receiptsFor?.kind ?? "claim"} id={receiptsFor?.id ?? null} onClose={() => setReceiptsFor(null)} />
       <WeeklyReportModal />
       <FeedbackModal />
     </>

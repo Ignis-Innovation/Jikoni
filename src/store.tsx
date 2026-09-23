@@ -72,14 +72,14 @@ export interface PettyRequest {
   requester: string; requesterEmail: string; approverRole: string | null;
   superApprovedBy: string | null; hrApprovedBy: string | null;
   decidedBy: string | null; decidedAt: string | null; note: string | null; createdAt: string;
-  invoicePath: string | null;
+  invoicePaths: string[];          // attached invoices/receipts (several allowed)
 }
 
 // Expense claim (reimbursement) raised from the Staff Portal, decided in Finance → Claims.
 // A claim carries LINES: receipted expenses and one computed per-diem line (days × rate).
 export interface ClaimLine {
   id?: string; category: string; detail: string | null; amount: number;
-  receiptPath: string | null; isPerDiem: boolean; perDiemDays: number | null; perDiemRate: number | null;
+  receiptPaths: string[]; isPerDiem: boolean; perDiemDays: number | null; perDiemRate: number | null;
 }
 export interface ExpenseClaim {
   id: string; purpose: string; project: string | null; total: number;
@@ -93,7 +93,7 @@ export interface ExpenseClaim {
 // What the Staff Portal modal sends up. Per-diem amounts are computed server-side.
 export interface ClaimLineInput {
   category: string; detail?: string; amount?: number;
-  isPerDiem?: boolean; perDiemDays?: number; perDiemRate?: number; receiptPath?: string | null;
+  isPerDiem?: boolean; perDiemDays?: number; perDiemRate?: number; receiptPaths?: string[];
 }
 export interface ClaimInput { purpose: string; project?: string; lines: ClaimLineInput[]; advanceCode?: string }
 
@@ -442,6 +442,7 @@ interface AppApi {
   deleteStaffDocument: (path: string, name: string) => void;
   staffDocUrl: (path: string) => Promise<string | null>;
   uploadFile: (prefix: string, file: File) => Promise<string | null>;
+  uploadFiles: (prefix: string, files: File[]) => Promise<string[]>;
   uploadedFileUrl: (path: string) => string;
   // Petty-cash requests (Staff Portal ↔ Finance Petty Cash)
   pettyRequests: PettyRequest[];
@@ -455,7 +456,7 @@ interface AppApi {
   updatePettyRequest: (ref: string, v: { item: string; amount: number; needBy: string; reason: string; project?: string }) => void;
   deletePettyRequest: (ref: string) => void;
   decidePettyRequest: (ref: string, approve: boolean, note?: string) => void;
-  attachPettyInvoice: (ref: string, file: File) => void;
+  attachPettyInvoice: (ref: string, files: File[]) => void;
   removePettyInvoice: (ref: string, path: string) => void;
 
   // Expense claims (Staff Portal ↔ Finance Claims)
@@ -472,7 +473,8 @@ interface AppApi {
   deleteClaim: (ref: string) => void;
   decideClaim: (ref: string, approve: boolean, note?: string) => void;
   markClaimPaid: (ref: string, paymentRef?: string) => void;
-  attachClaimReceipt: (lineId: string, file: File) => void;
+  attachClaimReceipts: (lineId: string, files: File[]) => void;
+  removeClaimReceipt: (lineId: string, path: string) => void;
 
   // Travel advances (Staff Portal ↔ Finance Advances)
   advances: TravelAdvance[];
@@ -491,6 +493,8 @@ interface AppApi {
   decideAdvance: (ref: string, approve: boolean, note?: string) => void;
   issueAdvance: (ref: string, issueRef?: string) => void;
   reconcileAdvance: (ref: string, lines: ClaimLineInput[]) => void;
+  attachAdvanceReceipts: (lineId: string, files: File[]) => void;
+  removeAdvanceReceipt: (lineId: string, path: string) => void;
   settleAdvance: (ref: string, note?: string) => void;
 
   // Recurring bills (HR ↔ Super Admin to pay)
@@ -906,7 +910,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Petty Cash tab shows the queue. RLS returns all rows for authenticated.
     const { data: pcr } = await supabase
       .from("petty_cash_requests")
-      .select("ref, item, amount, need_by, reason, state, project_code, approver_role, decided_at, decision_note, created_at, invoice_path, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
+      .select("ref, item, amount, need_by, reason, state, project_code, approver_role, decided_at, decision_note, created_at, invoice_paths, requester:app_users!petty_cash_requests_requester_id_fkey(name, email), decider:app_users!petty_cash_requests_decided_by_fkey(name), superApprover:app_users!petty_cash_requests_super_approved_by_fkey(name), hrApprover:app_users!petty_cash_requests_hr_approved_by_fkey(name)")
       .order("created_at", { ascending: false })
       .limit(200);
     setPettyRequests(((pcr ?? []) as any[]).map((r) => {
@@ -920,14 +924,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         requester: rq?.name ?? "—", requesterEmail: rq?.email ?? "", approverRole: r.approver_role ?? null,
         superApprovedBy: su?.name ?? null, hrApprovedBy: hr?.name ?? null, decidedBy: dc?.name ?? null,
         decidedAt: r.decided_at, note: r.decision_note, createdAt: r.created_at,
-        invoicePath: r.invoice_path ?? null,
+        invoicePaths: (r.invoice_paths ?? []) as string[],
       } as PettyRequest;
     }));
     // Expense claims — Staff Portal shows the caller's own, Finance → Claims shows the queue.
     // Lines embed from the child table (RLS returns all rows for authenticated).
     const { data: cl } = await supabase
       .from("expense_claims")
-      .select("ref, purpose, project_code, advance_code, total_amount, state, approver_role, decided_at, decision_note, paid_at, payment_ref, created_at, requester:app_users!expense_claims_requester_id_fkey(name, email), decider:app_users!expense_claims_decided_by_fkey(name), payer:app_users!expense_claims_paid_by_fkey(name), lines:expense_claim_lines(id, category, detail, amount, receipt_path, is_per_diem, per_diem_days, per_diem_rate_used, created_at)")
+      .select("ref, purpose, project_code, advance_code, total_amount, state, approver_role, decided_at, decision_note, paid_at, payment_ref, created_at, requester:app_users!expense_claims_requester_id_fkey(name, email), decider:app_users!expense_claims_decided_by_fkey(name), payer:app_users!expense_claims_paid_by_fkey(name), lines:expense_claim_lines(id, category, detail, amount, receipt_paths, is_per_diem, per_diem_days, per_diem_rate_used, created_at)")
       .order("created_at", { ascending: false })
       .limit(200);
     setClaims(((cl ?? []) as any[]).map((r) => {
@@ -938,7 +942,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
         .map((l) => ({
           id: l.id, category: l.category, detail: l.detail, amount: Number(l.amount),
-          receiptPath: l.receipt_path ?? null, isPerDiem: !!l.is_per_diem,
+          receiptPaths: (l.receipt_paths ?? []) as string[], isPerDiem: !!l.is_per_diem,
           perDiemDays: l.per_diem_days != null ? Number(l.per_diem_days) : null,
           perDiemRate: l.per_diem_rate_used != null ? Number(l.per_diem_rate_used) : null,
         }) as ClaimLine);
@@ -955,7 +959,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Travel advances — Staff Portal shows the holder's own, Finance → Advances the queue.
     const { data: adv } = await supabase
       .from("travel_advances")
-      .select("ref, purpose, project_code, amount, state, approver_role, decided_at, decision_note, issued_at, issue_ref, spent_amount, balance, reconciled_at, settled_at, settle_note, created_at, holder:app_users!travel_advances_holder_id_fkey(name, email), decider:app_users!travel_advances_decided_by_fkey(name), issuer:app_users!travel_advances_issued_by_fkey(name), settler:app_users!travel_advances_settled_by_fkey(name), lines:travel_advance_lines(id, category, detail, amount, receipt_path, is_per_diem, per_diem_days, per_diem_rate_used, is_estimate, created_at)")
+      .select("ref, purpose, project_code, amount, state, approver_role, decided_at, decision_note, issued_at, issue_ref, spent_amount, balance, reconciled_at, settled_at, settle_note, created_at, holder:app_users!travel_advances_holder_id_fkey(name, email), decider:app_users!travel_advances_decided_by_fkey(name), issuer:app_users!travel_advances_issued_by_fkey(name), settler:app_users!travel_advances_settled_by_fkey(name), lines:travel_advance_lines(id, category, detail, amount, receipt_paths, is_per_diem, per_diem_days, per_diem_rate_used, is_estimate, created_at)")
       .order("created_at", { ascending: false })
       .limit(200);
     setAdvances(((adv ?? []) as any[]).map((r) => {
@@ -965,7 +969,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const sb = Array.isArray(r.settler) ? r.settler[0] : r.settler;
       const toLine = (l: any) => ({
         id: l.id, category: l.category, detail: l.detail, amount: Number(l.amount),
-        receiptPath: l.receipt_path ?? null, isPerDiem: !!l.is_per_diem,
+        receiptPaths: (l.receipt_paths ?? []) as string[], isPerDiem: !!l.is_per_diem,
         perDiemDays: l.per_diem_days != null ? Number(l.per_diem_days) : null,
         perDiemRate: l.per_diem_rate_used != null ? Number(l.per_diem_rate_used) : null,
       }) as ClaimLine;
@@ -1513,6 +1517,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (up.error) { toast("Upload failed", up.error.message); return null; }
     return up.data.path;
   }
+  // Upload several files at once; returns the paths that made it (failures are toasted).
+  async function uploadFiles(prefix: string, files: File[]): Promise<string[]> {
+    const paths = await Promise.all(files.map((f) => uploadFile(prefix, f)));
+    return paths.filter((p): p is string => !!p);
+  }
   // Public URL for a file in the shared 'uploads' bucket (petty-cash invoices, weekly-report attachments).
   function uploadedFileUrl(path: string): string {
     return supabase.storage.from("uploads").getPublicUrl(path).data.publicUrl;
@@ -1996,19 +2005,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} withdrawn`, "Removed from the approval queue");
   }
-  // Attach an invoice/receipt to an approved petty-cash request (requester or approver).
-  async function attachPettyInvoice(ref: string, file: File) {
-    const path = await uploadFile("petty-cash", file);
-    if (!path) return;
-    const { error } = await supabase.rpc("attach_petty_cash_invoice", { p_ref: ref, p_path: path });
-    if (error) { toast("Couldn't attach invoice", error.message); return; }
+  // Attach one or more invoices/receipts to an approved petty-cash request (requester or approver).
+  async function attachPettyInvoice(ref: string, files: File[]) {
+    const paths = await uploadFiles("petty-cash", files);
+    if (!paths.length) return;
+    for (const path of paths) {
+      const { error } = await supabase.rpc("attach_petty_cash_invoice", { p_ref: ref, p_path: path });
+      if (error) { toast("Couldn't attach invoice", niceError(error.message)); break; }
+    }
     loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
-    toast(`${ref} — invoice attached`, `${file.name} is now on the request`);
+    toast(`${ref} — ${paths.length > 1 ? `${paths.length} files` : "invoice"} attached`, paths.length > 1 ? "They're all on the request" : "It's now on the request");
   }
-  // Remove the attached invoice (requester or approver); best-effort drop of the object too.
+  // Remove ONE attached invoice (requester or approver); best-effort drop of the object too.
   async function removePettyInvoice(ref: string, path: string) {
-    const { error } = await supabase.rpc("remove_petty_cash_invoice", { p_ref: ref });
-    if (error) { toast("Couldn't remove invoice", error.message); return; }
+    const { error } = await supabase.rpc("remove_petty_cash_invoice", { p_ref: ref, p_path: path });
+    if (error) { toast("Couldn't remove invoice", niceError(error.message)); return; }
     // PERF: object cleanup + reload are independent — run them concurrently.
     await Promise.all([supabase.storage.from("uploads").remove([path]), loadFromDb()]);
     toast(`${ref} — invoice removed`, "The attachment was deleted");
@@ -2073,14 +2084,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} withdrawn`, "Removed from the approval queue");
   }
-  // Attach a receipt to a specific claim line (requester, while pending/rejected).
-  async function attachClaimReceipt(lineId: string, file: File) {
-    const path = await uploadFile("claims", file);
-    if (!path) return;
-    const { error } = await supabase.rpc("attach_claim_receipt", { p_line_id: lineId, p_path: path });
+  // Attach one or more receipts to a claim line (claimant or HR / Super Admin, any time).
+  async function attachClaimReceipts(lineId: string, files: File[]) {
+    const paths = await uploadFiles("claims", files);
+    if (!paths.length) return;
+    const { error } = await supabase.rpc("add_claim_line_receipts", { p_line_id: lineId, p_paths: paths });
     if (error) { toast("Couldn't attach receipt", niceError(error.message)); return; }
     loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
-    toast("Receipt attached", `${file.name} is now on the line`);
+    toast(paths.length > 1 ? `${paths.length} receipts attached` : "Receipt attached", "They're now on the claim line");
+  }
+  async function removeClaimReceipt(lineId: string, path: string) {
+    const { error } = await supabase.rpc("remove_claim_line_receipt", { p_line_id: lineId, p_path: path });
+    if (error) { toast("Couldn't remove receipt", niceError(error.message)); return; }
+    await Promise.all([supabase.storage.from("uploads").remove([path]), loadFromDb()]);
+    toast("Receipt removed", "The file was deleted from the claim line");
   }
   async function decideClaim(ref: string, approve: boolean, note?: string) {
     const { data, error } = await supabase.rpc("decide_expense_claim", { p_ref: ref, p_approve: approve, p_note: note || null });
@@ -2179,6 +2196,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
     toast(`${ref} issued`, "The holder is emailed — it's now an open advance to reconcile");
+  }
+  // Attach one or more receipts to an advance line (holder or HR / Super Admin).
+  async function attachAdvanceReceipts(lineId: string, files: File[]) {
+    const paths = await uploadFiles("advances", files);
+    if (!paths.length) return;
+    const { error } = await supabase.rpc("add_advance_line_receipts", { p_line_id: lineId, p_paths: paths });
+    if (error) { toast("Couldn't attach receipt", niceError(error.message)); return; }
+    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
+    toast(paths.length > 1 ? `${paths.length} receipts attached` : "Receipt attached", "They're now on the advance line");
+  }
+  async function removeAdvanceReceipt(lineId: string, path: string) {
+    const { error } = await supabase.rpc("remove_advance_line_receipt", { p_line_id: lineId, p_path: path });
+    if (error) { toast("Couldn't remove receipt", niceError(error.message)); return; }
+    await Promise.all([supabase.storage.from("uploads").remove([path]), loadFromDb()]);
+    toast("Receipt removed", "The file was deleted from the advance line");
   }
   async function reconcileAdvance(ref: string, lines: ClaimLineInput[]) {
     const { data, error } = await supabase.rpc("reconcile_travel_advance", { p_ref: ref, p_lines: lines });
@@ -2963,14 +2995,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openPettyEdit: (r) => { setPettyEdit(r); setPettyOpen(true); },
     closePetty: () => { setPettyOpen(false); setPettyEdit(null); },
     submitPettyRequest, updatePettyRequest, deletePettyRequest, decidePettyRequest,
-    attachPettyInvoice, removePettyInvoice, uploadFile, uploadedFileUrl,
+    attachPettyInvoice, removePettyInvoice, uploadFile, uploadFiles, uploadedFileUrl,
     claims, perDiemRate: Number(appConfig["per_diem_daily_rate"] ?? 0),
     claimOpen, claimEdit,
     canDecideClaims: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
     openClaim: () => { setClaimEdit(null); setClaimOpen(true); },
     openClaimEdit: (c) => { setClaimEdit(c); setClaimOpen(true); },
     closeClaim: () => { setClaimOpen(false); setClaimEdit(null); },
-    submitClaim, updateClaim, deleteClaim, decideClaim, markClaimPaid, attachClaimReceipt,
+    submitClaim, updateClaim, deleteClaim, decideClaim, markClaimPaid, attachClaimReceipts, removeClaimReceipt,
     advances, advanceOpen, advanceEdit, reconcileTarget,
     canDecideAdvances: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3 || (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
     openAdvance: () => { setAdvanceEdit(null); setAdvanceOpen(true); },
@@ -2978,7 +3010,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     closeAdvance: () => { setAdvanceOpen(false); setAdvanceEdit(null); },
     openReconcile: (a) => { setReconcileTarget(a); },
     closeReconcile: () => { setReconcileTarget(null); },
-    submitAdvance, updateAdvance, deleteAdvance, decideAdvance, issueAdvance, reconcileAdvance, settleAdvance,
+    submitAdvance, updateAdvance, deleteAdvance, decideAdvance, issueAdvance, reconcileAdvance, settleAdvance, attachAdvanceReceipts, removeAdvanceReceipt,
     recurringBills, billOpen, billEdit,
     canManageBills: (effectivePerms[me?.email ?? ""]?.hr ?? 0) >= 2,
     canApproveBills: (effectivePerms[me?.email ?? ""]?.users ?? 0) >= 3,
