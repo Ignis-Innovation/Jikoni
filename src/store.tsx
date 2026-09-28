@@ -23,7 +23,7 @@ export interface Toast { id: number; title: string; sub?: string }
 export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "draft" | "await" | "md" | "approved" | "rejected" | "po"; qty?: number; unit?: string; unitPrice?: number; project?: string | null; justification?: string | null; raisedBy?: string; date?: string }
 export interface NewPO { id: string; vendor: string; amt: number; delivery: string }
 // Sales invoice (Receivables) — the standard Ignis invoice (mig 0085). `id` is the
-// IGN-YYYY-NNN number once issued (DRAFT-xxxx before); `uuid` is the row key for RPCs.
+// IGN-INV-YYYY-NNN number once issued (DRAFT-xxxx before); `uuid` is the row key for RPCs.
 export type InvoiceStatus = "draft" | "issued" | "partially_paid" | "paid" | "overdue" | "cancelled";
 export interface InvoiceLine { title: string; description: string; qty: number; unitPrice: number; amount: number }
 export interface ArReceipt { amount: number; amountKes: number; date: string; method: string; reference: string | null }
@@ -32,16 +32,17 @@ export interface FromDetails { company?: string; signatory?: string; address?: s
 export interface SalesInvoice {
   uuid: string; id: string; state: InvoiceStatus; status: InvoiceStatus;   // status = state with overdue derived
   customer: string; billToAddress: string | null; billToContact: string | null; billToEmail: string | null; crmPartnerId: string | null;
-  currency: "KES" | "USD"; fxRate: number; invoiceDate: string; dueDate: string | null; terms: number;
-  vatApplicable: boolean; vatRate: number; subtotal: number; vat: number; total: number; totalKes: number | null;
+  currency: "KES" | "USD"; fxRate: number; invoiceDate: string; dueDate: string | null; terms: number | null;   // null = no due date
+  vatApplicable: boolean; vatRate: number; vatInclusive: boolean; subtotal: number; vat: number; total: number; totalKes: number | null;
   paid: number; balance: number; poNumber: string | null; engagementRef: string | null; notes: string | null;
   includePaymentDetails: boolean; paymentDetails: BankDetails | null; fromDetails: FromDetails | null;
+  includeTerms: boolean; termsConditions: string | null;   // T&C text snapshotted at issue
   lines: InvoiceLine[]; receipts: ArReceipt[]; createdAt: string;
 }
 export interface InvoiceInput {
   customer: string; billToAddress?: string; billToContact?: string; billToEmail?: string; crmPartnerId?: string | null;
-  currency: "KES" | "USD"; fxRate?: number; terms: number; vatApplicable: boolean; vatRate?: number;
-  poNumber?: string; engagementRef?: string; notes?: string; includePaymentDetails: boolean;
+  currency: "KES" | "USD"; fxRate?: number; terms: number | null; vatApplicable: boolean; vatRate?: number; vatInclusive?: boolean;
+  poNumber?: string; engagementRef?: string; notes?: string; includePaymentDetails: boolean; includeTerms: boolean;
   lines: { title: string; description: string; qty: number; unitPrice: number }[];
 }
 export interface ProformaLine { d: string; q: number; p: number }
@@ -383,7 +384,7 @@ interface AppApi {
   receiptFor: SalesInvoice | null;
   openReceipt: (inv: SalesInvoice) => void;
   closeReceipt: () => void;
-  recordReceipt: (invRef: string, amount: number, method: string, date: string, reference: string) => void;
+  recordReceipt: (invRef: string, amount: number, method: string, date: string, reference: string, fxRate?: number) => void;
 
   // Proforma invoices (the offer before the sale) — register on Receivables + a record drawer
   proformas: ProformaRow[];
@@ -579,6 +580,7 @@ interface AppApi {
   setAppraisalKpis: (id: string, kpis: string[]) => void;
   advanceAppraisal: (id: string) => void;
   refreshHr: () => Promise<void>;
+  reloadData: () => Promise<void>;   // re-run the bootstrap load (e.g. after a ledger action)
   addCertification: (v: { holder: string; name: string; issuer: string; expiry: string; staffNo: string; verified: boolean; holderUserId?: string | null }, file?: File | null) => void;
   verifyCertification: (id: string, ok: boolean) => void;
   submitFeedback: (v: { body: string; category: string; audience: string; anonymous: boolean }) => void;
@@ -673,7 +675,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // Turn a raw Postgres / PostgREST error into something a user can read. Our RPCs raise
 // friendly messages already; this only rewrites the low-level ones (missing function,
 // permission, network) so people never see "schema cache" style noise.
-function niceError(msg?: string | null): string {
+export function niceError(msg?: string | null): string {
   const m = (msg ?? "").trim();
   if (!m) return "Something went wrong — please try again.";
   if (/schema cache|Could not find the function|PGRST202/i.test(m)) return "This feature isn't live yet on the server — refresh the page and try again.";
@@ -986,7 +988,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Sales invoices (Receivables) — full header + lines + payments; overdue derived here.
     const { data: sis } = await supabase
       .from("sales_invoices")
-      .select("id, ref, state, customer, bill_to_address, bill_to_contact, bill_to_email, crm_partner_id, currency, fx_rate, invoice_date, due_date, payment_terms_days, vat_applicable, vat_rate, net, vat, total, total_kes, amount_paid, po_number, engagement_ref, notes, include_payment_details, payment_details, from_details, created_at, lines:sales_invoice_lines(position, title, description, qty, unit_price, amount), receipts:ar_receipts(amount, amount_kes, receipt_date, method, reference, created_at)")
+      .select("id, ref, state, customer, bill_to_address, bill_to_contact, bill_to_email, crm_partner_id, currency, fx_rate, invoice_date, due_date, payment_terms_days, vat_applicable, vat_rate, vat_inclusive, net, vat, total, total_kes, amount_paid, po_number, engagement_ref, notes, include_payment_details, payment_details, from_details, include_terms, terms_conditions, created_at, lines:sales_invoice_lines(position, title, description, qty, unit_price, amount), receipts:ar_receipts(amount, amount_kes, receipt_date, method, reference, created_at)")
       .order("created_at", { ascending: false })
       .limit(500);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });   // Nairobi calendar date
@@ -997,12 +999,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         uuid: r.id, id: r.ref, state: r.state, status: overdue ? "overdue" : r.state,
         customer: r.customer, billToAddress: r.bill_to_address, billToContact: r.bill_to_contact, billToEmail: r.bill_to_email,
         crmPartnerId: r.crm_partner_id, currency: r.currency, fxRate: Number(r.fx_rate),
-        invoiceDate: r.invoice_date, dueDate: r.due_date, terms: Number(r.payment_terms_days),
-        vatApplicable: !!r.vat_applicable, vatRate: Number(r.vat_rate),
+        invoiceDate: r.invoice_date, dueDate: r.due_date, terms: r.payment_terms_days == null ? null : Number(r.payment_terms_days),
+        vatApplicable: !!r.vat_applicable, vatRate: Number(r.vat_rate), vatInclusive: !!r.vat_inclusive,
         subtotal: Number(r.net), vat: Number(r.vat), total, totalKes: r.total_kes != null ? Number(r.total_kes) : null,
         paid, balance: Math.max(0, Math.round((total - paid) * 100) / 100),
         poNumber: r.po_number, engagementRef: r.engagement_ref, notes: r.notes,
         includePaymentDetails: !!r.include_payment_details, paymentDetails: r.payment_details ?? null, fromDetails: r.from_details ?? null,
+        includeTerms: !!r.include_terms, termsConditions: r.terms_conditions ?? null,
         lines: ((r.lines ?? []) as any[]).sort((a, b) => a.position - b.position).map((l) => ({
           title: l.title ?? "", description: l.description ?? "", qty: Number(l.qty), unitPrice: Number(l.unit_price), amount: Number(l.amount) })),
         receipts: ((r.receipts ?? []) as any[]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((x) => ({
@@ -1730,9 +1733,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /* ---------- sales invoices (mig 0085): drafts → issue (IGN number, KES journal, eTIMS) → payments ---------- */
   const toInvoiceJson = (v: InvoiceInput) => ({
     customer: v.customer, billToAddress: v.billToAddress ?? "", billToContact: v.billToContact ?? "", billToEmail: v.billToEmail ?? "",
-    crmPartnerId: v.crmPartnerId ?? "", currency: v.currency, fxRate: v.currency === "USD" ? v.fxRate : 1, terms: v.terms,
-    vatApplicable: v.vatApplicable, vatRate: v.vatApplicable ? v.vatRate : 0, poNumber: v.poNumber ?? "", engagementRef: v.engagementRef ?? "",
-    notes: v.notes ?? "", includePaymentDetails: v.includePaymentDetails, lines: v.lines,
+    crmPartnerId: v.crmPartnerId ?? "", currency: v.currency, fxRate: v.currency === "USD" ? v.fxRate : 1, terms: v.terms, noDueDate: v.terms == null,
+    vatApplicable: v.vatApplicable, vatRate: v.vatApplicable ? v.vatRate : 0, vatInclusive: v.vatApplicable && !!v.vatInclusive, poNumber: v.poNumber ?? "", engagementRef: v.engagementRef ?? "",
+    notes: v.notes ?? "", includePaymentDetails: v.includePaymentDetails, includeTerms: v.includeTerms, lines: v.lines,
   });
   async function saveInvoice(uuid: string | null, v: InvoiceInput, issue: boolean): Promise<boolean> {
     const { data, error } = await supabase.rpc("save_sales_invoice", { p_id: uuid, p_data: toInvoiceJson(v) });
@@ -1749,7 +1752,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     setInvOpen(false); setInvEdit(null);
     await loadFromDb().catch(() => {});
-    toast(issue ? `${j.id} issued to ${v.customer}` : "Draft saved", issue ? `${v.currency} ${Number(j.total).toLocaleString(undefined, { minimumFractionDigits: 2 })} · due ${j.dueDate}` : `${v.customer} · not numbered until issued`);
+    toast(issue ? `${j.id} issued to ${v.customer}` : "Draft saved", issue ? `${v.currency} ${Number(j.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}${j.dueDate ? ` · due ${j.dueDate}` : ""}` : `${v.customer} · not numbered until issued`);
     return true;
   }
   async function issueInvoice(uuid: string) {
@@ -1770,16 +1773,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadFromDb().catch(() => {});
     toast(`${(data as any).id} cancelled`, "Reversing journal posted");
   }
-  async function recordReceipt(invRef: string, amount: number, method: string, date: string, reference: string) {
+  async function recordReceipt(invRef: string, amount: number, method: string, date: string, reference: string, fxRate?: number) {
     const { data, error } = await supabase.rpc("record_ar_receipt", {
-      p_inv_ref: invRef, p_amount: amount, p_method: method, p_date: date, p_reference: reference || null,
+      p_inv_ref: invRef, p_amount: amount, p_method: method, p_date: date, p_reference: reference || null, p_fx_rate: fxRate ?? null,
     });
     if (error) { toast("Payment not recorded", niceError(error.message)); return; }
     setReceiptFor(null);
     await loadFromDb().catch(() => {});   // refresh before confirming so the balance shown is the new one
     const d = data as any;
     toast(d.state === "paid" ? `${invRef} paid in full` : `${invRef} part-paid`,
-      d.state === "paid" ? `Journal ${d.journal}` : `Balance ${Number(d.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })} outstanding`);
+      d.state === "paid" ? `Journal ${d.journal}${Number(d.fx) ? ` · FX ${Number(d.fx) > 0 ? "gain" : "loss"} KES ${Math.abs(Number(d.fx)).toLocaleString()}` : ""}` : `Balance ${Number(d.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })} outstanding`);
   }
 
   /* ---------- proforma invoices (the offer before the sale — no ledger impact until accepted) ---------- */
@@ -3119,7 +3122,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     hrData, hrModal, openHrModal: (m: HrModalMode) => setHrModal(m), closeHrModal: () => setHrModal(null),
     addEmployee, preparePayroll, approvePayroll, postPayroll,
     createRecruitmentReq, addCandidate, advanceCandidate, updatePosting, publishPosting, openCandidateCv, screenCandidateCv, createEnumerator, createFieldAssignment, setFieldAssignmentState,
-    updateStaffHrProfile, startAppraisalCycle, toggleAppraisalKpi, setAppraisalKpis, advanceAppraisal, refreshHr: loadHrModule,
+    updateStaffHrProfile, startAppraisalCycle, toggleAppraisalKpi, setAppraisalKpis, advanceAppraisal, refreshHr: loadHrModule, reloadData: async () => { await loadFromDb().catch(() => {}); },
     addCertification, verifyCertification, submitFeedback, setFeedbackState, startExit, signExitStep, signMyExitStep, cancelExit,
     meEmail: session?.user?.email ?? null, selfAssessKpi, submitSelfAssessment, submitMyCertification,
     crm,

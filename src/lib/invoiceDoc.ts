@@ -1,13 +1,14 @@
 // Maps a stored sales invoice (or the invoice form) onto the PDF builder's input.
 // Issued invoices use the bank/"from" details snapshotted at issue; drafts use the
-// live Settings → Invoicing values.
+// live Settings → Invoicing values (T&C too).
+export const termsText = (cfg: Record<string, any>): string => String(cfg.invoice_terms_conditions ?? "").trim();
 import type { SalesInvoice, BankDetails, FromDetails } from "../store";
 import { downloadInvoicePdf, previewInvoicePdf, type InvoicePdfData } from "./invoicePdf";
 
 export const bankFor = (cfg: Record<string, any>, currency: string): BankDetails | null =>
   (cfg[currency === "USD" ? "invoice_bank_usd" : "invoice_bank_kes"] as BankDetails) ?? null;
 export const fromDetails = (cfg: Record<string, any>): FromDetails =>
-  (cfg.invoice_from as FromDetails) ?? { company: "Ignis Innovation Ltd", address: "Nairobi, Kenya" };
+  (cfg.invoice_from as FromDetails) ?? { company: "Ignis Innovation", address: "Nairobi, Kenya", email: "info@ignis-innovation.com" };
 
 export function invoiceToPdf(inv: SalesInvoice, cfg: Record<string, any>): InvoicePdfData {
   const draft = inv.state === "draft";
@@ -15,11 +16,12 @@ export function invoiceToPdf(inv: SalesInvoice, cfg: Record<string, any>): Invoi
     number: inv.id, status: inv.status, invoiceDate: inv.invoiceDate, dueDate: inv.dueDate, terms: inv.terms,
     customer: inv.customer, billToAddress: inv.billToAddress, billToContact: inv.billToContact, billToEmail: inv.billToEmail,
     engagementRef: inv.engagementRef, poNumber: inv.poNumber, currency: inv.currency,
-    lines: inv.lines, subtotal: inv.subtotal, vatApplicable: inv.vatApplicable, vatRate: inv.vatRate, vat: inv.vat,
+    lines: inv.lines, subtotal: inv.subtotal, vatApplicable: inv.vatApplicable, vatRate: inv.vatRate, vatInclusive: inv.vatInclusive, vat: inv.vat,
     total: inv.total, paid: inv.paid, notes: inv.notes,
     paymentDetails: inv.includePaymentDetails ? (draft ? bankFor(cfg, inv.currency) : inv.paymentDetails) : null,
     paymentNote: inv.includePaymentDetails ? String(cfg.invoice_payment_note ?? "") : null,
     from: (draft ? null : inv.fromDetails) ?? fromDetails(cfg),
+    termsConditions: draft ? (inv.includeTerms ? termsText(cfg) || null : null) : inv.termsConditions,
   };
 }
 export const downloadInvoice = (inv: SalesInvoice, cfg: Record<string, any>) => downloadInvoicePdf(invoiceToPdf(inv, cfg));

@@ -1,6 +1,6 @@
 // E1 reimbursement-claim flow test (rolled back). Proves the spec: file → submit → cannot
 // approve own → approve (posts to project actuals) → reimburse (separate, no re-post); per-diem
-// computed days×rate. Also measures the deliberate deviations: no GL journal; posts on approval;
+// computed days×rate. GL (mig 0090): nothing on approval, one journal when reimbursed. Posts to actuals on approval;
 // a receipt-less line does NOT block approval. Prints CLAIM_TESTS_PASS.
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -62,8 +62,8 @@ try {
   ok(j.state === "approved", "approve → approved", j.state);
   await c.query("reset role");
   ok(await claimRows(ref) === 1 && Number(await claimAmt(ref)) === 3500, "E1-G3: approval posts the total to project actuals (3500)", "rows=" + await claimRows(ref) + " amt=" + await claimAmt(ref));
-  // E1-DEV2 (measured): no GL journal is written for the claim
-  ok(await journalRows(ref) === 0, "E1-DEV2: posts to actuals only — NO GL journal (design choice)", "journalRows=" + await journalRows(ref));
+  // GL: approval alone posts nothing to the ledger — the journal comes when it is reimbursed
+  ok(await journalRows(ref) === 0, "GL: approval alone posts no journal", "journalRows=" + await journalRows(ref));
 
   // E1-G4: reimburse is a separate Finance step and does not re-post
   const before = await claimRows(ref);
@@ -72,6 +72,7 @@ try {
   ok(j.state === "paid", "reimburse → paid (separate step)", j.state);
   await c.query("reset role");
   ok(await claimRows(ref) === before, "E1-G4: mark-paid does NOT re-post to the project", "rows=" + await claimRows(ref));
+  ok(await journalRows(ref) === 1, "GL: reimbursement posts exactly one journal (Dr expense / Cr bank)", "journalRows=" + await journalRows(ref));
 
   // E1-DEV5 (measured): a receipt-less expense line does NOT block approval (flagged only)
   await as(claimant);

@@ -14,9 +14,9 @@ const rpc = async (call) => (await c.query(`select ${call} as r`)).rows[0].r;
 
 try {
   await c.query("begin");
-  const [me] = await q(`select auth_id from app_users where email='wanjiku@ignis.africa'`);
+  const [me] = await q(`select auth_id from app_users where email='jwanjiku@ignis-innovation.com'`);
   await c.query(`select set_config('request.jwt.claims', $1, false)`,
-    [JSON.stringify({ email: "wanjiku@ignis.africa", sub: me.auth_id, role: "authenticated" })]);
+    [JSON.stringify({ email: "jwanjiku@ignis-innovation.com", sub: me.auth_id, role: "authenticated" })]);
 
   // 1) onboard + screen a vendor
   let r = await rpc(`public.create_vendor('Smoke Vendor Ltd', 'Fabrication', 'Kenya', 'A001234567X', 'Equity 001')`);
@@ -71,7 +71,7 @@ try {
   console.log("— payment:", r.id, "| journal:", r.journal);
   // back to wanjiku for the remaining steps
   await c.query(`select set_config('request.jwt.claims', $1, false)`,
-    [JSON.stringify({ email: "wanjiku@ignis.africa", sub: me.auth_id, role: "authenticated" })]);
+    [JSON.stringify({ email: "jwanjiku@ignis-innovation.com", sub: me.auth_id, role: "authenticated" })]);
 
   // verify end state
   const [pod] = await q(`select state from purchase_orders where ref='${po}'`);

@@ -1,6 +1,6 @@
 // Receivables invoicing test (mig 0085) — runs inside ONE transaction and rolls it
 // back, so nothing persists. Proves:
-//   * drafts carry no invoice number; issuing assigns IGN-YYYY-NNN, sequentially
+//   * drafts carry no invoice number; issuing assigns IGN-INV-YYYY-NNN, sequentially
 //   * VAT only when applicable, at the chosen rate; due date = invoice date + terms
 //   * USD invoices post the KES equivalent at the invoice rate; the TB balances
 //   * part-payments → partially_paid with the right balance; overpay rejected; final → paid
@@ -74,10 +74,10 @@ try {
   tmpl.lines[2].qty = 1;
   d = await save(d.uuid, tmpl);
 
-  // 2. issue → IGN-YYYY-NNN, KES journal
-  const before = (await q1("select n from public.ref_counters where kind=$1", [`IGN-${year}`]))?.n ?? 0;
+  // 2. issue → IGN-INV-YYYY-NNN, KES journal
+  const before = (await q1("select n from public.ref_counters where kind=$1", [`IGN-INV-${year}`]))?.n ?? 0;
   let i1 = await issue(d.uuid);
-  const expNo1 = `IGN-${year}-${String(before + 1).padStart(3, "0")}`;
+  const expNo1 = `IGN-INV-${year}-${String(before + 1).padStart(3, "0")}`;
   ok(i1.id === expNo1 && i1.state === "issued", "issue assigns the next IGN number", i1.id);
   ok(Number(i1.totalKes) === 3750 * 129.5, "USD total converted to KES at the invoice rate", i1.totalKes);
   await c.query("reset role");
@@ -99,12 +99,41 @@ try {
   let i2 = await issue(k.uuid);
   const noPo = await q1("select po_number from public.sales_invoices where id=$1", [k.uuid]);
   ok(noPo.po_number === null && i2.state === "issued", "PO number is optional — invoice without an LPO issues fine", JSON.stringify(noPo));
-  const expNo2 = `IGN-${year}-${String(before + 2).padStart(3, "0")}`;
+  const expNo2 = `IGN-INV-${year}-${String(before + 2).padStart(3, "0")}`;
   ok(i2.id === expNo2, "second invoice gets the next number (sequential)", i2.id);
   await c.query("reset role");
   je = await jeLines(i2.id, "sales_invoice");
   ok(je.find((l) => l.a === "2100")?.c === 8000, "VAT credited to 2100", JSON.stringify(je));
   await as(editor);
+
+  // 3b. no due date + Terms & Conditions snapshot
+  const nd = await save(null, { customer: "No Terms Client", currency: "KES", noDueDate: true, includeTerms: true,
+    lines: [{ title: "Cookstoves", qty: 1, unitPrice: 1000 }] });
+  ok(nd.terms === null && nd.dueDate === null, "no due date → terms and due date empty", `${nd.terms}/${nd.dueDate}`);
+  const ndi = await issue(nd.uuid);
+  const expNo3 = `IGN-INV-${year}-${String(before + 3).padStart(3, "0")}`;
+  ok(ndi.id === expNo3 && ndi.dueDate === null, "invoice without a due date issues with the next number", `${ndi.id} ${ndi.dueDate}`);
+  await c.query("reset role");
+  const tcRow = await q1("select terms_conditions, include_terms from public.sales_invoices where id=$1", [nd.uuid]);
+  ok(tcRow.include_terms === true && /Terms|VAT/.test(tcRow.terms_conditions || ""), "T&C text snapshotted when ticked", (tcRow.terms_conditions || "").slice(0, 40));
+  const tcOff = await q1("select terms_conditions from public.sales_invoices where id=$1", [k.uuid]);
+  ok(tcOff.terms_conditions === null, "no T&C on an invoice where it isn't ticked", tcOff.terms_conditions);
+  await as(editor);
+
+  // 3c. prices include VAT — VAT backed out of the price, total = the typed price
+  const vi = await save(null, { customer: "Cookstove Buyer", currency: "KES", vatApplicable: true, vatRate: 16, vatInclusive: true,
+    lines: [{ title: "Ignis cookstove", qty: 1, unitPrice: 6500 }] });
+  ok(vi.vatInclusive === true && Number(vi.total) === 6500 && Number(vi.vat) === 896.55 && Number(vi.subtotal) === 5603.45,
+    "VAT-inclusive: 6500 = 5603.45 + 896.55 VAT", `${vi.subtotal}/${vi.vat}/${vi.total}`);
+  const vii = await issue(vi.uuid);
+  await c.query("reset role");
+  je = await jeLines(vii.id, "sales_invoice");
+  ok(je.find((l) => l.a === "1100")?.d === 6500 && je.find((l) => l.a === "4000")?.c === 5603.45 && je.find((l) => l.a === "2100")?.c === 896.55,
+    "VAT-inclusive journal: Dr 1100 6500 / Cr 4000 5603.45 / Cr 2100 896.55", JSON.stringify(je));
+  await as(editor);
+  const vo = await save(null, { customer: "X", currency: "KES", vatApplicable: false, vatInclusive: true, lines: [{ title: "a", qty: 1, unitPrice: 100 }] });
+  ok(vo.vatInclusive === false && Number(vo.total) === 100, "'prices include VAT' is ignored when VAT doesn't apply", `${vo.vatInclusive} ${vo.total}`);
+  await q1("select public.delete_draft_invoice($1)", [vo.uuid]);
 
   // 4. payments on the USD invoice: part, overpay, final
   await expectThrow(() => pay(i1.id, 5000), "overpayment (more than the balance) rejected");
@@ -148,7 +177,7 @@ try {
   const pf = (await q1("select public.create_proforma('Proforma Client',null,null,null,null,null,null,$1::jsonb) as j",
     [JSON.stringify([{ d: "Cookstoves", q: 2, p: 5000 }])])).j;
   const acc = (await q1("select public.accept_proforma($1) as j", [pf.ref])).j;
-  ok(/^IGN-\d{4}-\d{3}$/.test(acc.invoice), "accept_proforma issues an IGN-numbered invoice", acc.invoice);
+  ok(/^IGN-INV-\d{4}-\d{3}$/.test(acc.invoice), "accept_proforma issues an IGN-numbered invoice", acc.invoice);
   const lg = await q1("select total, vat, state from public.sales_invoices where ref=$1", [acc.invoice]);
   ok(Number(lg.total) === 11600 && Number(lg.vat) === 1600 && lg.state === "issued", "legacy path keeps 16% VAT (10000 → 11600)", JSON.stringify(lg));
 

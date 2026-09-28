@@ -7,6 +7,8 @@ import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 import { budgetLines } from "../data";
 import { downloadInvoice, previewInvoice, INVOICE_STATUS, money2, curMoney, keToday } from "../lib/invoiceDoc";
+import { GeneralLedger, BankReconciliation, GlReports, glOpenSub } from "./GeneralLedger";
+import { supabase } from "../lib/supabase";
 
 const kes = (n: number) => "KES " + Math.round(n).toLocaleString();
 
@@ -349,7 +351,7 @@ export default function FinanceView() {
     claims, decideClaim, markClaimPaid, canDecideClaims, perDiemRate, setAppConfig,
     advances, decideAdvance, issueAdvance, settleAdvance, canDecideAdvances,
     recurringBills, decideBill, canApproveBills,
-    openInvoice, createCostCentre, me, perms, level } = useApp();
+    openInvoice, createCostCentre, me, perms, level, goTab } = useApp();
   const tab = tabs.finance;
   const [costOpen, setCostOpen] = useState(false);
   // Finance access: View (1) is read-only; Edit (2) can raise/capture; Full (3) can
@@ -446,11 +448,14 @@ export default function FinanceView() {
   const toPay = apInvoices.filter((i) => i.state === "approved");
   const invoiceablePOs = poRows.filter((p) => p.state !== "cancelled");
 
-  const genBtn = (label: string, title: string, sub: string) => (
-    <div className="recon"><span>{label}</span>
-      <button className="btn" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => toast(title, sub)}>Generate</button>
-    </div>
-  );
+  // current accounting period + its close state (Open → Reconciled → TB agreed → Closed → Reported)
+  const curPeriod = keToday().slice(0, 7);
+  const periodName = new Date(curPeriod + "-01T00:00:00Z").toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
+  const [periodState, setPeriodState] = useState("Open");
+  useEffect(() => {
+    supabase.from("gl_periods").select("state").eq("period", curPeriod).maybeSingle().then(({ data }) =>
+      setPeriodState(({ open: "Open", reconciled: "Reconciled", tb_agreed: "TB agreed", closed: "Closed", reported: "Reported" } as Record<string, string>)[data?.state ?? "open"] ?? "Open"));
+  }, [tab]);
 
   const pulse = [
     { k: "Revenue", tick: "t-green", v: kes(revenue), d: "posted to date", dc: "flat" as const },
@@ -471,7 +476,7 @@ export default function FinanceView() {
         <div className="actions">
           {tab === "f-ar" && canEdit && <button className="btn primary" onClick={() => openInvoice()}><PlusI />New invoice</button>}
           {tab === "f-budget" && canEdit && <button className="btn primary" onClick={() => setCostOpen(true)}><PlusI />New cost centre</button>}
-          <button className="btn" onClick={() => toast("Period open", "Postings land in the current period until it is closed")}>Current period · Open</button>
+          <button className="btn" onClick={() => { glOpenSub("periods"); goTab("finance", "f-gl"); }}>{periodName} · {periodState}</button>
         </div>
       </div>
       <Crumb view="finance" />
@@ -514,58 +519,7 @@ export default function FinanceView() {
         </div>
       )}
 
-      {tab === "f-gl" && (
-        <div className="fin-panel active">
-          <div className="grid g-2">
-            <div className="panel">
-              <div className="panel-h"><h3>Chart of accounts</h3><span className="meta">balances · KES</span></div>
-              {accounts.length === 0 ? <EmptyBody>No balances yet — post a journal to begin.</EmptyBody> : (
-                <table className="tbl">
-                  <thead><tr><th>Account</th><th>Type</th><th style={{ textAlign: "right" }}>Balance</th></tr></thead>
-                  <tbody>
-                    {accounts.map((a) => (
-                      <tr key={a.code}>
-                        <td>{a.name}</td>
-                        <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{a.kind}</td>
-                        <td className="mono" style={{ textAlign: "right" }}>{a.balance.toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <div className="panel">
-              <div className="panel-h"><h3>Recent journal entries</h3><span className="meta">double-entry · posted</span></div>
-              {journals.length === 0 ? <EmptyBody>No journal entries yet.</EmptyBody> : (
-                <div className="pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {journals.slice(0, 12).map((j) => (
-                    <div key={j.ref} style={{ borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
-                        <span style={{ color: "var(--ink-soft)" }}>{j.sourceType}</span>
-                      </div>
-                      <div style={{ fontSize: 12, color: "var(--ink-soft)", margin: "2px 0 4px" }}>{j.memo}</div>
-                      {j.lines.map((l, i) => (
-                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, fontFamily: "var(--mono)" }}>
-                          <span>{l.account}</span>
-                          <span>{l.debit ? "Dr " + l.debit.toLocaleString() : "Cr " + l.credit.toLocaleString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="panel" style={{ marginTop: 18 }}>
-            <div className="panel-h"><h3>Trial balance</h3><span className="meta">debits = credits</span></div>
-            <div className="pad">
-              <div className="recon"><span>Total debits</span><span className="mono">{kes(accounts.reduce((s, a) => s + a.debit, 0))}</span></div>
-              <div className="recon"><span>Total credits</span><span className="mono">{kes(accounts.reduce((s, a) => s + a.credit, 0))}</span></div>
-              <div className="recon"><span>In balance</span><span className={`pill ${Math.round(accounts.reduce((s, a) => s + a.debit - a.credit, 0)) === 0 ? "done" : "over"}`}>{Math.round(accounts.reduce((s, a) => s + a.debit - a.credit, 0)) === 0 ? "Balanced" : "Out"}</span></div>
-            </div>
-          </div>
-        </div>
-      )}
+      {tab === "f-gl" && <GeneralLedger />}
 
       {tab === "f-ap" && (
         <div className="fin-panel active">
@@ -628,17 +582,7 @@ export default function FinanceView() {
 
       {tab === "f-ar" && <Receivables />}
 
-      {tab === "f-bank" && (
-        <div className="fin-panel active">
-          <div className="panel">
-            <div className="panel-h"><h3>Bank &amp; cash</h3><span className="meta">ledger balances</span></div>
-            <div className="pad">
-              <div className="recon"><span>Cash / bank (1000)</span><span className="mono">{kes(cash)}</span></div>
-              <Note>Statement import, auto-match and the cash forecast are a later increment — the ledger cash balance is live now.</Note>
-            </div>
-          </div>
-        </div>
-      )}
+      {tab === "f-bank" && <BankReconciliation />}
 
       {tab === "f-petty" && (
         <div className="fin-panel active">
@@ -1016,30 +960,24 @@ export default function FinanceView() {
 
       {tab === "f-report" && (
         <div className="fin-panel active">
-          <div className="grid g-2">
+          <GlReports />
+          <div className="grid g-2" style={{ marginTop: 18 }}>
             <div className="panel">
-              <div className="panel-h"><h3>Standard reports</h3><span className="meta">one click · from live data</span></div>
-              {genBtn("Income statement (P&L)", "Generating P&L", "From live ledger")}
-              {genBtn("Balance sheet", "Generating balance sheet", "As at period end")}
-              {genBtn("Cash flow statement", "Generating cash flow", "Direct method")}
-              {genBtn("Trial balance", "Generating trial balance", "In balance")}
-              {genBtn("Management / board pack", "Generating board pack", "Narrative drafted via Claude API")}
+              <div className="panel-h"><h3>Tax &amp; statutory</h3><span className="meta">Kenya · from the ledger</span></div>
+              <div className="pad">
+                <div className="recon"><span>Output VAT payable (2100)</span><span className="mono">{kes(bal("2100"))}</span></div>
+                <div className="recon"><span>Withholding tax payable (2200)</span><span className="mono">{kes(bal("2200"))}</span></div>
+                <div className="recon"><span>PAYE · NSSF · SHIF · Housing Levy (2210–2240)</span><span className="mono">{kes(bal("2210") + bal("2220") + bal("2230") + bal("2240"))}</span></div>
+                <div className="recon"><span>eTIMS</span><span className="pill done">Filed on issue</span></div>
+                <Note noBorder>Each return reads its liability account in the ledger — see Reports → Statutory for any month-end.</Note>
+              </div>
             </div>
-            <div>
-              <div className="panel" style={{ marginBottom: 18 }}>
-                <div className="panel-h"><h3>Tax &amp; statutory</h3><span className="meta">Kenya</span></div>
-                <div className="pad">
-                  <div className="recon"><span>Output VAT (2100)</span><span className="mono">{kes(bal("2100"))}</span></div>
-                  <div className="recon"><span>eTIMS</span><span className="pill done">Filed on issue</span></div>
-                  <Note noBorder>PAYE, NSSF, SHIF, Housing Levy and withholding returns come from payroll + AP data — a later increment builds the return forms.</Note>
-                </div>
-              </div>
-              <div className="panel">
-                <div className="panel-h"><h3>Multi-currency &amp; audit</h3><span className="meta">consolidation-ready</span></div>
-                <div className="recon"><span>Reporting currencies</span><span className="mono">KES · USD · UGX</span></div>
-                <div className="recon"><span>Segregation of duties</span><span className="pill done">Enforced</span></div>
-                <div className="recon"><span>IFRS for SMEs</span><span className="pill done">Applied</span></div>
-              </div>
+            <div className="panel">
+              <div className="panel-h"><h3>Controls</h3><span className="meta">built into the ledger</span></div>
+              <div className="recon"><span>Balanced entries · no duplicates · immutable</span><span className="pill done">Enforced</span></div>
+              <div className="recon"><span>Manual journals (IGN-FIN-001 bands)</span><span className="pill done">Enforced</span></div>
+              <div className="recon"><span>Period lock after close</span><span className="pill done">Enforced</span></div>
+              <div className="recon"><span>Reporting currency</span><span className="mono">KES (USD at transaction rate)</span></div>
             </div>
           </div>
         </div>
@@ -1206,7 +1144,7 @@ function Receivables() {
                     <td className="mono" style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}><strong>{draft ? "Draft" : inv.id}</strong></td>
                     <td style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}>{inv.customer}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{draft ? "—" : inv.invoiceDate}</td>
-                    <td className="mono" style={{ fontSize: 12 }}>{draft ? `${inv.terms}d` : inv.dueDate}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{draft ? (inv.terms == null ? "—" : `${inv.terms}d`) : (inv.dueDate ?? "—")}</td>
                     <td className="mono" style={{ textAlign: "right" }}>{curMoney(inv.currency, inv.total)}</td>
                     <td className="mono" style={{ textAlign: "right" }}>{inv.paid ? money2(inv.paid) : "—"}</td>
                     <td className="mono" style={{ textAlign: "right" }}>{draft || inv.state === "cancelled" ? "—" : money2(inv.balance)}</td>
@@ -1274,7 +1212,7 @@ function InvoiceViewModal({ inv, onClose, canEdit, onPdf, onCancel }: {
           <div className="mb">
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, fontSize: 12.5 }}>
               <div><div style={lbl}>Invoice date</div>{inv.state === "draft" ? "Set on issue" : inv.invoiceDate}</div>
-              <div><div style={lbl}>Terms</div>{inv.terms === 0 ? "On receipt" : `Net ${inv.terms} days`}</div>
+              <div><div style={lbl}>Terms</div>{inv.terms == null ? "None" : inv.terms === 0 ? "On receipt" : `Net ${inv.terms} days`}</div>
               <div><div style={lbl}>Due</div>{inv.dueDate ?? "—"}</div>
               <div><div style={lbl}>PO number</div>{inv.poNumber || "—"}</div>
             </div>
@@ -1286,7 +1224,7 @@ function InvoiceViewModal({ inv, onClose, canEdit, onPdf, onCancel }: {
                     <td className="mono" style={{ textAlign: "right", fontSize: 12 }}>{l.qty} × {money2(l.unitPrice)}</td><td className="mono" style={{ textAlign: "right" }}>{money2(l.amount)}</td></tr>
                 ))}
                 <tr><td colSpan={4} style={{ textAlign: "right" }}>Subtotal</td><td className="mono" style={{ textAlign: "right" }}>{money2(inv.subtotal)}</td></tr>
-                <tr><td colSpan={4} style={{ textAlign: "right" }}>VAT {inv.vatApplicable ? `(${inv.vatRate}%)` : "— not applied"}</td><td className="mono" style={{ textAlign: "right" }}>{money2(inv.vat)}</td></tr>
+                <tr><td colSpan={4} style={{ textAlign: "right" }}>VAT {inv.vatApplicable ? `(${inv.vatRate}%)${inv.vatInclusive ? " · included in prices" : ""}` : "— not applied"}</td><td className="mono" style={{ textAlign: "right" }}>{money2(inv.vat)}</td></tr>
                 <tr><td colSpan={4} style={{ textAlign: "right", fontWeight: 700 }}>Total due</td><td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>{curMoney(inv.currency, inv.total)}</td></tr>
                 {inv.paid > 0 && <tr><td colSpan={4} style={{ textAlign: "right" }}>Paid</td><td className="mono" style={{ textAlign: "right" }}>− {money2(inv.paid)}</td></tr>}
                 {inv.state !== "draft" && inv.state !== "cancelled" && <tr><td colSpan={4} style={{ textAlign: "right", fontWeight: 700 }}>Outstanding</td><td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>{curMoney(inv.currency, inv.balance)}</td></tr>}
@@ -1303,7 +1241,7 @@ function InvoiceViewModal({ inv, onClose, canEdit, onPdf, onCancel }: {
             {inv.currency === "USD" && inv.totalKes != null && <Note>Posted to the ledger as {kes(inv.totalKes)} at {inv.fxRate} KES/USD.</Note>}
             {inv.notes && <div style={{ fontSize: 12.5 }}><strong>Notes:</strong> {inv.notes}</div>}
             {confirmCancel && (
-              <div><label>Reason for cancelling</label><input className="field" autoFocus placeholder="e.g. raised in error — reissued as IGN-…" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+              <div><label>Reason for cancelling</label><input className="field" autoFocus placeholder="e.g. raised in error — reissued as IGN-INV-…" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
             )}
           </div>
           <div className="mf">

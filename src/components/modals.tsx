@@ -6,7 +6,7 @@ import { budgetLines, kes, reqRouting, reqBudgetState, engStages, engChannels } 
 import { useUsdKesRate, getUsdKesRate, FALLBACK_USD_KES } from "../lib/fx";
 import { Note } from "./ui";
 import type { InvoiceInput } from "../store";
-import { bankFor, fromDetails, money2, curMoney, keToday, addDaysIso } from "../lib/invoiceDoc";
+import { bankFor, fromDetails, money2, curMoney, keToday, addDaysIso, termsText } from "../lib/invoiceDoc";
 import { previewInvoicePdf } from "../lib/invoicePdf";
 import { supabase } from "../lib/supabase";
 
@@ -576,8 +576,9 @@ export function ReceiptModal() {
   const [method, setMethod] = useState("bank");
   const [date, setDate] = useState(today);
   const [reference, setReference] = useState("");
+  const [rxRate, setRxRate] = useState("");
   useEffect(() => {
-    if (receiptFor) { setAmount(String(receiptFor.balance)); setMethod("bank"); setDate(today); setReference(""); }
+    if (receiptFor) { setAmount(String(receiptFor.balance)); setMethod("bank"); setDate(today); setReference(""); setRxRate(String(receiptFor.fxRate)); }
   }, [receiptFor]);
   const cur = receiptFor?.currency ?? "KES";
   const amt = parseFloat(amount) || 0;
@@ -587,7 +588,9 @@ export function ReceiptModal() {
     if (amt <= 0) { toast("Enter an amount", "The amount received is required"); return; }
     if (amt > receiptFor.balance + 0.005) { toast("More than the balance", `Outstanding is ${curMoney(cur, receiptFor.balance)}`); return; }
     if (!date || date > today) { toast("Check the date", "The payment date can't be in the future"); return; }
-    recordReceipt(receiptFor.id, amt, method, date, reference.trim());
+    const rate = cur === "USD" ? Number(rxRate) : undefined;
+    if (cur === "USD" && !(rate! > 0)) { toast("Enter the rate", "KES received per 1 USD"); return; }
+    recordReceipt(receiptFor.id, amt, method, date, reference.trim(), rate);
   }
   return (
     <ModalShell open={!!receiptFor} onClose={closeReceipt} width={520}>
@@ -611,6 +614,7 @@ export function ReceiptModal() {
               </select>
             </div>
             <div style={{ flex: 1 }}><label>Reference <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. bank TT ref / M-Pesa code" value={reference} onChange={(e) => setReference(e.target.value)} /></div>
+            {cur === "USD" && <div style={{ width: 130 }}><label>Rate received</label><input className="field" style={{ width: "100%" }} type="number" min="0" step="0.01" value={rxRate} onChange={(e) => setRxRate(e.target.value)} title="KES per 1 USD actually received" /></div>}
           </div>
           {receiptFor.receipts.length > 0 && (
             <table className="tbl">
@@ -620,7 +624,7 @@ export function ReceiptModal() {
               ))}</tbody>
             </table>
           )}
-          <Note>{amt > 0 ? (after <= 0.005 ? <>This settles the invoice in full — it will be marked <strong>Paid</strong>.</> : <>Leaves <strong>{curMoney(cur, after)}</strong> outstanding — the invoice becomes <strong>Partially paid</strong>.</>) : "Enter the amount received."}{cur === "USD" ? ` Posted to the ledger in KES at the invoice rate (${receiptFor.fxRate}).` : ""}</Note>
+          <Note>{amt > 0 ? (after <= 0.005 ? <>This settles the invoice in full — it will be marked <strong>Paid</strong>.</> : <>Leaves <strong>{curMoney(cur, after)}</strong> outstanding — the invoice becomes <strong>Partially paid</strong>.</>) : "Enter the amount received."}{cur === "USD" && amt > 0 ? (() => { const d = Math.round(amt * ((Number(rxRate) || 0) - receiptFor.fxRate) * 100) / 100; return ` Invoiced at ${receiptFor.fxRate}; received at ${rxRate || "—"}${d ? ` → FX ${d > 0 ? "gain" : "loss"} of KES ${Math.abs(d).toLocaleString()} posted to 4900` : ""}.`; })() : ""}</Note>
         </div>
       )}
       <div className="mf">
@@ -718,8 +722,11 @@ export function InvoiceModal() {
   const [currency, setCurrency] = useState<"KES" | "USD">("KES");
   const [fxRate, setFxRate] = useState("");
   const [terms, setTerms] = useState("14");
+  const [noDue, setNoDue] = useState(false);
+  const [includeTerms, setIncludeTerms] = useState(false);
   const [vatOn, setVatOn] = useState(false);
   const [vatRate, setVatRate] = useState("16");
+  const [vatIncl, setVatIncl] = useState(false);
   const [poNumber, setPoNumber] = useState("");
   const [engagementRef, setEngagementRef] = useState("");
   const [notes, setNotes] = useState("");
@@ -728,12 +735,12 @@ export function InvoiceModal() {
   const [busy, setBusy] = useState(false);
   const [nextNo, setNextNo] = useState("");
   const firstRef = useRef<HTMLInputElement>(null);
-  // Next number in the single IGN-YYYY-NNN sequence (assigned for real only at issue).
+  // Next number in the single IGN-INV-YYYY-NNN sequence (assigned for real only at issue).
   useEffect(() => {
     if (!invOpen) return;
     const yr = today.slice(0, 4);
-    supabase.from("ref_counters").select("n").eq("kind", `IGN-${yr}`).maybeSingle()
-      .then(({ data }) => setNextNo(`IGN-${yr}-${String((Number(data?.n) || 0) + 1).padStart(3, "0")}`));
+    supabase.from("ref_counters").select("n").eq("kind", `IGN-INV-${yr}`).maybeSingle()
+      .then(({ data }) => setNextNo(`IGN-INV-${yr}-${String((Number(data?.n) || 0) + 1).padStart(3, "0")}`));
   }, [invOpen]);
 
   useEffect(() => {
@@ -743,8 +750,9 @@ export function InvoiceModal() {
     setAddress(e?.billToAddress ?? ""); setContact(e?.billToContact ?? ""); setEmail(e?.billToEmail ?? "");
     setCurrency(e?.currency ?? "KES");
     setFxRate(e && e.currency === "USD" ? String(e.fxRate) : String(appConfig.usd_kes_rate ?? ""));
-    setTerms(String(e?.terms ?? 14));
-    setVatOn(e?.vatApplicable ?? false); setVatRate(String(e?.vatApplicable ? e.vatRate : (vatRates[0] ?? 16)));
+    setTerms(String(e?.terms ?? 14)); setNoDue(!!e && e.terms == null);
+    setIncludeTerms(e?.includeTerms ?? false);
+    setVatOn(e?.vatApplicable ?? false); setVatRate(String(e?.vatApplicable ? e.vatRate : (vatRates[0] ?? 16))); setVatIncl(e?.vatInclusive ?? false);
     setPoNumber(e?.poNumber ?? ""); setEngagementRef(e?.engagementRef ?? "");
     setNotes(e ? (e.notes ?? "") : String(appConfig.invoice_default_notes ?? ""));
     setIncludePay(e?.includePaymentDetails ?? true);
@@ -767,19 +775,22 @@ export function InvoiceModal() {
   }
   const setLine = (i: number, patch: Partial<InvLineEdit>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
   const lineAmt = (l: InvLineEdit) => Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100) / 100;
-  const subtotal = lines.reduce((s, l) => s + lineAmt(l), 0);
+  const lineSum = lines.reduce((s, l) => s + lineAmt(l), 0);
   const rate = vatOn ? Number(vatRate) || 0 : 0;
-  const vat = Math.round(subtotal * rate) / 100;
-  const total = subtotal + vat;
+  const incl = vatOn && vatIncl;   // prices already include VAT → VAT is backed out, total = lines
+  const vat = incl ? Math.round(lineSum * rate / (100 + rate) * 100) / 100 : Math.round(lineSum * rate) / 100;
+  const subtotal = incl ? Math.round((lineSum - vat) * 100) / 100 : lineSum;
+  const total = incl ? lineSum : lineSum + vat;
   const termDays = Math.max(0, Math.round(Number(terms) || 0));
-  const due = addDaysIso(today, termDays);
+  const due = noDue ? null : addDaysIso(today, termDays);
+  const tcText = termsText(appConfig);
   const bank = bankFor(appConfig, currency);
   const bankReady = !!(bank && bank.account_no);
 
   function input(): InvoiceInput | null {
     if (!customer.trim()) { toast("Who is the invoice for?", "Type the client's name"); return null; }
     if (currency === "USD" && !(Number(fxRate) > 0)) { toast("Enter the exchange rate", "KES per 1 USD — used to post the ledger in KES"); return null; }
-    if (Number(terms) < 0 || Number(terms) > 365) { toast("Check the payment terms", "Between 0 and 365 days"); return null; }
+    if (!noDue && (Number(terms) < 0 || Number(terms) > 365)) { toast("Check the payment terms", "Between 0 and 365 days"); return null; }
     for (const l of lines) {
       const blank = !l.title.trim() && !l.description.trim() && !Number(l.unitPrice);
       if (blank) continue;
@@ -788,14 +799,14 @@ export function InvoiceModal() {
     }
     return {
       customer: customer.trim(), billToAddress: address, billToContact: contact, billToEmail: email, crmPartnerId: partnerId,
-      currency, fxRate: Number(fxRate) || undefined, terms: termDays, vatApplicable: vatOn, vatRate: rate,
-      poNumber, engagementRef, notes, includePaymentDetails: includePay,
+      currency, fxRate: Number(fxRate) || undefined, terms: noDue ? null : termDays, vatApplicable: vatOn, vatRate: rate, vatInclusive: incl,
+      poNumber, engagementRef, notes, includePaymentDetails: includePay, includeTerms,
       lines: lines.map((l) => ({ title: l.title.trim(), description: l.description.trim(), qty: Number(l.qty) || 1, unitPrice: Number(l.unitPrice) || 0 })),
     };
   }
   async function submit(issue: boolean) {
     const v = input(); if (!v) return;
-    if (issue && !(subtotal > 0)) { toast("Add a priced line", "An invoice needs at least one line with an amount"); return; }
+    if (issue && !(lineSum > 0)) { toast("Add a priced line", "An invoice needs at least one line with an amount"); return; }
     setBusy(true);
     const ok = await saveInvoice(invEdit?.uuid ?? null, v, issue);
     if (!ok) setBusy(false);
@@ -803,12 +814,12 @@ export function InvoiceModal() {
   function preview() {
     const v = input(); if (!v) return;
     previewInvoicePdf({
-      number: invEdit?.id ?? "DRAFT", status: "draft", invoiceDate: today, dueDate: due, terms: termDays,
+      number: invEdit?.id ?? "DRAFT", status: "draft", invoiceDate: today, dueDate: due, terms: noDue ? null : termDays,
       customer: v.customer, billToAddress: address, billToContact: contact, billToEmail: email,
-      engagementRef, poNumber, currency, subtotal, vatApplicable: vatOn, vatRate: rate, vat, total, paid: 0, notes,
+      engagementRef, poNumber, currency, subtotal, vatApplicable: vatOn, vatRate: rate, vatInclusive: incl, vat, total, paid: 0, notes,
       lines: v.lines.filter((l) => l.title || l.description || l.unitPrice).map((l) => ({ ...l, amount: Math.round(l.qty * l.unitPrice * 100) / 100 })),
       paymentDetails: includePay ? bank : null, paymentNote: includePay ? String(appConfig.invoice_payment_note ?? "") : null,
-      from: fromDetails(appConfig),
+      from: fromDetails(appConfig), termsConditions: includeTerms ? tcText || null : null,
     }).catch((e) => toast("Preview failed", String(e?.message ?? e)));
   }
 
@@ -819,7 +830,7 @@ export function InvoiceModal() {
     <ModalShell open={invOpen} onClose={closeInvoice} width={820}>
       <div className="mh">
         <h3>{invEdit ? `Edit draft invoice` : "New invoice"}</h3>
-        <p>Invoice number <strong>{nextNo || `IGN-${today.slice(0, 4)}-…`}</strong> — generated automatically, unique and in sequence (IGN-YYYY-NNN). It is assigned and dated the moment you issue; drafts don't use up a number.</p>
+        <p>Invoice number <strong>{nextNo || `IGN-${today.slice(0, 4)}-…`}</strong> — generated automatically, unique and in sequence (IGN-INV-YYYY-NNN). It is assigned and dated the moment you issue; drafts don't use up a number.</p>
       </div>
       <div className="mb">
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
@@ -848,11 +859,12 @@ export function InvoiceModal() {
                 : <div><label>Invoice date</label><input className="field" value={`${niceDate(today)}`} readOnly style={wash} title="Set automatically when issued" /></div>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <div><label>Payment terms (days)</label>
-                <input className="field" type="number" min="0" max="365" list="inv-terms" value={terms} onChange={(e) => setTerms(e.target.value)} />
+              <div><label style={{ display: "flex", justifyContent: "space-between" }}>Payment terms (days)
+                  <span style={{ display: "flex", alignItems: "center", gap: 4, ...sub }}><input type="checkbox" checked={noDue} onChange={(e) => setNoDue(e.target.checked)} /> No due date</span></label>
+                <input className="field" type="number" min="0" max="365" list="inv-terms" disabled={noDue} style={noDue ? wash : undefined} value={noDue ? "" : terms} placeholder={noDue ? "None" : ""} onChange={(e) => setTerms(e.target.value)} />
                 <datalist id="inv-terms"><option value="0">On receipt</option><option value="7">Net 7</option><option value="14">Net 14</option><option value="30">Net 30</option></datalist>
               </div>
-              <div><label>Due date</label><input className="field" value={niceDate(due)} readOnly style={wash} /></div>
+              <div><label>Due date</label><input className="field" value={due ? niceDate(due) : "None — left off the invoice"} readOnly style={wash} /></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <div><label>LPO no. <span style={sub}>· optional</span></label><input className="field" placeholder="Leave blank if no LPO" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} /></div>
@@ -865,6 +877,9 @@ export function InvoiceModal() {
                     {vatRates.map((r) => <option key={r} value={r}>{r}%</option>)}
                   </select>
                 </div>
+                {vatOn && <label style={{ display: "flex", alignItems: "center", gap: 5, textTransform: "none", letterSpacing: 0, fontWeight: 500, margin: "4px 0 0" }}>
+                  <input type="checkbox" checked={vatIncl} onChange={(e) => setVatIncl(e.target.checked)} /> Prices include VAT <span style={{ ...sub, color: "var(--ink-soft)" }}>· goods</span>
+                </label>}
               </div>
             </div>
           </div>
@@ -903,10 +918,14 @@ export function InvoiceModal() {
             {includePay && (bankReady
               ? <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{bank!.account_name} · {bank!.bank} · {bank!.account_no}{bank!.branch ? ` · ${bank!.branch}` : ""}</div>
               : <div style={{ fontSize: 12, color: "var(--red)" }}>No {currency} bank account set yet — add it in Settings → Invoicing, or untick this.</div>)}
+            <label style={{ display: "flex", alignItems: "center", gap: 6, textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
+              <input type="checkbox" checked={includeTerms} onChange={(e) => setIncludeTerms(e.target.checked)} /> Include Terms &amp; Conditions <span style={{ ...sub, color: "var(--ink-soft)" }}>· for product sales, not consultancy</span>
+            </label>
+            {includeTerms && !tcText && <div style={{ fontSize: 12, color: "var(--red)" }}>No Terms &amp; Conditions set yet — add them in Settings → Invoicing, or untick this.</div>}
           </div>
           <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}>
-            <div className="recon"><span>Subtotal</span><span className="mono">{curMoney(currency, subtotal)}</span></div>
-            <div className="recon"><span>VAT {vatOn ? `(${rate}%)` : "— not applied"}</span><span className="mono">{curMoney(currency, vat)}</span></div>
+            <div className="recon"><span>Subtotal{incl ? " (excl. VAT)" : ""}</span><span className="mono">{curMoney(currency, subtotal)}</span></div>
+            <div className="recon"><span>VAT {vatOn ? `(${rate}%)${incl ? " included" : ""}` : "— not applied"}</span><span className="mono">{curMoney(currency, vat)}</span></div>
             <div className="recon" style={{ fontWeight: 700 }}><span>Total due</span><span className="mono">{curMoney(currency, total)}</span></div>
             {currency === "USD" && Number(fxRate) > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 4 }}>Posts to the ledger as {kes(Math.round(total * Number(fxRate)))}</div>}
           </div>

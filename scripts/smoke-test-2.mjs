@@ -25,7 +25,7 @@ const impersonate = async (email) => {
 
 try {
   await c.query("begin");
-  await impersonate("wanjiku@ignis.africa");
+  await impersonate("jwanjiku@ignis-innovation.com");
 
   console.log("=== Phase 2a: Inventory ===");
   const iss = await rpc(`public.issue_stock('SPR-KIT', 'Nairobi central store', 20, 'maintenance round')`);
@@ -82,7 +82,7 @@ try {
   console.log("— GL still balanced:", bal[0].d === bal[0].c);
   const lv = await rpc(`public.apply_leave('annual', '2026-08-03', '2026-08-05', 'family')`);
   console.log("— leave applied:", lv.id, lv.days, "days | reserved:",
-    (await q(`select reserved from leave_balances b join app_users u on u.id=b.app_user_id where u.email='wanjiku@ignis.africa' and kind='annual'`))[0].reserved);
+    (await q(`select reserved from leave_balances b join app_users u on u.id=b.app_user_id where u.email='jwanjiku@ignis-innovation.com' and kind='annual'`))[0].reserved);
   console.log("— leave decided:", JSON.stringify(await rpc(`public.decide_leave('${lv.id}', true, null)`)));
   await expectFail("leave beyond balance", `public.apply_leave('annual', '2026-09-01', '2026-12-31', 'too long')`);
   const mine = await rpc(`public.my_hr_summary()`);
@@ -115,7 +115,7 @@ try {
   console.log("=== Phase 5: Access & governance (enforce_access is ON) ===");
   await impersonate("lily@ignis.africa");   // view-only: procurement 0
   await expectFail("lily raises requisition", `public.submit_requisition('sneaky', 1000, 'Admin')`);
-  await impersonate("wanjiku@ignis.africa");
+  await impersonate("jwanjiku@ignis-innovation.com");
   const inv = await rpc(`public.invite_user('Njeri Kamau', 'njeri@ignis.africa', 'fin')`);
   console.log("— invited:", inv.email, "role:", inv.role, "| perms rows:",
     (await q(`select count(*) n from user_permissions where email='njeri@ignis.africa'`))[0].n);

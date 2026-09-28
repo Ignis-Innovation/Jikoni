@@ -9,20 +9,22 @@ import { jsPDF } from "jspdf";
 export interface InvoicePdfBank { account_name?: string; bank?: string; account_no?: string; branch?: string; swift?: string }
 export interface InvoicePdfFrom { company?: string; signatory?: string; address?: string; email?: string; phone?: string }
 export interface InvoicePdfData {
-  number: string;                 // IGN-YYYY-NNN (or DRAFT-xxxx)
+  number: string;                 // IGN-INV-YYYY-NNN (or DRAFT-xxxx)
   status: string;                 // draft | issued | partially_paid | paid | overdue | cancelled
   invoiceDate: string;            // ISO date
   dueDate: string | null;
-  terms: number;                  // days
+  terms: number | null;           // days; null = no terms / due date (row omitted)
   customer: string; billToAddress?: string | null; billToContact?: string | null; billToEmail?: string | null;
   engagementRef?: string | null; poNumber?: string | null;
   currency: string;
   lines: { title: string; description: string; qty: number; unitPrice: number; amount: number }[];
   subtotal: number; vatApplicable: boolean; vatRate: number; vat: number; total: number; paid: number;
+  vatInclusive?: boolean;         // line amounts already include VAT (subtotal = excl. VAT)
   notes?: string | null;
   paymentDetails: InvoicePdfBank | null;   // null → section omitted
   paymentNote?: string | null;              // "{no}" is replaced with the invoice number
   from: InvoicePdfFrom;
+  termsConditions?: string | null;          // optional T&C section (product sales)
 }
 
 // Asset loader — the browser fetches from /public; tests pass a filesystem reader.
@@ -96,6 +98,7 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
   const W = 595.28, H = 841.89, L = 57, R = W - 57, CW = R - L;
   const BOTTOM = H - 50;               // keep clear of the footer
   const cur = inv.currency;
+  const incl = inv.vatApplicable && !!inv.vatInclusive;
   const from = inv.from || {};
 
   // ---------- page chrome ----------
@@ -125,8 +128,8 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
   body(); doc.setFontSize(9.5);
   const rows: [string, string, string?, string?][] = [
     ["Invoice number", inv.number, "Invoice date", longDate(inv.invoiceDate)],
-    ["Payment terms", termsText(inv.terms), "Due date", longDate(inv.dueDate)],
   ];
+  if (inv.terms != null) rows.push(["Payment terms", termsText(inv.terms), "Due date", longDate(inv.dueDate)]);
   if (inv.poNumber) rows.push(["PO number", inv.poNumber]);
   const engLines = inv.engagementRef ? doc.splitTextToSize(inv.engagementRef, R - 12 - 150) as string[] : [];
   const panelTop = 128, rowH = 21, lh = 13;
@@ -148,7 +151,8 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
   body(); doc.setFontSize(9.5); color(INK);
   const billTo = [inv.customer, ...(inv.billToAddress || "").split(/\n/), inv.billToContact ? `Attn: ${inv.billToContact}` : "", inv.billToEmail || ""]
     .map((s) => s.trim()).filter(Boolean).flatMap((s) => doc.splitTextToSize(s, 225) as string[]);
-  const fromBlock = [from.company, from.signatory, ...(from.address || "").split(/\n/)]
+  // FROM is the company only — no personal name (client request, Sept 2026)
+  const fromBlock = [from.company, ...(from.address || "").split(/\n/)]
     .map((s) => (s || "").trim()).filter(Boolean).flatMap((s) => doc.splitTextToSize(s, 240) as string[]);
   doc.text(billTo, L, y + 20, { lineHeightFactor: 1.4 });
   doc.text(fromBlock, L + 240, y + 20, { lineHeightFactor: 1.4 });
@@ -158,7 +162,7 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
   const showQty = inv.lines.some((l) => l.qty !== 1);
   const X = { n: L + 7, del: L + 34, desc: L + 152, qty: R - 118, amt: R - 7 };
   const delW = X.desc - X.del - 10;
-  const descW = (showQty ? X.qty - 38 : R - 88) - X.desc;
+  const descW = (showQty ? X.qty - 80 : R - 88) - X.desc;   // leave room for right-aligned "qty × unit"
   const tableHead = () => {
     fill(GREEN); doc.rect(L, y, CW, 22, "F");
     head("semibold"); doc.setFontSize(8.5); doc.setTextColor(255, 255, 255);
@@ -189,13 +193,13 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
   // ---------- totals ----------
   const balance = Math.max(0, inv.total - inv.paid);
   const sub: [string, string][] = [];
-  if (inv.vatApplicable || inv.paid > 0) sub.push(["Subtotal", `${cur} ${money(inv.subtotal)}`]);
-  if (inv.vatApplicable) sub.push([`VAT (${inv.vatRate}%)`, `${cur} ${money(inv.vat)}`]);
+  if (inv.vatApplicable || inv.paid > 0) sub.push([incl ? "Subtotal (excl. VAT)" : "Subtotal", `${cur} ${money(inv.subtotal)}`]);
+  if (inv.vatApplicable) sub.push([incl ? `VAT (${inv.vatRate}%) included` : `VAT (${inv.vatRate}%)`, `${cur} ${money(inv.vat)}`]);
   if (inv.paid > 0) { sub.push(["Invoice total", `${cur} ${money(inv.total)}`]); sub.push(["Less: paid", `− ${cur} ${money(inv.paid)}`]); }
   if (y + 18 + sub.length * 16 + 34 > BOTTOM) y = newPage();
   y += 12;
   body(); doc.setFontSize(9.5);
-  for (const [k, v] of sub) { color(MUTED); doc.text(k, R - 150, y + 4); color(INK); doc.text(v, X.amt, y + 4, { align: "right" }); y += 16; }
+  for (const [k, v] of sub) { color(MUTED); doc.text(k, R - 112, y + 4, { align: "right" }); color(INK); doc.text(v, X.amt, y + 4, { align: "right" }); y += 16; }
   if (sub.length) y += 4; else y += 6;
   const barH = 34, split = L + 240;
   fill(GREEN); doc.rect(L, y, split - L, barH, "F");
@@ -246,12 +250,24 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
     y += 17 + nt.length * 13.3 + 8;
   }
 
+  // ---------- terms & conditions (optional) ----------
+  if (inv.termsConditions && inv.termsConditions.trim()) {
+    body(); doc.setFontSize(8.3);
+    const tc = inv.termsConditions.trim().split(/\n/).flatMap((s) => doc.splitTextToSize(s.trim(), CW) as string[]);
+    const tlh = 11.6;
+    if (y + 16 + tc.length * tlh > BOTTOM) y = newPage();
+    label("TERMS & CONDITIONS", L, y);
+    body(); doc.setFontSize(8.3); color(MUTED);
+    doc.text(tc, L, y + 15, { lineHeightFactor: 1.4 });
+    y += 15 + tc.length * tlh + 8;
+  }
+
   // ---------- sign-off ----------
   if (y + 10 > BOTTOM) y = newPage();
   head("semibold"); doc.setFontSize(10.5); color(GREEN);
   doc.text("Thank you for your business.", L, y + 8);
 
-  doc.setProperties({ title: `Ignis Invoice ${inv.number}`, author: from.company || "Ignis Innovation Ltd", subject: `Invoice ${inv.number} — ${inv.customer}` });
+  doc.setProperties({ title: `Ignis Invoice ${inv.number}`, author: from.company || "Ignis Innovation", subject: `Invoice ${inv.number} — ${inv.customer}` });
   return doc;
 }
 

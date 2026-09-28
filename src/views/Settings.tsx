@@ -315,6 +315,7 @@ function InvoicingPanel() {
   const [kesB, setKesB] = useState<Bank>(emptyBank);
   const [notes, setNotes] = useState("");
   const [payNote, setPayNote] = useState("");
+  const [tc, setTc] = useState("");
   const [rates, setRates] = useState("");
   const [fx, setFx] = useState("");
   useEffect(() => {
@@ -323,9 +324,10 @@ function InvoicingPanel() {
     setKesB({ ...emptyBank, ...(appConfig.invoice_bank_kes ?? {}) });
     setNotes(String(appConfig.invoice_default_notes ?? ""));
     setPayNote(String(appConfig.invoice_payment_note ?? ""));
+    setTc(String(appConfig.invoice_terms_conditions ?? ""));
     setRates((Array.isArray(appConfig.invoice_vat_rates) ? appConfig.invoice_vat_rates : [16, 8, 0]).join(", "));
     setFx(String(appConfig.usd_kes_rate ?? ""));
-  }, [appConfig.invoice_from, appConfig.invoice_bank_usd, appConfig.invoice_bank_kes, appConfig.invoice_default_notes, appConfig.invoice_payment_note, appConfig.invoice_vat_rates, appConfig.usd_kes_rate]);
+  }, [appConfig.invoice_from, appConfig.invoice_bank_usd, appConfig.invoice_bank_kes, appConfig.invoice_default_notes, appConfig.invoice_payment_note, appConfig.invoice_terms_conditions, appConfig.invoice_vat_rates, appConfig.usd_kes_rate]);
 
   const inp = (v: string, on: (s: string) => void, ph = "") => (
     <input className="field" style={{ width: 300 }} disabled={!canEdit} placeholder={ph} value={v} onChange={(e) => on(e.target.value)} />
@@ -341,6 +343,20 @@ function InvoicingPanel() {
       {canEdit && <div className="row"><div className="rl" /><button className="btn primary" onClick={() => setAppConfig(key, b)}>Save {cur} account</button></div>}
     </div>
   );
+  const fxAuto = appConfig.usd_kes_rate_auto !== false;   // on unless switched off
+  const fxUpdated = typeof appConfig.usd_kes_rate_updated === "string" ? appConfig.usd_kes_rate_updated : null;
+  const [fxBusy, setFxBusy] = useState(false);
+  async function refreshFx() {
+    setFxBusy(true);
+    try {
+      const j = await fetch("/api/fx-rate").then((r) => r.json());
+      if (!(Number(j?.rate) > 0)) throw new Error(j?.error || "No rate returned");
+      await setAppConfig("usd_kes_rate", Number(j.rate));
+      await setAppConfig("usd_kes_rate_updated", new Date().toISOString());
+      setFx(String(j.rate));
+    } catch (e: any) { toast("Rate not updated", e?.message || "Try again"); }
+    setFxBusy(false);
+  }
   function saveRates() {
     const list = rates.split(/[,\s]+/).filter(Boolean).map(Number);
     if (!list.length || list.some((n) => isNaN(n) || n < 0 || n > 100)) { toast("Check the VAT rates", "Comma-separated percentages, e.g. 16, 8, 0"); return; }
@@ -352,7 +368,6 @@ function InvoicingPanel() {
       <div className="set-card">
         <div className="sh"><h3>Invoice header — From</h3><p>The company block on every invoice. Issued invoices keep the details they were issued with.</p></div>
         <div className="row"><div className="rl">Company</div>{inp(from.company, (v) => setFrom({ ...from, company: v }))}</div>
-        <div className="row"><div className="rl">Signatory<small>Name, title</small></div>{inp(from.signatory, (v) => setFrom({ ...from, signatory: v }))}</div>
         <div className="row"><div className="rl">Address</div>{inp(from.address, (v) => setFrom({ ...from, address: v }))}</div>
         <div className="row"><div className="rl">Email</div>{inp(from.email, (v) => setFrom({ ...from, email: v }))}</div>
         <div className="row"><div className="rl">Phone</div>{inp(from.phone, (v) => setFrom({ ...from, phone: v }))}</div>
@@ -372,8 +387,30 @@ function InvoicingPanel() {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{inp(rates, setRates, "16, 8, 0")}
             {canEdit && <button className="btn" onClick={saveRates}>Save</button>}</div></div>
         <div className="row"><div className="rl">Default USD rate<small>KES per 1 USD — prefilled on USD invoices</small></div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{inp(fx, setFx, "e.g. 129.50")}
-            {canEdit && <button className="btn" onClick={() => { const n = Number(fx); if (!(n > 0)) { toast("Enter a rate", "KES per 1 USD"); return; } setAppConfig("usd_kes_rate", n); }}>Save</button>}</div></div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input className="field" style={{ width: 300 }} disabled={!canEdit || fxAuto} placeholder="e.g. 129.50" value={fx} onChange={(e) => setFx(e.target.value)} />
+              {canEdit && (fxAuto
+                ? <button className="btn" disabled={fxBusy} onClick={refreshFx}>{fxBusy ? "Updating…" : "Update now"}</button>
+                : <button className="btn" onClick={() => { const n = Number(fx); if (!(n > 0)) { toast("Enter a rate", "KES per 1 USD"); return; } setAppConfig("usd_kes_rate", n); }}>Save</button>)}
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <input type="checkbox" disabled={!canEdit} checked={fxAuto} onChange={(e) => setAppConfig("usd_kes_rate_auto", e.target.checked)} />
+              Update automatically every day from the global market rate
+            </label>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+              {fxAuto
+                ? (fxUpdated ? `Last updated ${new Date(fxUpdated).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Nairobi" })} (Nairobi time)` : "Not updated yet — press Update now")
+                : "Automatic updates are off — the rate stays at what you save here."}
+              {" "}Each USD invoice can still change its own rate.
+            </div>
+          </div></div>
+      </div>
+      <div className="set-card">
+        <div className="sh"><h3>Terms &amp; Conditions</h3><p>Printed at the bottom of an invoice only when "Include Terms &amp; Conditions" is ticked on it (e.g. product sales — leave it off for consultancy). Issued invoices keep the text they were issued with.</p></div>
+        <div className="row"><div className="rl">Text<small>One clause per line</small></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}><textarea className="field" rows={8} style={{ width: 460 }} disabled={!canEdit} value={tc} onChange={(e) => setTc(e.target.value)} />
+            {canEdit && <button className="btn" onClick={() => setAppConfig("invoice_terms_conditions", tc)}>Save</button>}</div></div>
       </div>
     </div>
   );

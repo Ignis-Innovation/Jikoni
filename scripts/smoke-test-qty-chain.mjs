@@ -17,9 +17,9 @@ const expectBlock = async (label, call) => {
 
 try {
   await c.query("begin");
-  const [me] = await q(`select auth_id from app_users where email='wanjiku@ignis.africa'`);
+  const [me] = await q(`select auth_id from app_users where email='jwanjiku@ignis-innovation.com'`);
   await c.query(`select set_config('request.jwt.claims', $1, false)`,
-    [JSON.stringify({ email: "wanjiku@ignis.africa", sub: me.auth_id, role: "authenticated" })]);
+    [JSON.stringify({ email: "jwanjiku@ignis-innovation.com", sub: me.auth_id, role: "authenticated" })]);
   await rpc(`public.create_vendor('Qty Vendor', 'Fabrication', 'Kenya', 'A00X', 'Equity 1')`);
   await rpc(`public.screen_vendor('Qty Vendor', 'cleared', 'ok')`);
 

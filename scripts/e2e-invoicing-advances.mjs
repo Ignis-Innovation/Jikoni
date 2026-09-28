@@ -2,7 +2,7 @@
 // (b) the new Receivables invoicing flow (draft → issue → part/full payment → PDF).
 // Runs against the dev server (http://localhost:5199) and the hosted DB, as brian55mwangi@gmail.com.
 // Everything it creates is tagged "E2E-TEST" and DELETED at the end (advance, invoice,
-// receipts, journals, eTIMS rows, audit rows, uploaded files) and the ADV / IGN-YYYY
+// receipts, journals, eTIMS rows, audit rows, uploaded files) and the ADV / IGN-INV-YYYY
 // counters are put back, so production numbering is untouched.
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -30,7 +30,7 @@ async function as(u) {
 const year = new Date().getFullYear();
 let advRef = null, invRef = null, invUuid = null;
 const advBefore = Number((await (async () => { await c.connect(); return q1("select n from public.ref_counters where kind='ADV'"); })())?.n ?? 0);
-const ignBefore = Number((await q1("select n from public.ref_counters where kind=$1", [`IGN-${year}`]))?.n ?? 0);
+const ignBefore = Number((await q1("select n from public.ref_counters where kind=$1", [`IGN-INV-${year}`]))?.n ?? 0);
 
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
@@ -143,7 +143,7 @@ try {
   await page.waitForSelector(modal);
   await page.waitForTimeout(800);
   const head = await page.locator(`${modal} .mh`).innerText();
-  const expNext = `IGN-${year}-${String(ignBefore + 1).padStart(3, "0")}`;
+  const expNext = `IGN-INV-${year}-${String(ignBefore + 1).padStart(3, "0")}`;
   ok(head.includes(expNext), "form shows the next invoice number (auto, sequential)", expNext);
   ok(await page.locator(`${modal} input[placeholder="Leave blank if no LPO"]`).count() === 1, "PO / LPO field present and left blank (optional)", "");
   await page.fill(`${modal} input[placeholder^="Type the client"]`, "E2E-TEST Keystone Agribusiness Consultants Ltd");
@@ -196,7 +196,7 @@ try {
   await page.waitForTimeout(3000);
   const is = await q1("select ref, state, total_kes::numeric k, invoice_date::text d, due_date::text due from public.sales_invoices where id=$1", [invUuid]);
   invRef = is.ref;
-  ok(is.state === "issued" && new RegExp(`^IGN-${year}-\\d{3}$`).test(is.ref), "issued with an IGN-YYYY-NNN number", is.ref);
+  ok(is.state === "issued" && new RegExp(`^IGN-INV-${year}-\\d{3}$`).test(is.ref), "issued with an IGN-INV-YYYY-NNN number", is.ref);
   ok(Number(is.k) === 485625, "posted in KES at 129.5 (485,625)", is.k);
   await shot("5-issued");
 
@@ -264,6 +264,9 @@ try {
       for (const p of pids) if (p) await c.query("select public.recompute_project_money($1)", [p]);
       await c.query("delete from public.travel_advances where ref=$1", [ref]);
     }
+    // journals are immutable; test cleanup is the one sanctioned delete
+    await c.query("select set_config('jikoni.allow_journal_delete','on',true)");
+    for (const a of advs) await c.query("delete from public.journal_entries where source_ref=$1", [a.ref ?? a]);
     const invs = (await c.query("select id, ref from public.sales_invoices where customer like 'E2E-TEST%'")).rows;
     for (const i of invs) {
       await c.query("delete from public.etims_submissions where invoice_ref=$1", [i.ref]);
@@ -272,7 +275,7 @@ try {
     }
     // put counters back to the highest number still in use (audit rows stay — the log is append-only)
     await c.query("update public.ref_counters set n=(select coalesce(max(substring(ref from '[0-9]+$')::int),0) from public.travel_advances) where kind='ADV'");
-    await c.query("update public.ref_counters set n=(select coalesce(max(substring(ref from '[0-9]+$')::int),0) from public.sales_invoices where ref like $1) where kind=$2", [`IGN-${year}-%`, `IGN-${year}`]);
+    await c.query("update public.ref_counters set n=(select coalesce(max(substring(ref from '[0-9]+$')::int),0) from public.sales_invoices where ref like $1) where kind=$2", [`IGN-INV-${year}-%`, `IGN-INV-${year}`]);
     await c.query("commit");
     if (paths.length) await admin.storage.from("uploads").remove(paths);
     console.log(`\ncleanup: removed ${advs.length} advance(s), ${invs.length} invoice(s), ${paths.length} file(s); counters restored`);

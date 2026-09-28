@@ -16,9 +16,9 @@ const rpc = async (call) => (await c.query(`select ${call} as r`)).rows[0].r;
 try {
   await c.query("begin");
   // enforce_access is on since Phase 5 — impersonate a real user
-  const [me] = await q(`select auth_id from app_users where email='wanjiku@ignis.africa'`);
+  const [me] = await q(`select auth_id from app_users where email='jwanjiku@ignis-innovation.com'`);
   await c.query(`select set_config('request.jwt.claims', $1, false)`,
-    [JSON.stringify({ email: "wanjiku@ignis.africa", sub: me.auth_id, role: "authenticated" })]);
+    [JSON.stringify({ email: "jwanjiku@ignis-innovation.com", sub: me.auth_id, role: "authenticated" })]);
 
   console.log("— budget check (within):", (await rpc(`public.budget_check('Operations', 10000)`)).chipTxt);
   console.log("— budget check (over 80):", (await rpc(`public.budget_check('Deployment', 150000)`)).chipTxt);
