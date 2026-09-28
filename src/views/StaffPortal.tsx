@@ -6,6 +6,7 @@ import { ModalShell } from "../components/modals";
 import { ReceiptList, LineReceiptsModal } from "../components/Receipts";
 import { kes, contractTypes, REPORT_TRACKS, type ReportTrack, type WeekTask } from "../data";
 import { Crumb } from "../nav";
+import { downloadInvoice, previewInvoice, INVOICE_STATUS, curMoney } from "../lib/invoiceDoc";
 import { FeedbackModal, ExitSteps } from "./Hr";
 
 const docCategories = [
@@ -667,8 +668,15 @@ export default function StaffPortalView() {
     pettyRequests, openPetty, openPettyEdit, deletePettyRequest, attachPettyInvoice, removePettyInvoice, uploadedFileUrl,
     claims, openClaim, openClaimEdit, deleteClaim,
     advances, openAdvance, openAdvanceEdit, deleteAdvance, openReconcile,
-    weeklyReports, openReport, openReportEdit } = useApp();
+    weeklyReports, openReport, openReportEdit,
+    salesInvoices, openInvoice, sendInvoiceForIssue, deleteDraftInvoice, appConfig } = useApp();
   const tab = tabs.staffportal;
+  // invoices I drafted (anyone may draft; Finance issues — mig 0092)
+  const myInvoices = salesInvoices.filter((i) => i.ownerEmail && i.ownerEmail === (meEmail ?? "").toLowerCase());
+  const invStage = (i: typeof myInvoices[number]) => i.state !== "draft" ? (INVOICE_STATUS[i.status] ?? { l: i.status, cls: "week" })
+    : i.submittedAt ? { l: "With Finance", cls: "today" } : i.returnNote ? { l: "Returned", cls: "over" } : { l: "Draft", cls: "week" };
+  const invPdf = (i: typeof myInvoices[number], preview = false) =>
+    (preview ? previewInvoice(i, appConfig) : downloadInvoice(i, appConfig)).catch((e) => toast("PDF failed", String(e?.message ?? e)));
   // HR may have opened a cycle, signed off a review or cleared an exit area
   // since last look — pull fresh state each time one of these tabs opens
   useEffect(() => { if (tab === "sp-perf" || tab === "sp-exit" || tab === "sp-files") refreshHr(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
@@ -759,6 +767,7 @@ export default function StaffPortalView() {
           {tab === "sp-petty" && <button className="btn primary" onClick={openPetty}><PlusI />Request petty cash</button>}
           {tab === "sp-claims" && <button className="btn primary" onClick={openClaim}><PlusI />File expense claim</button>}
           {tab === "sp-advances" && <button className="btn primary" onClick={openAdvance}><PlusI />Request travel advance</button>}
+          {tab === "sp-invoices" && <button className="btn primary" onClick={() => openInvoice()}><PlusI />New invoice</button>}
           {tab === "sp-perf" && selfOpen && <button className="btn primary" style={selfRated ? undefined : { opacity: 0.55 }} onClick={submitSelf}>Submit self-assessment</button>}
           {tab === "sp-files" && <button className="btn primary" onClick={() => openHrModal({ kind: "myCert" })}><PlusI />Add certification</button>}
           {tab === "sp-fb" && <button className="btn primary" onClick={() => openHrModal({ kind: "feedback" })}><PlusI />New feedback</button>}
@@ -964,6 +973,45 @@ export default function StaffPortalView() {
               <Note noBorder>No petty-cash requests yet — use “Request petty cash”. Give the item, amount, the date you need it and a reason; it routes to Finance / HR for approval.</Note>
             )}
             <Note>You can edit or withdraw a request while it is still <strong>Awaiting approval</strong>. Once <strong>Approved</strong>, attach the invoice/receipts (one or more files or images) — a Sub Admin can also attach it in Finance{pendingPetty.length ? ` · ${pendingPetty.length} pending now` : ""}.</Note>
+          </div>
+        </div>
+      )}
+
+      {tab === "sp-invoices" && (
+        <div className="hr-panel active">
+          <div className="panel">
+            <div className="panel-h"><h3>My invoices</h3><span className="meta"><a href="#" onClick={(e) => { e.preventDefault(); openInvoice(); }} style={{ color: "var(--flame)", textDecoration: "none" }}>+ New invoice</a></span></div>
+            {myInvoices.length ? (
+              <table className="tbl">
+                <thead><tr><th>Client</th><th>Invoice</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {myInvoices.map((i) => {
+                    const st = invStage(i);
+                    const editable = i.state === "draft" && !i.submittedAt;
+                    return (
+                      <tr key={i.uuid}>
+                        <td>{i.customer}{i.engagementRef ? <small style={{ display: "block", color: "var(--ink-soft)", fontSize: 11 }}>{i.engagementRef}</small> : null}
+                          {i.returnNote && i.state === "draft" && !i.submittedAt ? <small style={{ display: "block", color: "var(--red)", fontSize: 11 }}>Finance: {i.returnNote}</small> : null}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{i.state === "draft" ? "—" : i.id}</td>
+                        <td className="mono">{curMoney(i.currency, i.total)}</td>
+                        <td><span className={`pill ${st.cls}`} style={{ textTransform: "none" }}>{st.l}</span></td>
+                        <td>
+                          <span style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                            {editable && <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => openInvoice(i)}>Edit</button>}
+                            {editable && <button className="btn primary" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => sendInvoiceForIssue(i.uuid)}>Send for issuing</button>}
+                            <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => invPdf(i, i.state === "draft")}>{i.state === "draft" ? "Preview" : "PDF"}</button>
+                            {editable && <button className="btn" style={{ padding: "4px 10px", fontSize: 11.5, color: "var(--red)" }} onClick={() => { if (window.confirm("Delete this draft?")) deleteDraftInvoice(i.uuid); }}>Delete</button>}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <Note noBorder>No invoices yet — use “New invoice”. Fill in the client and the lines, then <strong>Send for issuing</strong>. Finance checks it and issues it; that's when it gets its IGN-INV number and is posted to the ledger.</Note>
+            )}
+            <Note>You can edit or delete a draft until you send it. If Finance returns it, their note shows here — fix it and send it again. You'll get a notification when it's issued.</Note>
           </div>
         </div>
       )}

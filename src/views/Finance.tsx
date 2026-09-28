@@ -1047,7 +1047,11 @@ export default function FinanceView() {
 }
 
 function Receivables() {
-  const { salesInvoices, openReceipt, openInvoice, issueInvoice, deleteDraftInvoice, cancelInvoice, appConfig, toast, level, proformas, openProforma, openProformaRec } = useApp();
+  const { salesInvoices, openReceipt, openInvoice, issueInvoice, deleteDraftInvoice, cancelInvoice, returnInvoice, appConfig, toast, level, proformas, openProforma, openProformaRec } = useApp();
+  // staff-drafted invoices sent to Finance to check + issue (mig 0092)
+  const toIssue = salesInvoices.filter((i) => i.state === "draft" && i.submittedAt);
+  const [returnFor, setReturnFor] = useState<SalesInvoice | null>(null);
+  const [returnNote, setReturnNote] = useState("");
   const canEdit = level("finance") >= 2;
   const [invFilter, setInvFilter] = useState("all");
   const [viewId, setViewId] = useState<string | null>(null);
@@ -1117,6 +1121,35 @@ function Receivables() {
         </div>
       </div>
 
+      {canEdit && toIssue.length > 0 && (
+        <div className="panel" style={{ marginBottom: 18, borderColor: "var(--flame)" }}>
+          <div className="panel-h"><h3>Waiting to be issued</h3><span className="meta">{toIssue.length} sent by staff · check, then Issue or Return</span></div>
+          <table className="tbl">
+            <thead><tr><th>Client</th><th>Prepared by</th><th>Sent</th><th style={{ textAlign: "right" }}>Amount</th><th /></tr></thead>
+            <tbody>{toIssue.map((inv) => (
+              <tr key={inv.uuid}>
+                <td style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}>{inv.customer}{inv.engagementRef ? <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{inv.engagementRef}</div> : null}</td>
+                <td style={{ fontSize: 12.5 }}>{inv.ownerName ?? "—"}</td>
+                <td className="mono" style={{ fontSize: 12 }}>{new Date(inv.submittedAt!).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
+                <td className="mono" style={{ textAlign: "right" }}>{curMoney(inv.currency, inv.total)}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <button className="btn sm" onClick={() => previewInvoice(inv, appConfig).catch((e) => toast("Preview failed", String(e?.message ?? e)))}>Preview</button>{" "}
+                  <button className="btn sm" onClick={() => openInvoice(inv)}>Edit</button>{" "}
+                  <button className="btn sm" style={{ color: "var(--red)" }} onClick={() => { setReturnNote(""); setReturnFor(inv); }}>Return</button>{" "}
+                  <button className="btn sm primary" onClick={() => issueInvoice(inv.uuid)}>Issue</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <ModalShell open={!!returnFor} onClose={() => setReturnFor(null)} width={460}>
+        <div className="mh"><h3>Return invoice</h3><p>{returnFor ? `${returnFor.customer} · prepared by ${returnFor.ownerName ?? "staff"}` : ""} — it goes back to them with your note.</p></div>
+        <div className="mb"><label>What needs changing?</label><input className="field" style={{ width: "100%" }} autoFocus value={returnNote} onChange={(e) => setReturnNote(e.target.value)} placeholder="e.g. add the client's LPO number" /></div>
+        <div className="mf"><button className="btn" onClick={() => setReturnFor(null)}>Cancel</button>
+          <button className="btn primary" onClick={() => { if (!returnNote.trim()) { toast("Add a note", "Say what needs changing"); return; } returnInvoice(returnFor!.uuid, returnNote.trim()); setReturnFor(null); }}>Return to preparer</button></div>
+      </ModalShell>
+
       <div className="panel" style={{ marginBottom: 18 }}>
         <div className="panel-h">
           <h3>Customer invoices</h3>
@@ -1137,12 +1170,12 @@ function Receivables() {
               {invRows.length === 0 ? (
                 <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>{salesInvoices.length === 0 ? "No customer invoices yet — use “+ New invoice”." : "None in this view."}</td></tr>
               ) : invRows.map((inv) => {
-                const st = INVOICE_STATUS[inv.status] ?? { l: inv.status, cls: "done" };
                 const draft = inv.state === "draft";
+                const st = draft && inv.submittedAt ? { l: "To issue", cls: "today" } : INVOICE_STATUS[inv.status] ?? { l: inv.status, cls: "done" };
                 return (
                   <tr key={inv.uuid}>
                     <td className="mono" style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}><strong>{draft ? "Draft" : inv.id}</strong></td>
-                    <td style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}>{inv.customer}</td>
+                    <td style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}>{inv.customer}{draft && inv.ownerName ? <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>drafted by {inv.ownerName}</div> : null}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{draft ? "—" : inv.invoiceDate}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{draft ? (inv.terms == null ? "—" : `${inv.terms}d`) : (inv.dueDate ?? "—")}</td>
                     <td className="mono" style={{ textAlign: "right" }}>{curMoney(inv.currency, inv.total)}</td>

@@ -46,6 +46,11 @@ try {
   const year = new Date().getFullYear();
 
   await c.query("begin");
+  if (process.argv.includes("--with-migrations")) {
+    for (const f of process.argv.filter((a) => /^\d{4}_.*\.sql$/.test(a))) {
+      await c.query(readFileSync(resolve(root, "supabase/migrations", f), "utf8")); console.log(`(applied ${f} inside the test transaction)`);
+    }
+  }
   await as(editor);
 
   // 1. draft — USD, no VAT, 3 lines (the template invoice)
@@ -186,8 +191,41 @@ try {
   const tb = await q1("select sum(debit)::numeric d, sum(credit)::numeric c from public.journal_lines");
   ok(Number(tb.d) === Number(tb.c), "trial balance balances", `${tb.d} vs ${tb.c}`);
 
-  // 10. view-only account blocked
-  if (viewer) { await as(viewer); await expectThrow(() => save(null, { customer: "Nope", lines: [] }), "view-only account cannot create invoices"); }
+  // 10. any staff member drafts → sends for issuing; only an editor issues (mig 0092)
+  if (viewer) {
+    await as(viewer);
+    let sd = await save(null, { customer: "Staff-drafted Client", currency: "KES", lines: [{ title: "Stoves", qty: 2, unitPrice: 6500 }] });
+    ok(sd.state === "draft", "a non-editor can draft an invoice", sd.id);
+    await expectThrow(() => issue(sd.uuid), "a non-editor cannot issue it", /view-only/);
+    await as(editor);
+    const edDraft = await save(null, { customer: "Editor's own draft", lines: [] });
+    await as(viewer);
+    await expectThrow(() => save(edDraft.uuid, { customer: "Hijack", lines: [] }), "a non-editor cannot edit someone else's draft", /only edit invoices you drafted/);
+    await expectThrow(() => q1("select public.delete_draft_invoice($1)", [edDraft.uuid]), "…or delete it", /only delete invoices you drafted/);
+    sd = (await q1("select public.submit_invoice_for_issue($1) as j", [sd.uuid])).j;
+    const sub1 = await q1("select submitted_at is not null s from public.sales_invoices where id=$1", [sd.uuid]);
+    ok(sub1.s, "draft sent for issuing");
+    await expectThrow(() => save(sd.uuid, { customer: "Staff-drafted Client", lines: [{ title: "Stoves", qty: 3, unitPrice: 6500 }] }), "preparer can't edit while Finance has it", /with Finance/);
+    await c.query("reset role");
+    const nEd = await q1("select count(*)::int n from public.notifications where kind='invoice_to_issue' and link_ref=$1", [sd.id]);
+    ok(nEd.n >= 1, "editors are notified", nEd.n);
+    await as(editor);
+    await q1("select public.return_invoice_draft($1, 'Add the LPO number') as j", [sd.uuid]);
+    await as(viewer);
+    sd = await save(sd.uuid, { customer: "Staff-drafted Client", poNumber: "LPO-9", lines: [{ title: "Stoves", qty: 2, unitPrice: 6500 }] });
+    ok(sd.state === "draft", "returned draft can be edited by its preparer again");
+    await q1("select public.submit_invoice_for_issue($1) as j", [sd.uuid]);
+    await as(editor);
+    const si2 = await issue(sd.uuid);
+    ok(/^IGN-INV-/.test(si2.id), "editor issues the staff-drafted invoice", si2.id);
+    await c.query("reset role");
+    const nPrep = await q1("select count(*)::int n from public.notifications where kind='invoice_issued' and link_ref=$1 and recipient_email=lower($2)", [si2.id, viewer.email]);
+    ok(nPrep.n === 1, "preparer is told it was issued", nPrep.n);
+    await as(viewer);
+    const dd = await save(null, { customer: "Scrap me", lines: [] });
+    await q1("select public.delete_draft_invoice($1)", [dd.uuid]);
+    ok(true, "preparer can delete their own draft");
+  }
 
   await c.query("reset role");
   await c.query("rollback");

@@ -60,6 +60,7 @@ export const subnavs: Record<string, { t: string; l: string }[]> = {
     { t: "sp-petty", l: "Petty Cash" },
     { t: "sp-claims", l: "Expense Claims" },
     { t: "sp-advances", l: "Travel Advances" },
+    { t: "sp-invoices", l: "Invoices" },
     { t: "sp-perf", l: "Performance" },
     { t: "sp-files", l: "Documents" },
     { t: "sp-fb", l: "Give Feedback" },

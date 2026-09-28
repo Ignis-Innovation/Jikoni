@@ -37,6 +37,8 @@ export interface SalesInvoice {
   paid: number; balance: number; poNumber: string | null; engagementRef: string | null; notes: string | null;
   includePaymentDetails: boolean; paymentDetails: BankDetails | null; fromDetails: FromDetails | null;
   includeTerms: boolean; termsConditions: string | null;   // T&C text snapshotted at issue
+  ownerName: string | null; ownerEmail: string | null;      // who drafted it (any staff member may — mig 0092)
+  submittedAt: string | null; returnNote: string | null;    // sent to Finance for issuing / returned with a note
   lines: InvoiceLine[]; receipts: ArReceipt[]; createdAt: string;
 }
 export interface InvoiceInput {
@@ -364,7 +366,9 @@ interface AppApi {
   openInvoice: (inv?: SalesInvoice) => void;
   closeInvoice: () => void;
   salesInvoices: SalesInvoice[];
-  saveInvoice: (uuid: string | null, v: InvoiceInput, issue: boolean) => Promise<boolean>;
+  saveInvoice: (uuid: string | null, v: InvoiceInput, issue: boolean | "send") => Promise<boolean>;
+  sendInvoiceForIssue: (uuid: string) => Promise<void>;
+  returnInvoice: (uuid: string, note: string) => Promise<void>;
   issueInvoice: (uuid: string) => Promise<void>;
   deleteDraftInvoice: (uuid: string) => Promise<void>;
   cancelInvoice: (uuid: string, reason: string) => Promise<void>;
@@ -988,7 +992,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Sales invoices (Receivables) — full header + lines + payments; overdue derived here.
     const { data: sis } = await supabase
       .from("sales_invoices")
-      .select("id, ref, state, customer, bill_to_address, bill_to_contact, bill_to_email, crm_partner_id, currency, fx_rate, invoice_date, due_date, payment_terms_days, vat_applicable, vat_rate, vat_inclusive, net, vat, total, total_kes, amount_paid, po_number, engagement_ref, notes, include_payment_details, payment_details, from_details, include_terms, terms_conditions, created_at, lines:sales_invoice_lines(position, title, description, qty, unit_price, amount), receipts:ar_receipts(amount, amount_kes, receipt_date, method, reference, created_at)")
+      .select("id, ref, state, customer, bill_to_address, bill_to_contact, bill_to_email, crm_partner_id, currency, fx_rate, invoice_date, due_date, payment_terms_days, vat_applicable, vat_rate, vat_inclusive, net, vat, total, total_kes, amount_paid, po_number, engagement_ref, notes, include_payment_details, payment_details, from_details, include_terms, terms_conditions, submitted_at, return_note, owner:app_users!sales_invoices_owner_id_fkey(name, email), created_at, lines:sales_invoice_lines(position, title, description, qty, unit_price, amount), receipts:ar_receipts(amount, amount_kes, receipt_date, method, reference, created_at)")
       .order("created_at", { ascending: false })
       .limit(500);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });   // Nairobi calendar date
@@ -1006,6 +1010,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         poNumber: r.po_number, engagementRef: r.engagement_ref, notes: r.notes,
         includePaymentDetails: !!r.include_payment_details, paymentDetails: r.payment_details ?? null, fromDetails: r.from_details ?? null,
         includeTerms: !!r.include_terms, termsConditions: r.terms_conditions ?? null,
+        ownerName: r.owner?.name ?? null, ownerEmail: r.owner?.email ? String(r.owner.email).toLowerCase() : null,
+        submittedAt: r.submitted_at ?? null, returnNote: r.return_note ?? null,
         lines: ((r.lines ?? []) as any[]).sort((a, b) => a.position - b.position).map((l) => ({
           title: l.title ?? "", description: l.description ?? "", qty: Number(l.qty), unitPrice: Number(l.unit_price), amount: Number(l.amount) })),
         receipts: ((r.receipts ?? []) as any[]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((x) => ({
@@ -1737,10 +1743,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     vatApplicable: v.vatApplicable, vatRate: v.vatApplicable ? v.vatRate : 0, vatInclusive: v.vatApplicable && !!v.vatInclusive, poNumber: v.poNumber ?? "", engagementRef: v.engagementRef ?? "",
     notes: v.notes ?? "", includePaymentDetails: v.includePaymentDetails, includeTerms: v.includeTerms, lines: v.lines,
   });
-  async function saveInvoice(uuid: string | null, v: InvoiceInput, issue: boolean): Promise<boolean> {
+  async function saveInvoice(uuid: string | null, v: InvoiceInput, issue: boolean | "send"): Promise<boolean> {
     const { data, error } = await supabase.rpc("save_sales_invoice", { p_id: uuid, p_data: toInvoiceJson(v) });
     if (error) { toast("Invoice not saved", niceError(error.message)); return false; }
     let j = data as any;
+    if (issue === "send") {
+      const r = await supabase.rpc("submit_invoice_for_issue", { p_id: j.uuid });
+      setInvOpen(false); setInvEdit(null);
+      await loadFromDb().catch(() => {});
+      if (r.error) { toast("Saved as draft — not sent", niceError(r.error.message)); return false; }
+      toast("Sent to Finance", `${v.customer} · Finance will check and issue it`);
+      return true;
+    }
     if (issue) {
       const r = await supabase.rpc("issue_sales_invoice", { p_id: j.uuid });
       if (r.error) {
@@ -1754,6 +1768,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await loadFromDb().catch(() => {});
     toast(issue ? `${j.id} issued to ${v.customer}` : "Draft saved", issue ? `${v.currency} ${Number(j.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}${j.dueDate ? ` · due ${j.dueDate}` : ""}` : `${v.customer} · not numbered until issued`);
     return true;
+  }
+  async function sendInvoiceForIssue(uuid: string) {
+    const { error } = await supabase.rpc("submit_invoice_for_issue", { p_id: uuid });
+    if (error) { toast("Not sent", niceError(error.message)); return; }
+    await loadFromDb().catch(() => {});
+    toast("Sent to Finance", "Finance will check and issue it");
+  }
+  async function returnInvoice(uuid: string, note: string) {
+    const { error } = await supabase.rpc("return_invoice_draft", { p_id: uuid, p_note: note });
+    if (error) { toast("Not returned", niceError(error.message)); return; }
+    await loadFromDb().catch(() => {});
+    toast("Returned to the preparer", note);
   }
   async function issueInvoice(uuid: string) {
     const { data, error } = await supabase.rpc("issue_sales_invoice", { p_id: uuid });
@@ -3059,7 +3085,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     grnFor, openGrn: (po: PORow) => setGrnFor(po), closeGrn: () => setGrnFor(null), recordGrn,
     invOpen, invEdit, openInvoice: (inv?: SalesInvoice) => { setInvEdit(inv ?? null); setInvOpen(true); },
     closeInvoice: () => { setInvOpen(false); setInvEdit(null); },
-    salesInvoices, saveInvoice, issueInvoice, deleteDraftInvoice, cancelInvoice,
+    salesInvoices, saveInvoice, sendInvoiceForIssue, returnInvoice, issueInvoice, deleteDraftInvoice, cancelInvoice,
     apInvoices, payments, journals, accounts,
     invoiceFor, openCaptureInvoice: (po: PORow) => setInvoiceFor(po), closeCaptureInvoice: () => setInvoiceFor(null), captureInvoice, approveInvoice, payInvoice, markInvoicePaid,
     receiptFor, openReceipt: (inv: SalesInvoice) => setReceiptFor(inv), closeReceipt: () => setReceiptFor(null), recordReceipt,

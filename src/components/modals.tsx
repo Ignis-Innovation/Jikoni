@@ -710,7 +710,9 @@ const blankInvLine = (): InvLineEdit => ({ title: "", description: "", qty: "1",
 const niceDate = (iso: string) => new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 
 export function InvoiceModal() {
-  const { invOpen, invEdit, closeInvoice, saveInvoice, crm, projectDetails, appConfig, toast } = useApp();
+  const { invOpen, invEdit, closeInvoice, saveInvoice, crm, projectDetails, appConfig, toast, level } = useApp();
+  // only an editor issues; everyone else drafts and sends it to Finance (mig 0092)
+  const canIssue = level("finance") >= 2;
   const liveRate = useUsdKesRate();
   const today = keToday();
   const vatRates: number[] = Array.isArray(appConfig.invoice_vat_rates) ? appConfig.invoice_vat_rates : [16, 8, 0];
@@ -804,7 +806,7 @@ export function InvoiceModal() {
       lines: lines.map((l) => ({ title: l.title.trim(), description: l.description.trim(), qty: Number(l.qty) || 1, unitPrice: Number(l.unitPrice) || 0 })),
     };
   }
-  async function submit(issue: boolean) {
+  async function submit(issue: boolean | "send") {
     const v = input(); if (!v) return;
     if (issue && !(lineSum > 0)) { toast("Add a priced line", "An invoice needs at least one line with an amount"); return; }
     setBusy(true);
@@ -830,7 +832,10 @@ export function InvoiceModal() {
     <ModalShell open={invOpen} onClose={closeInvoice} width={820}>
       <div className="mh">
         <h3>{invEdit ? `Edit draft invoice` : "New invoice"}</h3>
-        <p>Invoice number <strong>{nextNo || `IGN-${today.slice(0, 4)}-…`}</strong> — generated automatically, unique and in sequence (IGN-INV-YYYY-NNN). It is assigned and dated the moment you issue; drafts don't use up a number.</p>
+        <p>{canIssue
+          ? <>Invoice number <strong>{nextNo || `IGN-INV-${today.slice(0, 4)}-…`}</strong> — generated automatically, unique and in sequence (IGN-INV-YYYY-NNN). It is assigned and dated the moment you issue; drafts don't use up a number.</>
+          : <>Fill in the invoice and <strong>Send for issuing</strong>. Finance checks it and issues it — that's when it gets its IGN-INV number and goes to the client.</>}</p>
+        {invEdit?.returnNote && <p style={{ color: "var(--red)" }}>Returned by Finance: {invEdit.returnNote}</p>}
       </div>
       <div className="mb">
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
@@ -935,7 +940,9 @@ export function InvoiceModal() {
         <button className="btn" onClick={closeInvoice}>Cancel</button>
         <button className="btn" onClick={preview}>Preview PDF</button>
         <button className="btn" disabled={busy} onClick={() => submit(false)}>Save draft</button>
-        <button className="btn primary" disabled={busy} onClick={() => submit(true)}>Issue invoice</button>
+        {canIssue
+          ? <button className="btn primary" disabled={busy} onClick={() => submit(true)}>Issue invoice</button>
+          : <button className="btn primary" disabled={busy} onClick={() => submit("send")}>Send for issuing</button>}
       </div>
     </ModalShell>
   );
