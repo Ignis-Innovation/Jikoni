@@ -140,6 +140,26 @@ try {
   ok(vo.vatInclusive === false && Number(vo.total) === 100, "'prices include VAT' is ignored when VAT doesn't apply", `${vo.vatInclusive} ${vo.total}`);
   await q1("select public.delete_draft_invoice($1)", [vo.uuid]);
 
+  // 3d. numbering never skips: a failed issue doesn't use a number; a drifted counter can't cause a gap
+  {
+    await c.query("reset role");
+    const lastNo = async () => (await q1("select coalesce(max(substring(ref from '(\\d+)$')::int),0) n from public.sales_invoices where ref like $1", [`IGN-INV-${year}-%`])).n;
+    const before3 = await lastNo();
+    await as(editor);
+    const g1 = await save(null, { customer: "Gap Test", currency: "KES", lines: [{ title: "x", qty: 1, unitPrice: 100 }] });
+    await c.query("reset role");
+    await c.query("insert into public.gl_periods(entity_id, period, state) values ((select id from public.entities where code='KE'), to_char(public.ke_today(),'YYYY-MM'), 'closed') on conflict (entity_id, period) do update set state='closed'");
+    await as(editor);
+    await expectThrow(() => issue(g1.uuid), "issuing into a closed period fails", /closed/);
+    await c.query("reset role");
+    await c.query("update public.gl_periods set state='open' where period=to_char(public.ke_today(),'YYYY-MM')");
+    ok(await lastNo() === before3, "…and that failed issue did not use up a number", before3);
+    await c.query("update public.ref_counters set n = n + 7 where kind=$1", [`IGN-INV-${year}`]);   // simulate counter drift
+    await as(editor);
+    const g1i = await issue(g1.uuid);
+    ok(g1i.id === `IGN-INV-${year}-${String(before3 + 1).padStart(3, "0")}`, "next invoice is exactly last + 1 even if the counter drifted", g1i.id);
+  }
+
   // 4. payments on the USD invoice: part, overpay, final
   await expectThrow(() => pay(i1.id, 5000), "overpayment (more than the balance) rejected");
   await expectThrow(() => pay(i1.id, 10, "2999-01-01"), "future-dated payment rejected");
