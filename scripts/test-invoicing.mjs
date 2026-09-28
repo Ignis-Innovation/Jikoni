@@ -97,6 +97,8 @@ try {
     lines: [{ title: "Training", qty: 2, unitPrice: 25000 }] });
   ok(Number(k.subtotal) === 50000 && Number(k.vat) === 8000 && Number(k.total) === 58000, "16% VAT computed (50000 + 8000)", `${k.subtotal}/${k.vat}/${k.total}`);
   let i2 = await issue(k.uuid);
+  const noPo = await q1("select po_number from public.sales_invoices where id=$1", [k.uuid]);
+  ok(noPo.po_number === null && i2.state === "issued", "PO number is optional — invoice without an LPO issues fine", JSON.stringify(noPo));
   const expNo2 = `IGN-${year}-${String(before + 2).padStart(3, "0")}`;
   ok(i2.id === expNo2, "second invoice gets the next number (sequential)", i2.id);
   await c.query("reset role");

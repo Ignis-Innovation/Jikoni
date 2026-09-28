@@ -8,6 +8,7 @@ import { Note } from "./ui";
 import type { InvoiceInput } from "../store";
 import { bankFor, fromDetails, money2, curMoney, keToday, addDaysIso } from "../lib/invoiceDoc";
 import { previewInvoicePdf } from "../lib/invoicePdf";
+import { supabase } from "../lib/supabase";
 
 export function ModalShell({ open, onClose, width, className, children }: { open: boolean; onClose: () => void; width?: number; className?: string; children: React.ReactNode }) {
   return (
@@ -725,7 +726,15 @@ export function InvoiceModal() {
   const [includePay, setIncludePay] = useState(true);
   const [lines, setLines] = useState<InvLineEdit[]>([blankInvLine()]);
   const [busy, setBusy] = useState(false);
+  const [nextNo, setNextNo] = useState("");
   const firstRef = useRef<HTMLInputElement>(null);
+  // Next number in the single IGN-YYYY-NNN sequence (assigned for real only at issue).
+  useEffect(() => {
+    if (!invOpen) return;
+    const yr = today.slice(0, 4);
+    supabase.from("ref_counters").select("n").eq("kind", `IGN-${yr}`).maybeSingle()
+      .then(({ data }) => setNextNo(`IGN-${yr}-${String((Number(data?.n) || 0) + 1).padStart(3, "0")}`));
+  }, [invOpen]);
 
   useEffect(() => {
     if (!invOpen) return;
@@ -810,7 +819,7 @@ export function InvoiceModal() {
     <ModalShell open={invOpen} onClose={closeInvoice} width={820}>
       <div className="mh">
         <h3>{invEdit ? `Edit draft invoice` : "New invoice"}</h3>
-        <p>Standard Ignis invoice · numbered <strong>IGN-{today.slice(0, 4)}-NNN</strong> and dated when issued · drafts can be edited until then</p>
+        <p>Invoice number <strong>{nextNo || `IGN-${today.slice(0, 4)}-…`}</strong> — generated automatically, unique and in sequence (IGN-YYYY-NNN). It is assigned and dated the moment you issue; drafts don't use up a number.</p>
       </div>
       <div className="mb">
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
@@ -846,7 +855,7 @@ export function InvoiceModal() {
               <div><label>Due date</label><input className="field" value={niceDate(due)} readOnly style={wash} /></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <div><label>PO number <span style={sub}>· optional</span></label><input className="field" placeholder="Client PO no." value={poNumber} onChange={(e) => setPoNumber(e.target.value)} /></div>
+              <div><label>LPO no. <span style={sub}>· optional</span></label><input className="field" placeholder="Leave blank if no LPO" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} /></div>
               <div><label>VAT</label>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 5, textTransform: "none", letterSpacing: 0, fontWeight: 500, margin: 0 }}>

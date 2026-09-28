@@ -141,6 +141,11 @@ try {
   await page.waitForTimeout(800);
   await page.getByRole("button", { name: /new invoice/i }).first().click();
   await page.waitForSelector(modal);
+  await page.waitForTimeout(800);
+  const head = await page.locator(`${modal} .mh`).innerText();
+  const expNext = `IGN-${year}-${String(ignBefore + 1).padStart(3, "0")}`;
+  ok(head.includes(expNext), "form shows the next invoice number (auto, sequential)", expNext);
+  ok(await page.locator(`${modal} input[placeholder="Leave blank if no LPO"]`).count() === 1, "PO / LPO field present and left blank (optional)", "");
   await page.fill(`${modal} input[placeholder^="Type the client"]`, "E2E-TEST Keystone Agribusiness Consultants Ltd");
   await page.fill(`${modal} textarea[placeholder^="e.g. P.O. Box"]`, "Nairobi, Kenya");
   await page.fill(`${modal} input[placeholder^="e.g. Elijah"]`, "Elijah Kang'ara");
