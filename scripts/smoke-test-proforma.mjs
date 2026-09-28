@@ -61,7 +61,7 @@ try {
 
   // --- accept converts to a real tax invoice (eTIMS + GL via submit_sales_invoice) ---
   const acc = await rpc(`public.accept_proforma('${ref}')`);
-  check("accept_proforma returns a tax invoice ref", /^SI-/.test(acc.invoice || ""), acc.invoice);
+  check("accept_proforma returns a tax invoice ref", /^IGN-\d{4}-\d{3}$/.test(acc.invoice || ""), acc.invoice);
   const [si] = await q(`select net, total, customer from sales_invoices where ref = $1`, acc.invoice);
   check("tax invoice net matches proforma subtotal", Number(si.net) === sub, `${si.net} vs ${sub}`);
   check("tax invoice total carries 16% VAT", Number(si.total) === Math.round(sub * 1.16), `${si.total}`);

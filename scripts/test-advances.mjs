@@ -106,6 +106,42 @@ try {
   j = (await c.query("select public.settle_travel_advance($1,$2) as j", [ref, "Balance returned"])).rows[0].j;
   ok(j.state === "settled", "settle → settled", j.state);
 
+  // 9. reconcile AGAINST planned lines (mig 0084): planned ids, a spent-0 item, an unplanned extra
+  await as(holder);
+  const planned2 = JSON.stringify([
+    { category: "transport", detail: "matatu", amount: 1500, isPerDiem: false },
+    { category: "accommodation", detail: "hotel", amount: 4000, isPerDiem: false },
+    { isPerDiem: true, perDiemDays: 2, perDiemRate: 1000 },
+  ]);
+  let k = (await c.query("select public.submit_travel_advance($1,$2,$3::jsonb) as j", ["Planned-reconcile trip", project, planned2])).rows[0].j;
+  const ref2 = k.id;
+  await as(approver);
+  await c.query("select public.decide_travel_advance($1,true,null)", [ref2]);
+  await c.query("select public.issue_travel_advance($1,$2)", [ref2, "T2"]);
+  await as(holder);
+  const [pT, pA, pP] = k.plannedLines;
+  const foreignPlanned = j.plannedLines[0].id;   // planned line of the first advance
+  await expectThrow(() => c.query("select public.reconcile_travel_advance($1,$2::jsonb)", [ref2,
+    JSON.stringify([{ amount: 100, plannedLineId: foreignPlanned }])]),
+    "plannedLineId from ANOTHER advance is rejected");
+  await expectThrow(() => c.query("select public.reconcile_travel_advance($1,$2::jsonb)", [ref2,
+    JSON.stringify([{ category: "other", detail: "unplanned zero", amount: 0 }])]), "unplanned line with 0 is rejected");
+  const rec2 = JSON.stringify([
+    { plannedLineId: pT.id, amount: 1800, receiptPaths: ["advances/t.pdf"] },     // category/detail inherited
+    { plannedLineId: pA.id, amount: 0 },                                           // planned, nothing spent
+    { plannedLineId: pP.id, isPerDiem: true, perDiemDays: 1, perDiemRate: 1000 },
+    { category: "airtime", detail: "unplanned bundle", amount: 200 },
+  ]);
+  k = (await c.query("select public.reconcile_travel_advance($1,$2::jsonb) as j", [ref2, rec2])).rows[0].j;
+  ok(Number(k.spent) === 3000, "planned-reconcile spent = 1800+0+1000+200 = 3000", "spent=" + k.spent);
+  ok(Number(k.balance) === 4500, "planned-reconcile balance = 7500-3000 = 4500", "balance=" + k.balance);
+  const byPlan = Object.fromEntries(k.lines.filter((l) => l.plannedLineId).map((l) => [l.plannedLineId, l]));
+  ok(Object.keys(byPlan).length === 3, "3 actual lines linked to planned lines", Object.keys(byPlan).length);
+  ok(byPlan[pT.id]?.category === "transport" && byPlan[pT.id]?.detail === "matatu", "linked line inherits planned category/detail", JSON.stringify(byPlan[pT.id]));
+  ok(Number(byPlan[pA.id]?.amount) === 0, "spent-0 planned item recorded as 0", byPlan[pA.id]?.amount);
+  ok((byPlan[pT.id]?.receiptPaths || []).length === 1, "receipt stored on linked line", JSON.stringify(byPlan[pT.id]?.receiptPaths));
+  ok(k.lines.some((l) => !l.plannedLineId && l.category === "airtime"), "unplanned extra line stored unlinked", "");
+
   await c.query("reset role");
   await c.query("rollback");
   console.log(`\n${failures} failing assertion(s)`);

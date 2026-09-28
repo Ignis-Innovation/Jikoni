@@ -5,6 +5,9 @@ import { useApp } from "../store";
 import { budgetLines, kes, reqRouting, reqBudgetState, engStages, engChannels } from "../data";
 import { useUsdKesRate, getUsdKesRate, FALLBACK_USD_KES } from "../lib/fx";
 import { Note } from "./ui";
+import type { InvoiceInput } from "../store";
+import { bankFor, fromDetails, money2, curMoney, keToday, addDaysIso } from "../lib/invoiceDoc";
+import { previewInvoicePdf } from "../lib/invoicePdf";
 
 export function ModalShell({ open, onClose, width, className, children }: { open: boolean; onClose: () => void; width?: number; className?: string; children: React.ReactNode }) {
   return (
@@ -564,37 +567,64 @@ export function CaptureInvoiceModal() {
   );
 }
 
-/* ================= RECORD AR RECEIPT ================= */
+/* ================= RECORD A PAYMENT AGAINST A SALES INVOICE ================= */
 export function ReceiptModal() {
   const { receiptFor, closeReceipt, recordReceipt, toast } = useApp();
+  const today = keToday();
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("bank");
+  const [date, setDate] = useState(today);
+  const [reference, setReference] = useState("");
   useEffect(() => {
-    if (receiptFor) { setAmount(String(receiptFor.tot)); setMethod("bank"); }
+    if (receiptFor) { setAmount(String(receiptFor.balance)); setMethod("bank"); setDate(today); setReference(""); }
   }, [receiptFor]);
+  const cur = receiptFor?.currency ?? "KES";
+  const amt = parseFloat(amount) || 0;
+  const after = receiptFor ? Math.max(0, receiptFor.balance - amt) : 0;
   function save() {
     if (!receiptFor) return;
-    const amt = parseFloat(amount) || 0;
-    if (amt <= 0) { toast("Enter an amount", "The receipt amount is required"); return; }
-    recordReceipt(receiptFor.id, amt, method);
+    if (amt <= 0) { toast("Enter an amount", "The amount received is required"); return; }
+    if (amt > receiptFor.balance + 0.005) { toast("More than the balance", `Outstanding is ${curMoney(cur, receiptFor.balance)}`); return; }
+    if (!date || date > today) { toast("Check the date", "The payment date can't be in the future"); return; }
+    recordReceipt(receiptFor.id, amt, method, date, reference.trim());
   }
   return (
-    <ModalShell open={!!receiptFor} onClose={closeReceipt} width={460}>
-      <div className="mh"><h3>Record a receipt</h3><p>{receiptFor ? `Collection against ${receiptFor.id} · ${receiptFor.cust}` : "Collection"}</p></div>
-      <div className="mb">
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}><label>Amount (KES)</label><input className="field" style={{ width: "100%" }} type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
-          <div style={{ width: 150 }}>
-            <label>Method</label>
-            <select className="field" style={{ width: "100%" }} value={method} onChange={(e) => setMethod(e.target.value)}>
-              <option value="bank">Bank</option><option value="mpesa">M-Pesa</option>
-            </select>
+    <ModalShell open={!!receiptFor} onClose={closeReceipt} width={520}>
+      <div className="mh"><h3>Record a payment</h3><p>{receiptFor ? `Against ${receiptFor.id} · ${receiptFor.customer}` : "Payment"}</p></div>
+      {receiptFor && (
+        <div className="mb">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, fontSize: 12.5 }}>
+            <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}><div className="rl">Invoice total</div>{curMoney(cur, receiptFor.total)}</div>
+            <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}><div className="rl">Paid so far</div>{curMoney(cur, receiptFor.paid)}</div>
+            <div className="reqbox" style={{ background: "var(--flame-soft)", borderColor: "transparent", color: "var(--ink)" }}><div className="rl">Outstanding</div><strong>{curMoney(cur, receiptFor.balance)}</strong></div>
           </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label>Amount received ({cur})</label><input className="field" style={{ width: "100%" }} type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+            <div style={{ width: 160 }}><label>Date received</label><input className="field" style={{ width: "100%" }} type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ width: 160 }}>
+              <label>Method</label>
+              <select className="field" style={{ width: "100%" }} value={method} onChange={(e) => setMethod(e.target.value)}>
+                <option value="bank">Bank transfer</option><option value="mpesa">M-Pesa</option><option value="cheque">Cheque</option><option value="other">Other</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}><label>Reference <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional</span></label><input className="field" style={{ width: "100%" }} placeholder="e.g. bank TT ref / M-Pesa code" value={reference} onChange={(e) => setReference(e.target.value)} /></div>
+          </div>
+          {receiptFor.receipts.length > 0 && (
+            <table className="tbl">
+              <thead><tr><th>Earlier payments</th><th>Method</th><th>Ref</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
+              <tbody>{receiptFor.receipts.map((r, i) => (
+                <tr key={i}><td className="mono">{r.date}</td><td>{r.method}</td><td style={{ fontSize: 12 }}>{r.reference || "—"}</td><td className="mono" style={{ textAlign: "right" }}>{money2(r.amount)}</td></tr>
+              ))}</tbody>
+            </table>
+          )}
+          <Note>{amt > 0 ? (after <= 0.005 ? <>This settles the invoice in full — it will be marked <strong>Paid</strong>.</> : <>Leaves <strong>{curMoney(cur, after)}</strong> outstanding — the invoice becomes <strong>Partially paid</strong>.</>) : "Enter the amount received."}{cur === "USD" ? ` Posted to the ledger in KES at the invoice rate (${receiptFor.fxRate}).` : ""}</Note>
         </div>
-      </div>
+      )}
       <div className="mf">
         <button className="btn" onClick={closeReceipt}>Cancel</button>
-        <button className="btn primary" onClick={save}>Record receipt</button>
+        <button className="btn primary" onClick={save}>Record payment</button>
       </div>
     </ModalShell>
   );
@@ -669,65 +699,215 @@ export function BankChangeModal() {
   );
 }
 
-/* ================= RAISE SALES INVOICE ================= */
+/* ================= SALES INVOICE (standard Ignis invoice — draft / issue) ================= */
+type InvLineEdit = { title: string; description: string; qty: string; unitPrice: string };
+const blankInvLine = (): InvLineEdit => ({ title: "", description: "", qty: "1", unitPrice: "" });
+const niceDate = (iso: string) => new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+
 export function InvoiceModal() {
-  const { invOpen, closeInvoice, submitInvoice, toast } = useApp();
-  const [cust, setCust] = useState("Makueni County VTCs");
-  const [desc, setDesc] = useState("");
-  const [amtStr, setAmtStr] = useState("");
-  const [due, setDue] = useState("week");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const { invOpen, invEdit, closeInvoice, saveInvoice, crm, projectDetails, appConfig, toast } = useApp();
+  const liveRate = useUsdKesRate();
+  const today = keToday();
+  const vatRates: number[] = Array.isArray(appConfig.invoice_vat_rates) ? appConfig.invoice_vat_rates : [16, 8, 0];
+  const [customer, setCustomer] = useState("");
+  const [partnerId, setPartnerId] = useState<string | null>(null);
+  const [address, setAddress] = useState("");
+  const [contact, setContact] = useState("");
+  const [email, setEmail] = useState("");
+  const [currency, setCurrency] = useState<"KES" | "USD">("KES");
+  const [fxRate, setFxRate] = useState("");
+  const [terms, setTerms] = useState("14");
+  const [vatOn, setVatOn] = useState(false);
+  const [vatRate, setVatRate] = useState("16");
+  const [poNumber, setPoNumber] = useState("");
+  const [engagementRef, setEngagementRef] = useState("");
+  const [notes, setNotes] = useState("");
+  const [includePay, setIncludePay] = useState(true);
+  const [lines, setLines] = useState<InvLineEdit[]>([blankInvLine()]);
+  const [busy, setBusy] = useState(false);
+  const firstRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
-    if (invOpen) {
-      setCust("Makueni County VTCs"); setDesc(""); setAmtStr(""); setDue("week");
-      setTimeout(() => inputRef.current?.focus(), 60);
+    if (!invOpen) return;
+    const e = invEdit;
+    setCustomer(e?.customer ?? ""); setPartnerId(e?.crmPartnerId ?? null);
+    setAddress(e?.billToAddress ?? ""); setContact(e?.billToContact ?? ""); setEmail(e?.billToEmail ?? "");
+    setCurrency(e?.currency ?? "KES");
+    setFxRate(e && e.currency === "USD" ? String(e.fxRate) : String(appConfig.usd_kes_rate ?? ""));
+    setTerms(String(e?.terms ?? 14));
+    setVatOn(e?.vatApplicable ?? false); setVatRate(String(e?.vatApplicable ? e.vatRate : (vatRates[0] ?? 16)));
+    setPoNumber(e?.poNumber ?? ""); setEngagementRef(e?.engagementRef ?? "");
+    setNotes(e ? (e.notes ?? "") : String(appConfig.invoice_default_notes ?? ""));
+    setIncludePay(e?.includePaymentDetails ?? true);
+    setLines(e && e.lines.length ? e.lines.map((l) => ({ title: l.title, description: l.description, qty: String(l.qty), unitPrice: String(l.unitPrice) })) : [blankInvLine()]);
+    setBusy(false);
+    setTimeout(() => firstRef.current?.focus(), 60);
+  }, [invOpen, invEdit]);
+  // a fresh USD invoice picks up the live rate once it arrives (still editable)
+  useEffect(() => { if (invOpen && !invEdit && currency === "USD" && liveRate && !fxRate) setFxRate(String(Math.round(liveRate * 100) / 100)); }, [liveRate, currency, invOpen]);
+
+  function pickCustomer(name: string) {
+    setCustomer(name);
+    const p = crm.partners.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
+    setPartnerId(p?.id ?? null);
+    if (p) {
+      if (!contact && p.contactName) setContact(p.contactName);
+      if (!email && p.email) setEmail(p.email);
+      if (!address && p.country) setAddress(p.country === "KE" ? "Nairobi, Kenya" : p.country);
     }
-  }, [invOpen]);
+  }
+  const setLine = (i: number, patch: Partial<InvLineEdit>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
+  const lineAmt = (l: InvLineEdit) => Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100) / 100;
+  const subtotal = lines.reduce((s, l) => s + lineAmt(l), 0);
+  const rate = vatOn ? Number(vatRate) || 0 : 0;
+  const vat = Math.round(subtotal * rate) / 100;
+  const total = subtotal + vat;
+  const termDays = Math.max(0, Math.round(Number(terms) || 0));
+  const due = addDaysIso(today, termDays);
+  const bank = bankFor(appConfig, currency);
+  const bankReady = !!(bank && bank.account_no);
 
-  const net = parseFloat(amtStr) || 0;
-  const vat = net * 0.16;
-  const tot = net + vat;
-
-  function submit() {
-    if (!net) { toast("Add an amount", "Needed to raise the invoice"); return; }
-    submitInvoice(cust, desc.trim(), net, due);
+  function input(): InvoiceInput | null {
+    if (!customer.trim()) { toast("Who is the invoice for?", "Type the client's name"); return null; }
+    if (currency === "USD" && !(Number(fxRate) > 0)) { toast("Enter the exchange rate", "KES per 1 USD — used to post the ledger in KES"); return null; }
+    if (Number(terms) < 0 || Number(terms) > 365) { toast("Check the payment terms", "Between 0 and 365 days"); return null; }
+    for (const l of lines) {
+      const blank = !l.title.trim() && !l.description.trim() && !Number(l.unitPrice);
+      if (blank) continue;
+      if (!(Number(l.qty) > 0)) { toast("Check the quantities", "Each line needs a quantity greater than zero"); return null; }
+      if (Number(l.unitPrice) < 0) { toast("Check the prices", "A unit price can't be negative"); return null; }
+    }
+    return {
+      customer: customer.trim(), billToAddress: address, billToContact: contact, billToEmail: email, crmPartnerId: partnerId,
+      currency, fxRate: Number(fxRate) || undefined, terms: termDays, vatApplicable: vatOn, vatRate: rate,
+      poNumber, engagementRef, notes, includePaymentDetails: includePay,
+      lines: lines.map((l) => ({ title: l.title.trim(), description: l.description.trim(), qty: Number(l.qty) || 1, unitPrice: Number(l.unitPrice) || 0 })),
+    };
+  }
+  async function submit(issue: boolean) {
+    const v = input(); if (!v) return;
+    if (issue && !(subtotal > 0)) { toast("Add a priced line", "An invoice needs at least one line with an amount"); return; }
+    setBusy(true);
+    const ok = await saveInvoice(invEdit?.uuid ?? null, v, issue);
+    if (!ok) setBusy(false);
+  }
+  function preview() {
+    const v = input(); if (!v) return;
+    previewInvoicePdf({
+      number: invEdit?.id ?? "DRAFT", status: "draft", invoiceDate: today, dueDate: due, terms: termDays,
+      customer: v.customer, billToAddress: address, billToContact: contact, billToEmail: email,
+      engagementRef, poNumber, currency, subtotal, vatApplicable: vatOn, vatRate: rate, vat, total, paid: 0, notes,
+      lines: v.lines.filter((l) => l.title || l.description || l.unitPrice).map((l) => ({ ...l, amount: Math.round(l.qty * l.unitPrice * 100) / 100 })),
+      paymentDetails: includePay ? bank : null, paymentNote: includePay ? String(appConfig.invoice_payment_note ?? "") : null,
+      from: fromDetails(appConfig),
+    }).catch((e) => toast("Preview failed", String(e?.message ?? e)));
   }
 
+  const sub = { textTransform: "none", fontWeight: 400, letterSpacing: 0 } as const;
+  const wash = { background: "var(--wash, #F7F4EE)" };
+  const engOptions = [...Object.keys(projectDetails), ...crm.engUp.map((e) => e.n), ...crm.engDown.map((e) => e.n)];
   return (
-    <ModalShell open={invOpen} onClose={closeInvoice} width={500}>
-      <div className="mh"><h3>Raise a sales invoice</h3><p>eTIMS-compliant · to an institution or customer</p></div>
+    <ModalShell open={invOpen} onClose={closeInvoice} width={820}>
+      <div className="mh">
+        <h3>{invEdit ? `Edit draft invoice` : "New invoice"}</h3>
+        <p>Standard Ignis invoice · numbered <strong>IGN-{today.slice(0, 4)}-NNN</strong> and dated when issued · drafts can be edited until then</p>
+      </div>
       <div className="mb">
-        <div>
-          <label>Bill to</label>
-          <select className="field" style={{ width: "100%" }} value={cust} onChange={(e) => setCust(e.target.value)}>
-            <option>Makueni County VTCs</option><option>Catholic Diocese — Machakos</option><option>Kiambu cluster</option><option>CLASP</option><option>Nakuru institutions</option>
-          </select>
-        </div>
-        <div><label>Description</label><input ref={inputRef} className="field" placeholder="e.g. Institutional cookstoves — deployment batch" value={desc} onChange={(e) => setDesc(e.target.value)} /></div>
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label>Net amount (KES)</label>
-            <input className="field" type="number" min="0" placeholder="0" style={{ width: "100%" }} value={amtStr} onChange={(e) => setAmtStr(e.target.value)} />
+        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <label style={{ color: "var(--flame)" }}>Billed to</label>
+            <div><label>Client name</label>
+              <input ref={firstRef} className="field" list="inv-clients" placeholder="Type the client's name (or pick from CRM)" value={customer} onChange={(e) => pickCustomer(e.target.value)} />
+              <datalist id="inv-clients">{crm.partners.map((p) => <option key={p.id} value={p.name} />)}</datalist>
+            </div>
+            <div><label>Billing address</label><textarea className="field" rows={2} placeholder="e.g. P.O. Box 123, Nairobi, Kenya" value={address} onChange={(e) => setAddress(e.target.value)} /></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div><label>Contact person (Attn)</label><input className="field" placeholder="e.g. Elijah Kang'ara" value={contact} onChange={(e) => setContact(e.target.value)} /></div>
+              <div><label>Email <span style={sub}>· optional</span></label><input className="field" placeholder="accounts@client.com" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+            </div>
           </div>
-          <div style={{ width: 150 }}>
-            <label>Terms</label>
-            <select className="field" style={{ width: "100%" }} value={due} onChange={(e) => setDue(e.target.value)}>
-              <option value="today">On receipt</option><option value="week">14 days</option><option value="week30">30 days</option>
-            </select>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <label style={{ color: "var(--flame)" }}>Invoice details</label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div><label>Currency</label>
+                <select className="field" style={{ width: "100%" }} value={currency} onChange={(e) => { const c = e.target.value as "KES" | "USD"; setCurrency(c); if (c === "USD" && !fxRate) setFxRate(String(appConfig.usd_kes_rate ?? (liveRate ? Math.round(liveRate * 100) / 100 : ""))); }}>
+                  <option value="KES">KES</option><option value="USD">USD</option>
+                </select>
+              </div>
+              {currency === "USD"
+                ? <div><label>Rate (KES per USD)</label><input className="field" type="number" min="0" step="0.01" value={fxRate} onChange={(e) => setFxRate(e.target.value)} /></div>
+                : <div><label>Invoice date</label><input className="field" value={`${niceDate(today)}`} readOnly style={wash} title="Set automatically when issued" /></div>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div><label>Payment terms (days)</label>
+                <input className="field" type="number" min="0" max="365" list="inv-terms" value={terms} onChange={(e) => setTerms(e.target.value)} />
+                <datalist id="inv-terms"><option value="0">On receipt</option><option value="7">Net 7</option><option value="14">Net 14</option><option value="30">Net 30</option></datalist>
+              </div>
+              <div><label>Due date</label><input className="field" value={niceDate(due)} readOnly style={wash} /></div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div><label>PO number <span style={sub}>· optional</span></label><input className="field" placeholder="Client PO no." value={poNumber} onChange={(e) => setPoNumber(e.target.value)} /></div>
+              <div><label>VAT</label>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, textTransform: "none", letterSpacing: 0, fontWeight: 500, margin: 0 }}>
+                    <input type="checkbox" checked={vatOn} onChange={(e) => setVatOn(e.target.checked)} /> Applies
+                  </label>
+                  <select className="field" style={{ flex: 1 }} disabled={!vatOn} value={vatRate} onChange={(e) => setVatRate(e.target.value)}>
+                    {vatRates.map((r) => <option key={r} value={r}>{r}%</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="reqbox" style={{ background: "#FCFAF6", color: net > 0 ? "var(--ink)" : "var(--ink-soft)", borderColor: "transparent" }}>
-          <div className="rl">VAT &amp; total</div>
-          {net > 0 ? <>Net {kes(net)} · VAT 16% {kes(vat)} · <strong>Total {kes(tot)}</strong></> : "Enter an amount."}
+        <div><label>Project / engagement reference <span style={sub}>· optional</span></label>
+          <input className="field" list="inv-eng" placeholder="e.g. SF-TA-2026-001, Phase 3 financial modelling workstream" value={engagementRef} onChange={(e) => setEngagementRef(e.target.value)} />
+          <datalist id="inv-eng">{engOptions.map((n, i) => <option key={i} value={n} />)}</datalist>
         </div>
-        <div className="reqbox" style={{ background: "var(--flame-soft)", color: "#0c6f82", borderColor: "transparent" }}>
-          <div className="rl">eTIMS</div>
-          The invoice is filed to KRA eTIMS on issue and tracked through to collection.
+
+        <label style={{ marginTop: 4, color: "var(--flame)" }}>Invoice breakdown</label>
+        <div style={{ display: "grid", gridTemplateColumns: "24px 1.2fr 2fr 60px 110px 110px 26px", gap: 6, fontSize: 11, fontWeight: 600, color: "var(--ink-3, #777)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+          <span>#</span><span>Deliverable</span><span>Description</span><span>Qty</span><span>Unit price</span><span style={{ textAlign: "right" }}>Amount ({currency})</span><span />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {lines.map((l, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "24px 1.2fr 2fr 60px 110px 110px 26px", gap: 6, alignItems: "start" }}>
+              <span style={{ paddingTop: 8, fontSize: 12, color: "var(--ink-3, #777)" }}>{i + 1}</span>
+              <input className="field" placeholder="e.g. Integrated Financial Model" value={l.title} onChange={(e) => setLine(i, { title: e.target.value })} />
+              <textarea className="field" rows={2} placeholder="What was delivered" value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} />
+              <input className="field" type="number" min="0" step="any" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} />
+              <input className="field" type="number" min="0" step="0.01" placeholder="0.00" value={l.unitPrice} onChange={(e) => setLine(i, { unitPrice: e.target.value })} />
+              <input className="field mono" readOnly style={{ ...wash, textAlign: "right" }} value={money2(lineAmt(l))} />
+              <button className="btn" style={{ padding: "4px 7px", fontSize: 11, color: "var(--red)" }} title="Remove line" onClick={() => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : [blankInvLine()])}>×</button>
+            </div>
+          ))}
+        </div>
+        <a href="#" onClick={(e) => { e.preventDefault(); setLines((ls) => [...ls, blankInvLine()]); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>+ Add line item</a>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14, alignItems: "start" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div><label>Notes / payment instructions <span style={sub}>· shown on the invoice</span></label>
+              <textarea className="field" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
+              <input type="checkbox" checked={includePay} onChange={(e) => setIncludePay(e.target.checked)} /> Include payment details ({currency} account)
+            </label>
+            {includePay && (bankReady
+              ? <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{bank!.account_name} · {bank!.bank} · {bank!.account_no}{bank!.branch ? ` · ${bank!.branch}` : ""}</div>
+              : <div style={{ fontSize: 12, color: "var(--red)" }}>No {currency} bank account set yet — add it in Settings → Invoicing, or untick this.</div>)}
+          </div>
+          <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}>
+            <div className="recon"><span>Subtotal</span><span className="mono">{curMoney(currency, subtotal)}</span></div>
+            <div className="recon"><span>VAT {vatOn ? `(${rate}%)` : "— not applied"}</span><span className="mono">{curMoney(currency, vat)}</span></div>
+            <div className="recon" style={{ fontWeight: 700 }}><span>Total due</span><span className="mono">{curMoney(currency, total)}</span></div>
+            {currency === "USD" && Number(fxRate) > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 4 }}>Posts to the ledger as {kes(Math.round(total * Number(fxRate)))}</div>}
+          </div>
         </div>
       </div>
       <div className="mf">
         <button className="btn" onClick={closeInvoice}>Cancel</button>
-        <button className="btn primary" onClick={submit}>Issue invoice</button>
+        <button className="btn" onClick={preview}>Preview PDF</button>
+        <button className="btn" disabled={busy} onClick={() => submit(false)}>Save draft</button>
+        <button className="btn primary" disabled={busy} onClick={() => submit(true)}>Issue invoice</button>
       </div>
     </ModalShell>
   );

@@ -419,25 +419,35 @@ function AdvanceRequestModal() {
   );
 }
 
-// Reconcile an issued advance — enter what was actually spent (receipted lines + per-diem).
-// The system computes spent-vs-advanced; only the spent amount posts to the project.
+// Reconcile an issued advance AGAINST the lines listed at request time — each planned
+// item shows its estimate with an editable "spent" amount and its own receipts. Extra,
+// unplanned costs can still be added. Only the spent total posts to the project.
+type RecLine = {
+  plannedId?: string; category: string; detail: string; planned: number;
+  amount: string; receiptPaths: string[]; isPerDiem: boolean; days: string; rate: string; uploading?: boolean;
+};
+const blankRec = (): RecLine => ({ category: "transport", detail: "", planned: 0, amount: "", receiptPaths: [], isPerDiem: false, days: "", rate: "" });
+const recAmount = (l: RecLine) => l.isPerDiem ? (Number(l.days) || 0) * (Number(l.rate) || 0) : (Number(l.amount) || 0);
+
 function AdvanceReconcileModal() {
   const { reconcileTarget, closeReconcile, reconcileAdvance, perDiemRate, uploadFiles, toast } = useApp();
   const open = !!reconcileTarget;
-  const [lines, setLines] = useState<EditLine[]>([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
-  const [perDiemDays, setPerDiemDays] = useState("");
-  const [perDiemRateInput, setPerDiemRateInput] = useState("");
+  const [lines, setLines] = useState<RecLine[]>([]);
 
   useEffect(() => {
-    if (!open) return;
-    setLines([{ category: "transport", detail: "", amount: "", receiptPaths: [] }]);
-    setPerDiemDays("");
-    setPerDiemRateInput("");
-  }, [open, perDiemRate]);
+    if (!open || !reconcileTarget) return;
+    // Start from the planned lines, spent prefilled with the estimate.
+    const planned = reconcileTarget.plannedLines.map((l): RecLine => ({
+      plannedId: l.id, category: l.category, detail: l.detail ?? "", planned: l.amount,
+      amount: String(l.amount), receiptPaths: [], isPerDiem: l.isPerDiem,
+      days: l.perDiemDays != null ? String(l.perDiemDays) : "", rate: l.perDiemRate != null ? String(l.perDiemRate) : String(perDiemRate || ""),
+    }));
+    setLines(planned.length ? planned : [blankRec()]);
+  }, [open, reconcileTarget, perDiemRate]);
 
-  const setLine = (i: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
-  const addLine = () => setLines((ls) => [...ls, { category: "transport", detail: "", amount: "", receiptPaths: [] }]);
-  const removeLine = (i: number) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
+  const setLine = (i: number, patch: Partial<RecLine>) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
+  const addLine = () => setLines((ls) => [...ls, blankRec()]);
+  const removeLine = (i: number) => setLines((ls) => ls.filter((_, idx) => idx !== i));
   // upload several receipts for a line at once and append them
   async function pickReceipts(i: number, files: File[]) {
     setLine(i, { uploading: true });
@@ -446,59 +456,89 @@ function AdvanceReconcileModal() {
   }
   const dropReceipt = (i: number, path: string) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, receiptPaths: l.receiptPaths.filter((p) => p !== path) } : l));
 
-  const days = Number(perDiemDays) || 0;
-  const pdRate = Number(perDiemRateInput) || 0;
-  const perDiemAmt = days > 0 ? days * pdRate : 0;
-  const spent = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0) + perDiemAmt;
+  const plannedTotal = lines.reduce((s, l) => s + l.planned, 0);
+  const spent = lines.reduce((s, l) => s + recAmount(l), 0);
   const advAmt = reconcileTarget?.amount ?? 0;
   const balance = advAmt - spent;
+  const hasPlanned = lines.some((l) => l.plannedId);
 
   function save() {
-    const filled = lines.filter((l) => Number(l.amount) > 0 || l.detail.trim() || l.receiptPaths.length);
-    for (const l of filled) if (!(Number(l.amount) > 0)) { toast("Each line needs an amount", "Enter the amount (KES) for every spent line"); return; }
-    if (!filled.length && days <= 0) { toast("Add at least one line", "Add what you spent, or per-diem days"); return; }
-    if (days > 0 && !(pdRate > 0)) { toast("Enter a per-diem rate", "Type the amount paid per day (KES)"); return; }
-    const payload: ClaimLineInput[] = filled.map((l) => ({
-      category: l.category, detail: l.detail.trim() || undefined, amount: Number(l.amount), isPerDiem: false, receiptPaths: l.receiptPaths,
-    }));
-    if (days > 0) payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: days, perDiemRate: pdRate });
+    const payload: ClaimLineInput[] = [];
+    for (const l of lines) {
+      const extra = !l.plannedId;
+      if (extra && !recAmount(l) && !l.detail.trim() && !l.receiptPaths.length) continue;   // untouched blank extra row
+      if (l.isPerDiem) {
+        const d = Number(l.days) || 0, r = Number(l.rate) || 0;
+        if (d < 0 || (extra && d <= 0)) { toast("Enter per-diem days", "Days must be greater than zero"); return; }
+        if (d > 0 && !(r > 0)) { toast("Enter a per-diem rate", "Type the amount paid per day (KES)"); return; }
+        payload.push({ category: "per_diem", isPerDiem: true, perDiemDays: d, perDiemRate: r || undefined, plannedLineId: l.plannedId, detail: l.detail.trim() || undefined });
+      } else {
+        const a = Number(l.amount);
+        if (l.amount.trim() === "" || isNaN(a) || a < 0) { toast("Enter the amount spent", `Type what you spent on "${l.detail || claimCatLabel(l.category)}" — 0 if nothing`); return; }
+        if (extra && !(a > 0)) { toast("Each extra line needs an amount", "Enter the amount (KES) for every unplanned line"); return; }
+        payload.push({ category: l.category, detail: l.detail.trim() || undefined, amount: a, isPerDiem: false, receiptPaths: l.receiptPaths, plannedLineId: l.plannedId });
+      }
+    }
+    if (!payload.length) { toast("Add at least one line", "Add what you spent"); return; }
     reconcileAdvance(reconcileTarget!.id, payload);
   }
 
+  const wash = { background: "var(--wash, #F7F4EE)" };
   return (
-    <ModalShell open={open} onClose={closeReconcile} width={620}>
+    <ModalShell open={open} onClose={closeReconcile} width={680}>
       {reconcileTarget && (
         <>
           <div className="mh">
             <h3>Reconcile advance {reconcileTarget.id}</h3>
-            <p>{reconcileTarget.purpose} · advanced <strong>{kes(advAmt)}</strong>{reconcileTarget.project ? ` · ${reconcileTarget.project}` : ""}. Enter what you actually spent.</p>
+            <p>{reconcileTarget.purpose} · advanced <strong>{kes(advAmt)}</strong>{reconcileTarget.project ? ` · ${reconcileTarget.project}` : ""}. {hasPlanned ? "Confirm what you actually spent on each item you listed and attach the receipts." : "Enter what you actually spent."}</p>
           </div>
           <div className="mb">
-            <label>What you spent</label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 1fr auto", gap: 8, fontSize: 11, fontWeight: 600, color: "var(--ink-3, #777)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+              <span>Item</span><span style={{ textAlign: "right" }}>Planned</span><span>Spent (KES)</span><span />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {lines.map((l, i) => (
-                <div key={i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.9fr auto", gap: 8, alignItems: "center" }}>
-                  <select className="field" value={l.category} onChange={(e) => setLine(i, { category: e.target.value })}>
-                    {CLAIM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
-                  </select>
-                  <input className="field" placeholder="Detail (optional)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
-                  <input className="field" type="number" min="0" placeholder="Amount" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
-                  <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>
+                <div key={l.plannedId ?? `x${i}`} style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 1fr auto", gap: 8, alignItems: "center", paddingBottom: 10, borderBottom: "1px solid var(--line, #eee)" }}>
+                  {l.plannedId ? (
+                    <div style={{ fontSize: 13 }}>
+                      <strong>{claimCatLabel(l.category)}</strong>
+                      {l.detail ? <span style={{ color: "var(--ink-3, #777)" }}> · {l.detail}</span> : null}
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 6 }}>
+                      <select className="field" value={l.category} onChange={(e) => setLine(i, { category: e.target.value })}>
+                        {CLAIM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+                      </select>
+                      <input className="field" placeholder="Detail (unplanned)" value={l.detail} onChange={(e) => setLine(i, { detail: e.target.value })} />
+                    </div>
+                  )}
+                  <div style={{ textAlign: "right", fontSize: 13, color: "var(--ink-3, #777)" }}>{l.plannedId ? kes(l.planned) : "—"}</div>
+                  {l.isPerDiem ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                      <input className="field" type="number" min="0" title="Days" placeholder="Days" value={l.days} onChange={(e) => setLine(i, { days: e.target.value })} />
+                      <input className="field" type="number" min="0" title="Rate / day" placeholder="Rate/day" value={l.rate} onChange={(e) => setLine(i, { rate: e.target.value })} />
+                    </div>
+                  ) : (
+                    <input className="field" type="number" min="0" placeholder="0" value={l.amount} onChange={(e) => setLine(i, { amount: e.target.value })} />
+                  )}
+                  {l.plannedId
+                    ? <span style={{ width: 26 }} />
+                    : <button className="btn" style={{ padding: "4px 8px", fontSize: 11, color: "var(--red)" }} onClick={() => removeLine(i)} title="Remove line">×</button>}
                   <div style={{ gridColumn: "1 / -1" }}>
-                    <ReceiptList paths={l.receiptPaths} busy={l.uploading} onAdd={(fs) => pickReceipts(i, fs)} onRemove={(p) => dropReceipt(i, p)} />
+                    {l.isPerDiem
+                      ? <span style={{ fontSize: 12, color: "var(--ink-3, #777)" }}>Per diem: {Number(l.days) || 0} days × {kes(Number(l.rate) || 0)} = <strong>{kes(recAmount(l))}</strong> · no receipt needed</span>
+                      : <ReceiptList paths={l.receiptPaths} busy={l.uploading} onAdd={(fs) => pickReceipts(i, fs)} onRemove={(p) => dropReceipt(i, p)} />}
                   </div>
                 </div>
               ))}
             </div>
-            <a href="#" onClick={(e) => { e.preventDefault(); addLine(); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>+ Add another line</a>
-
-            <label style={{ marginTop: 4 }}>Per diem <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>· optional — days × rate per day</span></label>
+            <a href="#" onClick={(e) => { e.preventDefault(); addLine(); }} style={{ color: "var(--flame)", textDecoration: "none", fontSize: 12.5 }}>+ Add unplanned expense</a>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-              <div><label>Days</label><input className="field" type="number" min="0" placeholder="e.g. 2" value={perDiemDays} onChange={(e) => setPerDiemDays(e.target.value)} /></div>
-              <div><label>Rate / day (KES)</label><input className="field" type="number" min="0" placeholder="e.g. 1000" value={perDiemRateInput} onChange={(e) => setPerDiemRateInput(e.target.value)} /></div>
-              <div><label>Amount</label><input className="field" value={days > 0 && pdRate > 0 ? kes(perDiemAmt) : "—"} readOnly style={{ background: "var(--wash, #F7F4EE)" }} /></div>
+              <div><label>Planned</label><input className="field" value={kes(plannedTotal)} readOnly style={wash} /></div>
+              <div><label>Spent</label><input className="field" value={kes(spent)} readOnly style={wash} /></div>
+              <div><label>{balance >= 0 ? "To return" : "To be topped up"}</label><input className="field" value={kes(Math.abs(balance))} readOnly style={wash} /></div>
             </div>
-            <Note>Spent <strong>{kes(spent)}</strong> of {kes(advAmt)} advanced · balance <strong>{kes(Math.abs(balance))}</strong> {balance > 0 ? "to return" : balance < 0 ? "to be topped up" : "— exact"}. Only the {kes(spent)} spent is charged to the project.</Note>
+            <Note>Spent <strong>{kes(spent)}</strong> of {kes(advAmt)} advanced · balance <strong>{kes(Math.abs(balance))}</strong> {balance > 0 ? "to return" : balance < 0 ? "to be topped up" : "— exact"}. Enter 0 for anything you didn't spend. Only the {kes(spent)} spent is charged to the project.</Note>
           </div>
           <div className="mf">
             <button className="btn" onClick={closeReconcile}>Cancel</button>

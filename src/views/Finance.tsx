@@ -1,11 +1,12 @@
-import { useRef, useState, type ReactNode } from "react";
-import { useApp, type PettyRequest, type ExpenseClaim, type TravelAdvance, type RecurringBill } from "../store";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useApp, type SalesInvoice, type PettyRequest, type ExpenseClaim, type TravelAdvance, type RecurringBill } from "../store";
 import { Pulse, Note, ViewOnly } from "../components/ui";
 import { ModalShell } from "../components/modals";
 import { ReceiptList, LineReceiptsModal } from "../components/Receipts";
 import { PlusI } from "../components/icons";
 import { Crumb } from "../nav";
 import { budgetLines } from "../data";
+import { downloadInvoice, previewInvoice, INVOICE_STATUS, money2, curMoney, keToday } from "../lib/invoiceDoc";
 
 const kes = (n: number) => "KES " + Math.round(n).toLocaleString();
 
@@ -240,6 +241,40 @@ function AdvanceIssueModal({ adv, onClose, onConfirm }: {
   );
 }
 
+// Planned vs spent, item by item — actual lines join to the planned line they account for.
+function AdvanceVarianceTable({ adv }: { adv: TravelAdvance }) {
+  const linked = new Set(adv.lines.map((l) => l.plannedLineId).filter(Boolean));
+  const rows = [
+    ...adv.plannedLines.map((p) => ({ key: p.id!, cat: p.category, detail: p.isPerDiem ? `${p.perDiemDays} day${p.perDiemDays === 1 ? "" : "s"} planned` : p.detail, planned: p.amount as number | null,
+      actual: adv.lines.find((l) => l.plannedLineId === p.id) ?? null })),
+    ...adv.lines.filter((l) => !l.plannedLineId || !adv.plannedLines.some((p) => p.id === l.plannedLineId))
+      .map((l) => ({ key: l.id!, cat: l.category, detail: l.detail, planned: null as number | null, actual: l })),
+  ];
+  if (!rows.length) return null;
+  const spentOf = (a: typeof rows[number]["actual"]) => a ? a.amount : (linked.size ? 0 : null);
+  return (
+    <table className="tbl" style={{ marginBottom: 4 }}>
+      <thead><tr><th>Item</th><th style={{ textAlign: "right" }}>Planned</th><th style={{ textAlign: "right" }}>Spent</th><th style={{ textAlign: "right" }}>Variance</th><th>Receipts</th></tr></thead>
+      <tbody>
+        {rows.map((r) => {
+          const sp = spentOf(r.actual);
+          const v = r.planned != null && sp != null ? r.planned - sp : null;
+          return (
+            <tr key={r.key}>
+              <td>{claimCat(r.cat)}{r.detail ? <span style={{ fontSize: 12, color: "var(--ink-3, #777)" }}> · {r.detail}</span> : null}{r.planned == null ? <span className="pill" style={{ marginLeft: 6, fontSize: 10 }}>unplanned</span> : null}</td>
+              <td className="mono" style={{ whiteSpace: "nowrap", textAlign: "right" }}>{r.planned != null ? kes(r.planned) : "—"}</td>
+              <td className="mono" style={{ whiteSpace: "nowrap", textAlign: "right" }}>{sp != null ? kes(sp) : "—"}</td>
+              <td className="mono" style={{ whiteSpace: "nowrap", textAlign: "right", color: v != null && v < 0 ? "var(--red)" : undefined }}>{v != null ? (v === 0 ? "—" : (v > 0 ? "−" : "+") + kes(Math.abs(v))) : "—"}</td>
+              <td style={{ fontSize: 12 }}>{r.actual?.isPerDiem ? `${r.actual.perDiemDays} × ${kes(r.actual.perDiemRate || 0)}` : r.actual ? (r.actual.receiptPaths.length || "none") : "—"}</td>
+            </tr>
+          );
+        })}
+        <tr><td style={{ textAlign: "right", fontWeight: 600 }}>Total</td><td className="mono" style={{ whiteSpace: "nowrap", textAlign: "right", fontWeight: 600 }}>{kes(adv.amount)}</td><td className="mono" style={{ whiteSpace: "nowrap", textAlign: "right", fontWeight: 600 }}>{kes(adv.spent ?? 0)}</td><td /><td /></tr>
+      </tbody>
+    </table>
+  );
+}
+
 // Settle a reconciled advance — confirm the balance was returned / topped up.
 function AdvanceSettleModal({ adv, onClose, onConfirm }: {
   adv: TravelAdvance | null; onClose: () => void; onConfirm: (ref: string, note: string) => void;
@@ -247,11 +282,12 @@ function AdvanceSettleModal({ adv, onClose, onConfirm }: {
   const [note, setNote] = useState("");
   const bal = adv?.balance ?? 0;
   return (
-    <ModalShell open={!!adv} onClose={onClose} width={460}>
+    <ModalShell open={!!adv} onClose={onClose} width={700}>
       {adv && (
         <>
           <div className="mh"><h3>Settle travel advance</h3><p>{adv.holder} · {adv.purpose} · spent {kes(adv.spent ?? 0)} of {kes(adv.amount)}</p></div>
           <div className="mb">
+            <AdvanceVarianceTable adv={adv} />
             <div className="reqbox" style={{ background: "#FCFAF6", borderColor: "transparent", color: "var(--ink)" }}>
               <div className="rl">Balance</div>
               <strong>{kes(Math.abs(bal))}</strong> {bal > 0 ? "to be returned by the holder" : bal < 0 ? "to be topped up to the holder" : "— exact, nothing to move"}
@@ -433,7 +469,7 @@ export default function FinanceView() {
           <p>One chart of accounts across the business — every module posts a balanced journal here. Covers GL, payables, receivables, bank &amp; cash, petty cash, costing, tax and audit controls.</p>
         </div>
         <div className="actions">
-          {tab === "f-ar" && canEdit && <button className="btn primary" onClick={openInvoice}><PlusI />New invoice</button>}
+          {tab === "f-ar" && canEdit && <button className="btn primary" onClick={() => openInvoice()}><PlusI />New invoice</button>}
           {tab === "f-budget" && canEdit && <button className="btn primary" onClick={() => setCostOpen(true)}><PlusI />New cost centre</button>}
           <button className="btn" onClick={() => toast("Period open", "Postings land in the current period until it is closed")}>Current period · Open</button>
         </div>
@@ -1073,9 +1109,18 @@ export default function FinanceView() {
 }
 
 function Receivables() {
-  const { newInvoices, openReceipt, level, proformas, openProforma, openProformaRec } = useApp();
+  const { salesInvoices, openReceipt, openInvoice, issueInvoice, deleteDraftInvoice, cancelInvoice, appConfig, toast, level, proformas, openProforma, openProformaRec } = useApp();
   const canEdit = level("finance") >= 2;
-  const outstanding = newInvoices.filter((i) => i.pillTxt !== "Paid");
+  const [invFilter, setInvFilter] = useState("all");
+  const [viewId, setViewId] = useState<string | null>(null);
+  const invFilters: [string, string][] = [["all", "All"], ["draft", "Draft"], ["issued", "Issued"], ["partially_paid", "Partially paid"], ["overdue", "Overdue"], ["paid", "Paid"], ["cancelled", "Cancelled"]];
+  const invRows = salesInvoices.filter((i) => invFilter === "all" || i.status === invFilter);
+  const open = salesInvoices.filter((i) => ["issued", "partially_paid", "overdue"].includes(i.status));
+  const today = keToday();
+  const daysPast = (d: string | null) => d ? Math.floor((Date.parse(today) - Date.parse(d)) / 86400000) : 0;
+  const buckets = [["Not yet due", (n: number) => n <= 0], ["1–30 days overdue", (n: number) => n >= 1 && n <= 30], ["31–60 days", (n: number) => n > 30 && n <= 60], ["60+ days", (n: number) => n > 60]] as const;
+  const sumBy = (cur: string, f: (n: number) => boolean) => open.filter((i) => i.currency === cur && f(daysPast(i.dueDate))).reduce((s, i) => s + i.balance, 0);
+  const pdf = (inv: SalesInvoice) => { downloadInvoice(inv, appConfig).catch((e) => toast("PDF failed", String(e?.message ?? e))); };
   const [pfFilter, setPfFilter] = useState("all");
   // register filters map to the display status text set in bootstrap()
   const pfFilters: [string, string][] = [
@@ -1134,43 +1179,144 @@ function Receivables() {
         </div>
       </div>
 
-      <div className="grid g-2">
-        <div className="panel">
-          <div className="panel-h">
-            <h3>Customer invoices</h3>
-            <span className="meta">issue · file eTIMS · collect</span>
-          </div>
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <div className="panel-h">
+          <h3>Customer invoices</h3>
+          {canEdit
+            ? <span className="meta"><a role="button" tabIndex={0} onClick={() => openInvoice()} style={{ color: "var(--flame)", textDecoration: "none", cursor: "pointer" }}>+ New invoice</a></span>
+            : <span className="meta">draft · issue · collect</span>}
+        </div>
+        <div style={{ padding: "10px 18px 4px", display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {invFilters.map(([k, l]) => {
+            const n = k === "all" ? salesInvoices.length : salesInvoices.filter((i) => i.status === k).length;
+            return <button key={k} className={`btn sm ${invFilter === k ? "primary" : ""}`} onClick={() => setInvFilter(k)}>{l}{n ? ` · ${n}` : ""}</button>;
+          })}
+        </div>
+        <div style={{ overflowX: "auto" }}>
           <table className="tbl">
-            <thead><tr><th>Institution</th><th>Amount</th><th>eTIMS</th><th>Due</th><th style={{ textAlign: "right" }}>Action</th></tr></thead>
+            <thead><tr><th>Invoice #</th><th>Client</th><th>Date</th><th>Due</th><th style={{ textAlign: "right" }}>Total</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ textAlign: "right" }}>Balance</th><th>Status</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
             <tbody>
-              {newInvoices.length === 0 ? (
-                <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>No customer invoices yet — use “+ New invoice”.</td></tr>
-              ) : newInvoices.map((inv) => (
-                <tr key={inv.id}>
-                  <td>{inv.cust}</td>
-                  <td className="mono">{inv.tot.toLocaleString()}</td>
-                  <td><span className="rcv ok">filed ✓</span></td>
-                  <td><span className={`pill ${inv.pillCls}`}>{inv.pillTxt}</span></td>
-                  <td style={{ textAlign: "right" }}>
-                    {inv.pillTxt === "Paid"
-                      ? <span className="pill done">Settled</span>
-                      : canEdit ? <button className="btn primary" style={{ padding: "4px 9px", fontSize: 11 }} onClick={() => openReceipt(inv)}>Record receipt</button>
-                      : <span className="pill week">outstanding</span>}
-                  </td>
-                </tr>
-              ))}
+              {invRows.length === 0 ? (
+                <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--ink-soft)", padding: "18px 0" }}>{salesInvoices.length === 0 ? "No customer invoices yet — use “+ New invoice”." : "None in this view."}</td></tr>
+              ) : invRows.map((inv) => {
+                const st = INVOICE_STATUS[inv.status] ?? { l: inv.status, cls: "done" };
+                const draft = inv.state === "draft";
+                return (
+                  <tr key={inv.uuid}>
+                    <td className="mono" style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}><strong>{draft ? "Draft" : inv.id}</strong></td>
+                    <td style={{ cursor: "pointer" }} onClick={() => setViewId(inv.uuid)}>{inv.customer}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{draft ? "—" : inv.invoiceDate}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{draft ? `${inv.terms}d` : inv.dueDate}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{curMoney(inv.currency, inv.total)}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{inv.paid ? money2(inv.paid) : "—"}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{draft || inv.state === "cancelled" ? "—" : money2(inv.balance)}</td>
+                    <td><span className={`pill ${st.cls}`}>{st.l}</span></td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {draft && canEdit && <>
+                        <button className="btn sm" onClick={() => openInvoice(inv)}>Edit</button>{" "}
+                        <button className="btn sm primary" onClick={() => issueInvoice(inv.uuid)}>Issue</button>{" "}
+                        <button className="btn sm" style={{ color: "var(--red)" }} onClick={() => { if (window.confirm("Delete this draft invoice?")) deleteDraftInvoice(inv.uuid); }}>Delete</button>{" "}
+                      </>}
+                      {canEdit && ["issued", "partially_paid", "overdue"].includes(inv.status) && <><button className="btn sm primary" onClick={() => openReceipt(inv)}>Record payment</button>{" "}</>}
+                      <button className="btn sm" onClick={() => pdf(inv)}>PDF</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
-        <div className="panel">
-          <div className="panel-h"><h3>Debtor aging</h3><span className="meta">KES</span></div>
-          <div className="pad">
-            <div className="recon"><span>Outstanding invoices</span><span className="mono">{outstanding.length}</span></div>
-            <div className="recon"><span>Outstanding value</span><span className="mono">{kes(outstanding.reduce((s, i) => s + i.tot, 0))}</span></div>
-            <Note>A receipt posts cash and clears the receivable; part-payments are a later increment.</Note>
-          </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-h"><h3>Debtor aging</h3><span className="meta">outstanding balances by days past due</span></div>
+        <table className="tbl">
+          <thead><tr><th>Bucket</th><th style={{ textAlign: "right" }}>KES</th><th style={{ textAlign: "right" }}>USD</th></tr></thead>
+          <tbody>
+            {buckets.map(([l, f]) => (
+              <tr key={l}><td>{l}</td><td className="mono" style={{ textAlign: "right" }}>{money2(sumBy("KES", f))}</td><td className="mono" style={{ textAlign: "right" }}>{money2(sumBy("USD", f))}</td></tr>
+            ))}
+            <tr><td style={{ fontWeight: 600 }}>Total outstanding ({open.length} invoice{open.length === 1 ? "" : "s"})</td>
+              <td className="mono" style={{ textAlign: "right", fontWeight: 600 }}>{money2(sumBy("KES", () => true))}</td>
+              <td className="mono" style={{ textAlign: "right", fontWeight: 600 }}>{money2(sumBy("USD", () => true))}</td></tr>
+          </tbody>
+        </table>
+        <div className="pad" style={{ paddingTop: 8 }}>
+          <Note>Currencies are kept separate — a USD invoice is collected in USD. The ledger records every invoice and payment in KES at the invoice's rate.</Note>
         </div>
       </div>
+      <InvoiceViewModal inv={viewId ? salesInvoices.find((i) => i.uuid === viewId) ?? null : null} onClose={() => setViewId(null)}
+        canEdit={canEdit} onPdf={pdf} onCancel={(i, r) => { cancelInvoice(i.uuid, r); setViewId(null); }} />
     </div>
+  );
+}
+
+// Read-only view of one invoice: header, lines, totals, payments + cancel.
+function InvoiceViewModal({ inv, onClose, canEdit, onPdf, onCancel }: {
+  inv: SalesInvoice | null; onClose: () => void; canEdit: boolean;
+  onPdf: (inv: SalesInvoice) => void; onCancel: (inv: SalesInvoice, reason: string) => void;
+}) {
+  const { appConfig, toast } = useApp();
+  const [reason, setReason] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  useEffect(() => { setReason(""); setConfirmCancel(false); }, [inv?.uuid]);
+  const st = inv ? INVOICE_STATUS[inv.status] ?? { l: inv.status, cls: "done" } : null;
+  const canCancel = !!inv && canEdit && ["issued", "overdue"].includes(inv.state) && inv.paid === 0;
+  const lbl = { fontSize: 11, color: "var(--ink-soft)" };
+  return (
+    <ModalShell open={!!inv} onClose={onClose} width={720}>
+      {inv && st && (
+        <>
+          <div className="mh">
+            <h3>{inv.state === "draft" ? "Draft invoice" : inv.id} <span className={`pill ${st.cls}`} style={{ marginLeft: 6, verticalAlign: "middle" }}>{st.l}</span></h3>
+            <p>{inv.customer}{inv.billToContact ? ` · Attn: ${inv.billToContact}` : ""}{inv.engagementRef ? ` · ${inv.engagementRef}` : ""}</p>
+          </div>
+          <div className="mb">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, fontSize: 12.5 }}>
+              <div><div style={lbl}>Invoice date</div>{inv.state === "draft" ? "Set on issue" : inv.invoiceDate}</div>
+              <div><div style={lbl}>Terms</div>{inv.terms === 0 ? "On receipt" : `Net ${inv.terms} days`}</div>
+              <div><div style={lbl}>Due</div>{inv.dueDate ?? "—"}</div>
+              <div><div style={lbl}>PO number</div>{inv.poNumber || "—"}</div>
+            </div>
+            <table className="tbl">
+              <thead><tr><th>#</th><th>Deliverable</th><th>Description</th><th style={{ textAlign: "right" }}>Qty × Unit</th><th style={{ textAlign: "right" }}>Amount ({inv.currency})</th></tr></thead>
+              <tbody>
+                {inv.lines.map((l, i) => (
+                  <tr key={i}><td>{i + 1}</td><td>{l.title || "—"}</td><td style={{ fontSize: 12 }}>{l.description || "—"}</td>
+                    <td className="mono" style={{ textAlign: "right", fontSize: 12 }}>{l.qty} × {money2(l.unitPrice)}</td><td className="mono" style={{ textAlign: "right" }}>{money2(l.amount)}</td></tr>
+                ))}
+                <tr><td colSpan={4} style={{ textAlign: "right" }}>Subtotal</td><td className="mono" style={{ textAlign: "right" }}>{money2(inv.subtotal)}</td></tr>
+                <tr><td colSpan={4} style={{ textAlign: "right" }}>VAT {inv.vatApplicable ? `(${inv.vatRate}%)` : "— not applied"}</td><td className="mono" style={{ textAlign: "right" }}>{money2(inv.vat)}</td></tr>
+                <tr><td colSpan={4} style={{ textAlign: "right", fontWeight: 700 }}>Total due</td><td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>{curMoney(inv.currency, inv.total)}</td></tr>
+                {inv.paid > 0 && <tr><td colSpan={4} style={{ textAlign: "right" }}>Paid</td><td className="mono" style={{ textAlign: "right" }}>− {money2(inv.paid)}</td></tr>}
+                {inv.state !== "draft" && inv.state !== "cancelled" && <tr><td colSpan={4} style={{ textAlign: "right", fontWeight: 700 }}>Outstanding</td><td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>{curMoney(inv.currency, inv.balance)}</td></tr>}
+              </tbody>
+            </table>
+            {inv.receipts.length > 0 && (
+              <table className="tbl">
+                <thead><tr><th>Payment date</th><th>Method</th><th>Reference</th><th style={{ textAlign: "right" }}>Amount ({inv.currency})</th></tr></thead>
+                <tbody>{inv.receipts.map((r, i) => (
+                  <tr key={i}><td className="mono">{r.date}</td><td>{r.method}</td><td style={{ fontSize: 12 }}>{r.reference || "—"}</td><td className="mono" style={{ textAlign: "right" }}>{money2(r.amount)}</td></tr>
+                ))}</tbody>
+              </table>
+            )}
+            {inv.currency === "USD" && inv.totalKes != null && <Note>Posted to the ledger as {kes(inv.totalKes)} at {inv.fxRate} KES/USD.</Note>}
+            {inv.notes && <div style={{ fontSize: 12.5 }}><strong>Notes:</strong> {inv.notes}</div>}
+            {confirmCancel && (
+              <div><label>Reason for cancelling</label><input className="field" autoFocus placeholder="e.g. raised in error — reissued as IGN-…" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+            )}
+          </div>
+          <div className="mf">
+            {canCancel && (confirmCancel
+              ? <button className="btn" style={{ color: "var(--red)" }} onClick={() => { if (!reason.trim()) { toast("Give a reason", "Why is the invoice being cancelled?"); return; } onCancel(inv, reason.trim()); }}>Confirm cancel</button>
+              : <button className="btn" style={{ color: "var(--red)" }} onClick={() => setConfirmCancel(true)}>Cancel invoice</button>)}
+            <span style={{ flex: 1 }} />
+            <button className="btn" onClick={() => previewInvoice(inv, appConfig).catch(() => {})}>Preview</button>
+            <button className="btn primary" onClick={() => onPdf(inv)}>Download PDF</button>
+            <button className="btn" onClick={onClose}>Close</button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 }

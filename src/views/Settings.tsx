@@ -32,6 +32,7 @@ function ConfigSelect({ configKey, options, style }: { configKey: string; option
 const tabsDef = [
   { id: "s-org", l: "Organisation", icon: <OrgI /> },
   { id: "s-profile", l: "Profile", icon: <OrgI /> },
+  { id: "s-invoice", l: "Invoicing", icon: <OrgI /> },
   { id: "s-notif", l: "Notifications", icon: <BellI /> },
   { id: "s-audit", l: "Audit Trail", icon: <LockI width={16} height={16} /> },
   { id: "s-integ", l: "Integrations", icon: <LinkI /> },
@@ -79,6 +80,8 @@ export default function SettingsView() {
           )}
 
           {tab === "s-profile" && <ProfilePanel />}
+
+          {tab === "s-invoice" && <InvoicingPanel />}
 
           {tab === "s-notif" && (
             <div className="set-panel active">
@@ -294,6 +297,83 @@ function AuditTrail() {
             <button className="btn" style={{ padding: "4px 10px", fontSize: 12 }} disabled={clamped >= pages} onClick={() => setPage(clamped + 1)}>Next</button>
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Invoicing: what prints on every sales invoice (mig 0085) ---------- */
+type Bank = { account_name: string; bank: string; account_no: string; branch: string; swift: string };
+type From = { company: string; signatory: string; address: string; email: string; phone: string };
+const emptyBank: Bank = { account_name: "Ignis Innovation Ltd", bank: "", account_no: "", branch: "", swift: "" };
+
+function InvoicingPanel() {
+  const { appConfig, setAppConfig, level, toast } = useApp();
+  const canEdit = level("users") >= 2;
+  const [from, setFrom] = useState<From>({ company: "", signatory: "", address: "", email: "", phone: "" });
+  const [usd, setUsd] = useState<Bank>(emptyBank);
+  const [kesB, setKesB] = useState<Bank>(emptyBank);
+  const [notes, setNotes] = useState("");
+  const [payNote, setPayNote] = useState("");
+  const [rates, setRates] = useState("");
+  const [fx, setFx] = useState("");
+  useEffect(() => {
+    setFrom({ company: "", signatory: "", address: "", email: "", phone: "", ...(appConfig.invoice_from ?? {}) });
+    setUsd({ ...emptyBank, ...(appConfig.invoice_bank_usd ?? {}) });
+    setKesB({ ...emptyBank, ...(appConfig.invoice_bank_kes ?? {}) });
+    setNotes(String(appConfig.invoice_default_notes ?? ""));
+    setPayNote(String(appConfig.invoice_payment_note ?? ""));
+    setRates((Array.isArray(appConfig.invoice_vat_rates) ? appConfig.invoice_vat_rates : [16, 8, 0]).join(", "));
+    setFx(String(appConfig.usd_kes_rate ?? ""));
+  }, [appConfig.invoice_from, appConfig.invoice_bank_usd, appConfig.invoice_bank_kes, appConfig.invoice_default_notes, appConfig.invoice_payment_note, appConfig.invoice_vat_rates, appConfig.usd_kes_rate]);
+
+  const inp = (v: string, on: (s: string) => void, ph = "") => (
+    <input className="field" style={{ width: 300 }} disabled={!canEdit} placeholder={ph} value={v} onChange={(e) => on(e.target.value)} />
+  );
+  const bankCard = (title: string, cur: string, b: Bank, set: (b: Bank) => void, key: string) => (
+    <div className="set-card">
+      <div className="sh"><h3>{title}</h3><p>Printed under Payment details on {cur} invoices.</p></div>
+      <div className="row"><div className="rl">Account name</div>{inp(b.account_name, (v) => set({ ...b, account_name: v }))}</div>
+      <div className="row"><div className="rl">Bank</div>{inp(b.bank, (v) => set({ ...b, bank: v }), "e.g. KCB Bank Kenya")}</div>
+      <div className="row"><div className="rl">Account no. ({cur})</div>{inp(b.account_no, (v) => set({ ...b, account_no: v }))}</div>
+      <div className="row"><div className="rl">Branch</div>{inp(b.branch, (v) => set({ ...b, branch: v }), "e.g. Sarit Centre")}</div>
+      <div className="row"><div className="rl">SWIFT / BIC<small>Optional</small></div>{inp(b.swift, (v) => set({ ...b, swift: v }))}</div>
+      {canEdit && <div className="row"><div className="rl" /><button className="btn primary" onClick={() => setAppConfig(key, b)}>Save {cur} account</button></div>}
+    </div>
+  );
+  function saveRates() {
+    const list = rates.split(/[,\s]+/).filter(Boolean).map(Number);
+    if (!list.length || list.some((n) => isNaN(n) || n < 0 || n > 100)) { toast("Check the VAT rates", "Comma-separated percentages, e.g. 16, 8, 0"); return; }
+    setAppConfig("invoice_vat_rates", Array.from(new Set(list)));
+  }
+  return (
+    <div className="set-panel active">
+      {!canEdit && <div className="set-card"><div className="sh"><p>View only — ask an administrator to change invoice settings.</p></div></div>}
+      <div className="set-card">
+        <div className="sh"><h3>Invoice header — From</h3><p>The company block on every invoice. Issued invoices keep the details they were issued with.</p></div>
+        <div className="row"><div className="rl">Company</div>{inp(from.company, (v) => setFrom({ ...from, company: v }))}</div>
+        <div className="row"><div className="rl">Signatory<small>Name, title</small></div>{inp(from.signatory, (v) => setFrom({ ...from, signatory: v }))}</div>
+        <div className="row"><div className="rl">Address</div>{inp(from.address, (v) => setFrom({ ...from, address: v }))}</div>
+        <div className="row"><div className="rl">Email</div>{inp(from.email, (v) => setFrom({ ...from, email: v }))}</div>
+        <div className="row"><div className="rl">Phone</div>{inp(from.phone, (v) => setFrom({ ...from, phone: v }))}</div>
+        {canEdit && <div className="row"><div className="rl" /><button className="btn primary" onClick={() => setAppConfig("invoice_from", from)}>Save header</button></div>}
+      </div>
+      {bankCard("USD bank account", "USD", usd, setUsd, "invoice_bank_usd")}
+      {bankCard("KES bank account", "KES", kesB, setKesB, "invoice_bank_kes")}
+      <div className="set-card">
+        <div className="sh"><h3>Defaults</h3><p>Prefilled on new invoices — every field stays editable per invoice.</p></div>
+        <div className="row"><div className="rl">Default notes</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}><textarea className="field" rows={2} style={{ width: 300 }} disabled={!canEdit} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            {canEdit && <button className="btn" onClick={() => setAppConfig("invoice_default_notes", notes)}>Save</button>}</div></div>
+        <div className="row"><div className="rl">Payment note<small>{"{no}"} becomes the invoice number</small></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{inp(payNote, setPayNote)}
+            {canEdit && <button className="btn" onClick={() => setAppConfig("invoice_payment_note", payNote)}>Save</button>}</div></div>
+        <div className="row"><div className="rl">VAT rates (%)<small>Options in the invoice form</small></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{inp(rates, setRates, "16, 8, 0")}
+            {canEdit && <button className="btn" onClick={saveRates}>Save</button>}</div></div>
+        <div className="row"><div className="rl">Default USD rate<small>KES per 1 USD — prefilled on USD invoices</small></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{inp(fx, setFx, "e.g. 129.50")}
+            {canEdit && <button className="btn" onClick={() => { const n = Number(fx); if (!(n > 0)) { toast("Enter a rate", "KES per 1 USD"); return; } setAppConfig("usd_kes_rate", n); }}>Save</button>}</div></div>
       </div>
     </div>
   );

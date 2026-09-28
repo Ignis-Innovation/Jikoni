@@ -22,7 +22,28 @@ export const HR_TOGGLE_EMAIL = "";
 export interface Toast { id: number; title: string; sub?: string }
 export interface Req { id: string; item: string; amt: number; code: string; chip: string; chipTxt: string; status: "draft" | "await" | "md" | "approved" | "rejected" | "po"; qty?: number; unit?: string; unitPrice?: number; project?: string | null; justification?: string | null; raisedBy?: string; date?: string }
 export interface NewPO { id: string; vendor: string; amt: number; delivery: string }
-export interface NewInvoice { cust: string; id: string; tot: number; pillCls: string; pillTxt: string }
+// Sales invoice (Receivables) — the standard Ignis invoice (mig 0085). `id` is the
+// IGN-YYYY-NNN number once issued (DRAFT-xxxx before); `uuid` is the row key for RPCs.
+export type InvoiceStatus = "draft" | "issued" | "partially_paid" | "paid" | "overdue" | "cancelled";
+export interface InvoiceLine { title: string; description: string; qty: number; unitPrice: number; amount: number }
+export interface ArReceipt { amount: number; amountKes: number; date: string; method: string; reference: string | null }
+export interface BankDetails { account_name?: string; bank?: string; account_no?: string; branch?: string; swift?: string }
+export interface FromDetails { company?: string; signatory?: string; address?: string; email?: string; phone?: string }
+export interface SalesInvoice {
+  uuid: string; id: string; state: InvoiceStatus; status: InvoiceStatus;   // status = state with overdue derived
+  customer: string; billToAddress: string | null; billToContact: string | null; billToEmail: string | null; crmPartnerId: string | null;
+  currency: "KES" | "USD"; fxRate: number; invoiceDate: string; dueDate: string | null; terms: number;
+  vatApplicable: boolean; vatRate: number; subtotal: number; vat: number; total: number; totalKes: number | null;
+  paid: number; balance: number; poNumber: string | null; engagementRef: string | null; notes: string | null;
+  includePaymentDetails: boolean; paymentDetails: BankDetails | null; fromDetails: FromDetails | null;
+  lines: InvoiceLine[]; receipts: ArReceipt[]; createdAt: string;
+}
+export interface InvoiceInput {
+  customer: string; billToAddress?: string; billToContact?: string; billToEmail?: string; crmPartnerId?: string | null;
+  currency: "KES" | "USD"; fxRate?: number; terms: number; vatApplicable: boolean; vatRate?: number;
+  poNumber?: string; engagementRef?: string; notes?: string; includePaymentDetails: boolean;
+  lines: { title: string; description: string; qty: number; unitPrice: number }[];
+}
 export interface ProformaLine { d: string; q: number; p: number }
 export interface ProformaRow {
   ref: string; customer: string; orgId?: string | null; owner?: string | null;
@@ -80,6 +101,7 @@ export interface PettyRequest {
 export interface ClaimLine {
   id?: string; category: string; detail: string | null; amount: number;
   receiptPaths: string[]; isPerDiem: boolean; perDiemDays: number | null; perDiemRate: number | null;
+  plannedLineId?: string | null;     // advance actual line → the planned line it accounts for
 }
 export interface ExpenseClaim {
   id: string; purpose: string; project: string | null; total: number;
@@ -94,6 +116,7 @@ export interface ExpenseClaim {
 export interface ClaimLineInput {
   category: string; detail?: string; amount?: number;
   isPerDiem?: boolean; perDiemDays?: number; perDiemRate?: number; receiptPaths?: string[];
+  plannedLineId?: string;
 }
 export interface ClaimInput { purpose: string; project?: string; lines: ClaimLineInput[]; advanceCode?: string }
 
@@ -336,10 +359,14 @@ interface AppApi {
   recordGrn: (poRef: string, qtyReceived: number, note: string, overAction: string, photo?: File | null) => void;
 
   invOpen: boolean;
-  openInvoice: () => void;
+  invEdit: SalesInvoice | null;
+  openInvoice: (inv?: SalesInvoice) => void;
   closeInvoice: () => void;
-  submitInvoice: (cust: string, desc: string, net: number, dueSel: string) => void;
-  newInvoices: NewInvoice[];
+  salesInvoices: SalesInvoice[];
+  saveInvoice: (uuid: string | null, v: InvoiceInput, issue: boolean) => Promise<boolean>;
+  issueInvoice: (uuid: string) => Promise<void>;
+  deleteDraftInvoice: (uuid: string) => Promise<void>;
+  cancelInvoice: (uuid: string, reason: string) => Promise<void>;
 
   // Finance spine read models + mutations
   apInvoices: ApInvoice[];
@@ -353,10 +380,10 @@ interface AppApi {
   approveInvoice: (invRef: string) => void;
   payInvoice: (invRef: string, method: string) => void;
   markInvoicePaid: (invRef: string, method?: string) => void;
-  receiptFor: NewInvoice | null;
-  openReceipt: (inv: NewInvoice) => void;
+  receiptFor: SalesInvoice | null;
+  openReceipt: (inv: SalesInvoice) => void;
   closeReceipt: () => void;
-  recordReceipt: (invRef: string, amount: number, method: string) => void;
+  recordReceipt: (invRef: string, amount: number, method: string, date: string, reference: string) => void;
 
   // Proforma invoices (the offer before the sale) — register on Receivables + a record drawer
   proformas: ProformaRow[];
@@ -382,8 +409,8 @@ interface AppApi {
   requestBankChange: (vendor: string, newBank: string) => void;
   approveBankChange: (id: string, callbackNote: string) => void;
   bankChanges: BankChange[];
-  appConfig: Record<string, number | boolean | string>;
-  setAppConfig: (key: string, value: number | boolean | string) => void;
+  appConfig: Record<string, any>;
+  setAppConfig: (key: string, value: unknown) => void;
   audit: AuditRow[];
 
   // Settings: profile self-edit, password, deep-link tab, and live integration status
@@ -722,7 +749,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [grnFor, setGrnFor] = useState<PORow | null>(null);
 
   const [invOpen, setInvOpen] = useState(false);
-  const [newInvoices, setNewInvoices] = useState<NewInvoice[]>([]);
+  const [invEdit, setInvEdit] = useState<SalesInvoice | null>(null);
+  const [salesInvoices, setSalesInvoices] = useState<SalesInvoice[]>([]);
   const [proformas, setProformas] = useState<ProformaRow[]>([]);
   const [pfOpen, setPfOpen] = useState(false);
   const [pfRecRef, setPfRecRef] = useState<string | null>(null);
@@ -731,11 +759,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [journals, setJournals] = useState<Journal[]>([]);
   const [accounts, setAccounts] = useState<AccountBal[]>([]);
   const [invoiceFor, setInvoiceFor] = useState<PORow | null>(null);
-  const [receiptFor, setReceiptFor] = useState<NewInvoice | null>(null);
+  const [receiptFor, setReceiptFor] = useState<SalesInvoice | null>(null);
   const [poAmendFor, setPoAmendFor] = useState<PORow | null>(null);
   const [bankChangeFor, setBankChangeFor] = useState<string | null>(null);
   const [bankChanges, setBankChanges] = useState<BankChange[]>([]);
-  const [appConfig, setAppConfigState] = useState<Record<string, number | boolean | string>>({});
+  const [appConfig, setAppConfigState] = useState<Record<string, any>>({});
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [costCentres, setCostCentres] = useState<{ code: string; budget: number; used: number }[]>([]);
 
@@ -839,7 +867,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
     setReqs(data.reqs as Req[]);
     setNewPOs(data.pos as NewPO[]);
-    setNewInvoices(data.salesInvoices as NewInvoice[]);
     setProformas((data.proformas ?? []) as ProformaRow[]);
     setPerms({ ...initialPerms, ...(data.perms as Record<string, Perms>) });
     // User Management runs off the live app_users table (no hardcoded roster) — invited
@@ -956,10 +983,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         createdAt: r.created_at, lines,
       } as ExpenseClaim;
     }));
+    // Sales invoices (Receivables) — full header + lines + payments; overdue derived here.
+    const { data: sis } = await supabase
+      .from("sales_invoices")
+      .select("id, ref, state, customer, bill_to_address, bill_to_contact, bill_to_email, crm_partner_id, currency, fx_rate, invoice_date, due_date, payment_terms_days, vat_applicable, vat_rate, net, vat, total, total_kes, amount_paid, po_number, engagement_ref, notes, include_payment_details, payment_details, from_details, created_at, lines:sales_invoice_lines(position, title, description, qty, unit_price, amount), receipts:ar_receipts(amount, amount_kes, receipt_date, method, reference, created_at)")
+      .order("created_at", { ascending: false })
+      .limit(500);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });   // Nairobi calendar date
+    setSalesInvoices(((sis ?? []) as any[]).map((r) => {
+      const total = Number(r.total), paid = Number(r.amount_paid);
+      const overdue = (r.state === "issued" || r.state === "partially_paid" || r.state === "overdue") && r.due_date && r.due_date < today && total - paid > 0.005;
+      return {
+        uuid: r.id, id: r.ref, state: r.state, status: overdue ? "overdue" : r.state,
+        customer: r.customer, billToAddress: r.bill_to_address, billToContact: r.bill_to_contact, billToEmail: r.bill_to_email,
+        crmPartnerId: r.crm_partner_id, currency: r.currency, fxRate: Number(r.fx_rate),
+        invoiceDate: r.invoice_date, dueDate: r.due_date, terms: Number(r.payment_terms_days),
+        vatApplicable: !!r.vat_applicable, vatRate: Number(r.vat_rate),
+        subtotal: Number(r.net), vat: Number(r.vat), total, totalKes: r.total_kes != null ? Number(r.total_kes) : null,
+        paid, balance: Math.max(0, Math.round((total - paid) * 100) / 100),
+        poNumber: r.po_number, engagementRef: r.engagement_ref, notes: r.notes,
+        includePaymentDetails: !!r.include_payment_details, paymentDetails: r.payment_details ?? null, fromDetails: r.from_details ?? null,
+        lines: ((r.lines ?? []) as any[]).sort((a, b) => a.position - b.position).map((l) => ({
+          title: l.title ?? "", description: l.description ?? "", qty: Number(l.qty), unitPrice: Number(l.unit_price), amount: Number(l.amount) })),
+        receipts: ((r.receipts ?? []) as any[]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((x) => ({
+          amount: Number(x.amount), amountKes: Number(x.amount_kes), date: x.receipt_date, method: x.method, reference: x.reference })),
+        createdAt: r.created_at,
+      } as SalesInvoice;
+    }));
     // Travel advances — Staff Portal shows the holder's own, Finance → Advances the queue.
     const { data: adv } = await supabase
       .from("travel_advances")
-      .select("ref, purpose, project_code, amount, state, approver_role, decided_at, decision_note, issued_at, issue_ref, spent_amount, balance, reconciled_at, settled_at, settle_note, created_at, holder:app_users!travel_advances_holder_id_fkey(name, email), decider:app_users!travel_advances_decided_by_fkey(name), issuer:app_users!travel_advances_issued_by_fkey(name), settler:app_users!travel_advances_settled_by_fkey(name), lines:travel_advance_lines(id, category, detail, amount, receipt_paths, is_per_diem, per_diem_days, per_diem_rate_used, is_estimate, created_at)")
+      .select("ref, purpose, project_code, amount, state, approver_role, decided_at, decision_note, issued_at, issue_ref, spent_amount, balance, reconciled_at, settled_at, settle_note, created_at, holder:app_users!travel_advances_holder_id_fkey(name, email), decider:app_users!travel_advances_decided_by_fkey(name), issuer:app_users!travel_advances_issued_by_fkey(name), settler:app_users!travel_advances_settled_by_fkey(name), lines:travel_advance_lines(id, category, detail, amount, receipt_paths, is_per_diem, per_diem_days, per_diem_rate_used, is_estimate, planned_line_id, created_at)")
       .order("created_at", { ascending: false })
       .limit(200);
     setAdvances(((adv ?? []) as any[]).map((r) => {
@@ -972,6 +1026,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         receiptPaths: (l.receipt_paths ?? []) as string[], isPerDiem: !!l.is_per_diem,
         perDiemDays: l.per_diem_days != null ? Number(l.per_diem_days) : null,
         perDiemRate: l.per_diem_rate_used != null ? Number(l.per_diem_rate_used) : null,
+        plannedLineId: l.planned_line_id ?? null,
       }) as ClaimLine;
       const allLines = ((r.lines ?? []) as any[]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
       const plannedLines = allLines.filter((l) => l.is_estimate).map(toLine);   // the request breakdown
@@ -1622,11 +1677,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   /* ---------- v2: settings (approval & matching rules) ---------- */
-  async function setAppConfig(key: string, value: number | boolean | string) {
+  async function setAppConfig(key: string, value: unknown) {
     const { error } = await supabase.rpc("set_app_config", { p_key: key, p_value: value });
     if (error) { toast("Setting not saved", error.message); return; }
     setAppConfigState((prev) => ({ ...prev, [key]: value }));
-    toast("Setting saved", `${key} = ${value}`);
+    toast("Setting saved", typeof value === "object" ? key : `${key} = ${value}`);
   }
 
   /* ---------- settings: my profile, password, integrations, digest ---------- */
@@ -1672,24 +1727,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) { toast("Digest not sent", e.message || "Network error"); }
   }
 
-  /* ---------- sales invoice (VAT + GL + eTIMS intent in the DB) ---------- */
-  async function submitInvoice(cust: string, desc: string, net: number, dueSel: string) {
-    const { data, error } = await supabase.rpc("submit_sales_invoice", {
-      p_customer: cust, p_description: desc, p_net: net, p_due_key: dueSel,
-    });
-    if (error) { toast("Invoice failed", error.message); return; }
-    const si = data as NewInvoice;
-    setNewInvoices((prev) => [si, ...prev]);
-    setInvOpen(false);
-    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
-    toast(si.id + " issued to " + cust, "Filed to eTIMS · total KES " + si.tot.toLocaleString());
+  /* ---------- sales invoices (mig 0085): drafts → issue (IGN number, KES journal, eTIMS) → payments ---------- */
+  const toInvoiceJson = (v: InvoiceInput) => ({
+    customer: v.customer, billToAddress: v.billToAddress ?? "", billToContact: v.billToContact ?? "", billToEmail: v.billToEmail ?? "",
+    crmPartnerId: v.crmPartnerId ?? "", currency: v.currency, fxRate: v.currency === "USD" ? v.fxRate : 1, terms: v.terms,
+    vatApplicable: v.vatApplicable, vatRate: v.vatApplicable ? v.vatRate : 0, poNumber: v.poNumber ?? "", engagementRef: v.engagementRef ?? "",
+    notes: v.notes ?? "", includePaymentDetails: v.includePaymentDetails, lines: v.lines,
+  });
+  async function saveInvoice(uuid: string | null, v: InvoiceInput, issue: boolean): Promise<boolean> {
+    const { data, error } = await supabase.rpc("save_sales_invoice", { p_id: uuid, p_data: toInvoiceJson(v) });
+    if (error) { toast("Invoice not saved", niceError(error.message)); return false; }
+    let j = data as any;
+    if (issue) {
+      const r = await supabase.rpc("issue_sales_invoice", { p_id: j.uuid });
+      if (r.error) {
+        toast("Saved as draft — not issued", niceError(r.error.message));
+        await loadFromDb().catch(() => {});
+        return false;
+      }
+      j = r.data;
+    }
+    setInvOpen(false); setInvEdit(null);
+    await loadFromDb().catch(() => {});
+    toast(issue ? `${j.id} issued to ${v.customer}` : "Draft saved", issue ? `${v.currency} ${Number(j.total).toLocaleString(undefined, { minimumFractionDigits: 2 })} · due ${j.dueDate}` : `${v.customer} · not numbered until issued`);
+    return true;
   }
-  async function recordReceipt(invRef: string, amount: number, method: string) {
-    const { data, error } = await supabase.rpc("record_ar_receipt", { p_inv_ref: invRef, p_amount: amount, p_method: method });
-    if (error) { toast("Receipt not recorded", error.message); return; }
+  async function issueInvoice(uuid: string) {
+    const { data, error } = await supabase.rpc("issue_sales_invoice", { p_id: uuid });
+    if (error) { toast("Invoice not issued", niceError(error.message)); return; }
+    await loadFromDb().catch(() => {});
+    toast(`${(data as any).id} issued`, `Posted to the ledger · filed to eTIMS`);
+  }
+  async function deleteDraftInvoice(uuid: string) {
+    const { error } = await supabase.rpc("delete_draft_invoice", { p_id: uuid });
+    if (error) { toast("Draft not deleted", niceError(error.message)); return; }
+    await loadFromDb().catch(() => {});
+    toast("Draft deleted");
+  }
+  async function cancelInvoice(uuid: string, reason: string) {
+    const { data, error } = await supabase.rpc("cancel_sales_invoice", { p_id: uuid, p_reason: reason || null });
+    if (error) { toast("Invoice not cancelled", niceError(error.message)); return; }
+    await loadFromDb().catch(() => {});
+    toast(`${(data as any).id} cancelled`, "Reversing journal posted");
+  }
+  async function recordReceipt(invRef: string, amount: number, method: string, date: string, reference: string) {
+    const { data, error } = await supabase.rpc("record_ar_receipt", {
+      p_inv_ref: invRef, p_amount: amount, p_method: method, p_date: date, p_reference: reference || null,
+    });
+    if (error) { toast("Payment not recorded", niceError(error.message)); return; }
     setReceiptFor(null);
-    loadFromDb().catch(() => {});   // PERF: refresh in the background — don't block the UI on a full reload
-    toast(`${invRef} settled`, `Collection posted · journal ${data.journal}`);
+    await loadFromDb().catch(() => {});   // refresh before confirming so the balance shown is the new one
+    const d = data as any;
+    toast(d.state === "paid" ? `${invRef} paid in full` : `${invRef} part-paid`,
+      d.state === "paid" ? `Journal ${d.journal}` : `Balance ${Number(d.balance).toLocaleString(undefined, { minimumFractionDigits: 2 })} outstanding`);
   }
 
   /* ---------- proforma invoices (the offer before the sale — no ledger impact until accepted) ---------- */
@@ -2964,11 +3054,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     vendors, poRows, grns,
     vendorOpen, openVendorForm: () => setVendorOpen(true), closeVendorForm: () => setVendorOpen(false), createVendor, screenVendor,
     grnFor, openGrn: (po: PORow) => setGrnFor(po), closeGrn: () => setGrnFor(null), recordGrn,
-    invOpen, openInvoice: () => setInvOpen(true), closeInvoice: () => setInvOpen(false),
-    submitInvoice, newInvoices,
+    invOpen, invEdit, openInvoice: (inv?: SalesInvoice) => { setInvEdit(inv ?? null); setInvOpen(true); },
+    closeInvoice: () => { setInvOpen(false); setInvEdit(null); },
+    salesInvoices, saveInvoice, issueInvoice, deleteDraftInvoice, cancelInvoice,
     apInvoices, payments, journals, accounts,
     invoiceFor, openCaptureInvoice: (po: PORow) => setInvoiceFor(po), closeCaptureInvoice: () => setInvoiceFor(null), captureInvoice, approveInvoice, payInvoice, markInvoicePaid,
-    receiptFor, openReceipt: (inv: NewInvoice) => setReceiptFor(inv), closeReceipt: () => setReceiptFor(null), recordReceipt,
+    receiptFor, openReceipt: (inv: SalesInvoice) => setReceiptFor(inv), closeReceipt: () => setReceiptFor(null), recordReceipt,
     proformas, pfOpen, openProforma: () => setPfOpen(true), closeProforma: () => setPfOpen(false), createProforma,
     pfRecRef, openProformaRec: (ref: string) => setPfRecRef(ref), closeProformaRec: () => setPfRecRef(null), acceptProforma, declineProforma,
     poAmendFor, openPoAmend: (po: PORow) => setPoAmendFor(po), closePoAmend: () => setPoAmendFor(null), amendPo, approvePoAmendment,
