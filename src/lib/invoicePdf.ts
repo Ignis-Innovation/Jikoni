@@ -267,7 +267,7 @@ export async function buildInvoicePdf(inv: InvoicePdfData, loader: AssetLoader =
   head("semibold"); doc.setFontSize(10.5); color(GREEN);
   doc.text("Thank you for your business.", L, y + 8);
 
-  doc.setProperties({ title: `Ignis Invoice ${inv.number}`, author: from.company || "Ignis Innovation", subject: `Invoice ${inv.number} — ${inv.customer}` });
+  doc.setProperties({ title: `Ignis Invoice ${inv.number}`, author: from.company || "Ignis Innovation Limited", subject: `Invoice ${inv.number} — ${inv.customer}` });
   return doc;
 }
 

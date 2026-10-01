@@ -30,7 +30,7 @@ const base = {
   notes: "All three deliverables were issued to Keystone on or before 24 September 2026 under the Phase 3 workstream of engagement SF-TA-2026-001. Amounts are exclusive of any applicable taxes. Payment is due within 14 days of the invoice date; late payment may attract interest at 1.5% per month.",
   paymentDetails: { account_name: "Ignis Innovation Ltd", bank: "KCB Bank Kenya", account_no: "1342100026", branch: "Sarit Centre" },
   paymentNote: "Mobile money by arrangement. Please quote invoice number {no} on payment.",
-  from: { company: "Ignis Innovation", address: "Nairobi, Kenya", email: "info@ignis-innovation.com", phone: "+254 724 326 256" },
+  from: { company: "Ignis Innovation Limited", address: "Nairobi, Kenya", email: "info@ignis-innovation.com", phone: "+254 724 326 256" },
 };
 const inv = variant === "kes-vat-part"
   ? { ...base, number: "IGN-INV-2026-002", currency: "KES", poNumber: "PO-4471", vatApplicable: true, vatRate: 16,

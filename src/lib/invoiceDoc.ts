@@ -8,7 +8,7 @@ import { downloadInvoicePdf, previewInvoicePdf, type InvoicePdfData } from "./in
 export const bankFor = (cfg: Record<string, any>, currency: string): BankDetails | null =>
   (cfg[currency === "USD" ? "invoice_bank_usd" : "invoice_bank_kes"] as BankDetails) ?? null;
 export const fromDetails = (cfg: Record<string, any>): FromDetails =>
-  (cfg.invoice_from as FromDetails) ?? { company: "Ignis Innovation", address: "Nairobi, Kenya", email: "info@ignis-innovation.com" };
+  (cfg.invoice_from as FromDetails) ?? { company: "Ignis Innovation Limited", address: "Nairobi, Kenya", email: "info@ignis-innovation.com" };
 
 export function invoiceToPdf(inv: SalesInvoice, cfg: Record<string, any>): InvoicePdfData {
   const draft = inv.state === "draft";
